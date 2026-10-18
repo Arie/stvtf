@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 const PROTOCOL_VERSION: i32 = 24;
 const AUTH_HASHEDCDKEY: u32 = 2;
+const AUTH_STEAM: u32 = 3;
 const MAGIC_VERSION: u32 = 0x5A4F_4933;
 const OOB_PREFIX: [u8; 4] = [0xff; 4];
 
@@ -120,6 +121,10 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     let mut buf = vec![0u8; 65536];
     let n = sock.recv(&mut buf).context("no challenge reply")?;
     let ch = parse_challenge(&buf[..n], nonce)?;
+    if ch.auth_proto == AUTH_STEAM {
+        let tv = server.port().checked_add(5).map_or(String::new(), |p| format!(", usually {p}"));
+        bail!("{server} is a game port, not SourceTV: use the server's tv_port{tv}");
+    }
     if ch.auth_proto != AUTH_HASHEDCDKEY {
         bail!("server wants auth protocol {} (SourceTV accepts {})", ch.auth_proto, AUTH_HASHEDCDKEY);
     }
