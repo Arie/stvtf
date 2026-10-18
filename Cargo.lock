@@ -615,6 +615,7 @@ dependencies = [
  "crc32fast",
  "ctrlc",
  "md5",
+ "serde",
  "serde_json",
  "snap",
  "tf-demo-parser",

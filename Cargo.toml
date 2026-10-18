@@ -16,6 +16,7 @@ md5 = "0.7"
 typed-arena = "2"
 anyhow = "1"
 ctrlc = "3"
+serde = { version = "1", features = ["derive"] }
 
 [profile.release]
 debug = 1
