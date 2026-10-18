@@ -11,6 +11,35 @@ const TYPE_BITS: usize = 6;
 
 pub type Bits = (Vec<u8>, usize);
 
+/// Signon states (`SIGNONSTATE_*` in the engine). Ordered, so `>=` compares progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum Signon {
+    None = 0,
+    Challenge = 1,
+    Connected = 2,
+    New = 3,
+    PreSpawn = 4,
+    Spawn = 5,
+    Full = 6,
+    ChangeLevel = 7,
+}
+
+impl Signon {
+    pub fn name(self) -> &'static str {
+        match self {
+            Signon::None => "none",
+            Signon::Challenge => "challenge",
+            Signon::Connected => "connected",
+            Signon::New => "new",
+            Signon::PreSpawn => "prespawn",
+            Signon::Spawn => "spawn",
+            Signon::Full => "full",
+            Signon::ChangeLevel => "changelevel",
+        }
+    }
+}
+
 fn finish(w: BitWriter) -> Bits {
     let n = w.nbits();
     (w.into_bytes(), n)
@@ -32,9 +61,9 @@ const USERINFO: &[(&str, &str)] = &[
     ("net_maxroutable", "1260"),
 ];
 
-fn write_signonstate(w: &mut BitWriter, state: u8, spawncount: i32) {
+fn write_signonstate(w: &mut BitWriter, state: Signon, spawncount: i32) {
     w.write_bits(NET_SIGNONSTATE, TYPE_BITS);
-    w.write_u8(state);
+    w.write_u8(state as u8);
     w.write_i32(spawncount);
 }
 
@@ -47,7 +76,7 @@ pub fn connected_reply(name: &str) -> Bits {
         w.write_string(k);
         w.write_string(if *k == "name" { name } else { v });
     }
-    write_signonstate(&mut w, 2, -1);
+    write_signonstate(&mut w, Signon::Connected, -1);
     finish(w)
 }
 
@@ -66,11 +95,11 @@ pub fn client_info(spawncount: i32, sendtable_crc: u32, replay_bit: bool) -> Bit
     if replay_bit {
         w.write_bit(false);
     }
-    write_signonstate(&mut w, 3, spawncount);
+    write_signonstate(&mut w, Signon::New, spawncount);
     finish(w)
 }
 
-pub fn signonstate(state: u8, spawncount: i32) -> Bits {
+pub fn signonstate(state: Signon, spawncount: i32) -> Bits {
     let mut w = BitWriter::new();
     write_signonstate(&mut w, state, spawncount);
     finish(w)
@@ -115,7 +144,7 @@ mod tests {
 
     #[test]
     fn reliable_region_roundtrips_through_reassembler() {
-        let body = signonstate(6, 1234);
+        let body = signonstate(Signon::Full, 1234);
         let region = reliable_region(&body, 3);
         let parsed = Reassembler::default().feed(&region.0, 0).unwrap();
         assert_eq!(parsed.subchannel, 3);

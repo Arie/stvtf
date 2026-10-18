@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn reliable_then_unreliable_streams() {
-        let body = messages::signonstate(4, 9);
+        let body = messages::signonstate(messages::Signon::PreSpawn, 9);
         let region = messages::reliable_region(&body, 2);
         let tick = messages::tick(1000);
         let pkt = build_packet(5, 0, 77, 0, Some((&region.0, region.1)), Some((&tick.0, tick.1)));

@@ -6,7 +6,6 @@
 
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 use stvmap::capture;
 use stvmap::decode::{self, Tables};
 use stvmap::session::Options;
@@ -18,11 +17,14 @@ fn tables() -> Tables {
 }
 
 fn replay(name: &str) -> Vec<Value> {
+    replay_with(name, &Options { snapshot_hz: 10.0, ..Options::default() })
+}
+
+fn replay_with(name: &str, opt: &Options) -> Vec<Value> {
     let bytes = std::fs::read(format!("{FIXTURES}/{name}")).unwrap();
     let records = capture::read(&bytes).unwrap();
-    let opt = Options { name: String::new(), crc: 0, snapshot_hz: 10.0, silence: Duration::from_secs(15) };
     let mut out = Vec::new();
-    capture::replay(&records, &tables(), &opt, &mut |v| out.push(v)).unwrap();
+    capture::replay(&records, &tables(), opt, &mut |v| out.push(v)).unwrap();
     out
 }
 
@@ -332,4 +334,12 @@ fn spawn_events_carry_the_spawn_position() {
     }
     assert!(total > 10, "{total} spawns checked");
     assert!(near * 10 >= total * 9, "{near} of {total} spawns where the player appears");
+}
+
+#[test]
+fn decoder_memory_budget_ends_the_session() {
+    let opt = Options { snapshot_hz: 10.0, max_decoder_bytes: 1 << 20, ..Options::default() };
+    let events = replay_with("bots_engineers.cap", &opt);
+    let end = events.iter().rfind(|e| e["state"] == "disconnected").unwrap();
+    assert!(end["reason"].as_str().unwrap().contains("decoder holds over 1 MiB"), "{end}");
 }
