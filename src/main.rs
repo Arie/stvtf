@@ -76,7 +76,8 @@ fn main() -> Result<()> {
         }
         Some("replay") => {
             let path = args.positional.get(1).ok_or_else(|| anyhow!(USAGE))?;
-            let records = capture::read(&std::fs::read(path)?)?;
+            let bytes = std::fs::read(path)?;
+            let records = capture::read(&bytes)?;
             let opt = Options { snapshot_hz: args.hz()?, ..Options::default() };
             let build = args.get("build").unwrap_or(stvmap::CURRENT_BUILD);
             capture::replay(&records, &args.tables(build)?, &opt, &mut emit)
