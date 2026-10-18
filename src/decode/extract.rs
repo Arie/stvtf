@@ -12,7 +12,7 @@ use tf_demo_parser::demo::data::game_state::{
 };
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::header::Header;
-use tf_demo_parser::demo::message::usermessage::UserMessage;
+use tf_demo_parser::demo::message::usermessage::{ChatMessageKind, UserMessage};
 
 use tf_demo_parser::demo::message::packetentities::UpdateType;
 use tf_demo_parser::demo::message::{Message, MessageType};
@@ -222,9 +222,15 @@ const COND_PROPS: [&str; 6] =
     ["m_nPlayerCond", "_condition_bits", "m_nPlayerCondEx", "m_nPlayerCondEx2", "m_nPlayerCondEx3", "m_nPlayerCondEx4"];
 
 /// tf-demo-parser names the common projectiles; the rest go by their server class.
-fn projectile_kind(ty: ProjectileType, class: &str) -> String {
-    if ty != ProjectileType::Unknown {
-        return format!("{ty:?}");
+fn projectile_kind(ty: ProjectileType, class: &str) -> &'static str {
+    match ty {
+        ProjectileType::Rocket => return "Rocket",
+        ProjectileType::HealingArrow => return "HealingArrow",
+        ProjectileType::Sticky => return "Sticky",
+        ProjectileType::Pipe => return "Pipe",
+        ProjectileType::Flare => return "Flare",
+        ProjectileType::LooseCannon => return "LooseCannon",
+        ProjectileType::Unknown => {}
     }
     match class {
         "CTFProjectile_Arrow" => "Arrow",
@@ -238,7 +244,6 @@ fn projectile_kind(ty: ProjectileType, class: &str) -> String {
         "CTFProjectile_MechanicalArmOrb" => "ShortCircuitOrb",
         _ => "Unknown",
     }
-    .to_string()
 }
 
 fn medigun_kind(item: i64) -> &'static str {
@@ -258,18 +263,173 @@ fn resist_name(r: i64) -> &'static str {
     }
 }
 
-fn has_cond(words: &[u32; 6], c: PlayerCondition) -> bool {
-    let n = c as usize;
+/// Output names of the TF2 player conditions (ETFCond), by number; "" for unused numbers.
+/// The names follow tf-demo-parser's `PlayerCondition`, but are spelled out here so the
+/// output does not change with that crate's Debug formatting.
+#[rustfmt::skip]
+const COND_NAMES: [&str; 131] = [
+    "Aiming",
+    "Zoomed",
+    "Disguising",
+    "Disguised",
+    "Stealthed",
+    "Invulnerable",
+    "Teleported",
+    "Taunting",
+    "InvulnerableWearingOff",
+    "StealthedBlink",
+    "SelectedToTeleport",
+    "CritBoosted",
+    "TmpDamageBonus",
+    "FeignDeath",
+    "Phase",
+    "Stunned",
+    "OffensiveBuff",
+    "ShieldCharge",
+    "DemoBuff",
+    "EnergyBuff",
+    "RadiusHeal",
+    "HealthBuff",
+    "Burning",
+    "HealthOverHealed",
+    "Urine",
+    "Bleeding",
+    "DefensiveBuff",
+    "MadMilk",
+    "MegaHeal",
+    "RegenOnDamageBuff",
+    "MarkedForDeath",
+    "NoHealingDamageBuff",
+    "SpeedBoost",
+    "CritBoostedPumpkin",
+    "CritBoostedUserBuff",
+    "CritBoostedDemoCharge",
+    "SodaPopperHype",
+    "CritBoostedFirstBlood",
+    "CritBoostedBonusTime",
+    "CritBoostedCtfCapture",
+    "CritBoostedOnKill",
+    "CannotSwitchFromMelee",
+    "DefenseBuffNoCritBlock",
+    "Reprogrammed",
+    "CritBoostedRageBuff",
+    "DefenseBuffHigh",
+    "SniperChargeRageBuff",
+    "DisguiseWearingOff",
+    "MarkedForDeathSilent",
+    "DisguisedAsDispenser",
+    "Sapped",
+    "InvulnerableHideUnlessDamaged",
+    "InvulnerableUserBuff",
+    "HalloweenBombHead",
+    "HalloweenThriller",
+    "RadiusHealOnDamage",
+    "CritBoostedCardEffect",
+    "InvulnerableCardEffect",
+    "MedigunUberBulletResist",
+    "MedigunUberBlastResist",
+    "MedigunUberFireResist",
+    "MedigunSmallBulletResist",
+    "MedigunSmallBlastResist",
+    "MedigunSmallFireResist",
+    "StealthedUserBuff",
+    "MedigunDebuff",
+    "StealthedUserBuffFading",
+    "BulletImmune",
+    "BlastImmune",
+    "FireImmune",
+    "PreventDeath",
+    "MvmBotStunRadiowave",
+    "HalloweenSpeedBoost",
+    "HalloweenQuickHeal",
+    "HalloweenGiant",
+    "HalloweenTiny",
+    "HalloweenInHell",
+    "HalloweenGhostMode",
+    "MiniCritBoostedOnKill",
+    "ObscuredSmoke",
+    "ParachuteActive",
+    "BlastJumping",
+    "HalloweenKart",
+    "HalloweenKartDash",
+    "BalloonHead",
+    "MeleeOnly",
+    "SwimmingCurse",
+    "FreezeInput",
+    "HalloweenKartCage",
+    "", // 89: unused
+    "RuneStrength",
+    "RuneHaste",
+    "RuneRegen",
+    "RuneResist",
+    "RuneVampire",
+    "RuneReflect",
+    "RunePrecision",
+    "RuneAgility",
+    "GrapplingHook",
+    "GrapplingHookSafeFall",
+    "GrapplingHookLatched",
+    "GrapplingHookBleeding",
+    "AfterburnImmune",
+    "RuneKnockout",
+    "RuneImbalance",
+    "CritBoostedRuneTemp",
+    "PasstimeInterception",
+    "SwimmingNoEffects",
+    "PURGATORY",
+    "RuneKing",
+    "RunePlague",
+    "RuneSupernova",
+    "PLAGUE",
+    "KingBuffed",
+    "TeamGlows",
+    "KnockedIntoAir",
+    "CompetitiveWinner",
+    "CompetitiveLoser",
+    "HealingDebuff",
+    "PasstimePenaltyDebuff",
+    "GrappledToPlayer",
+    "GrappledByPlayer",
+    "ParachuteDeployed",
+    "GAS",
+    "BurningPyro",
+    "RocketPack",
+    "LostFooting",
+    "AirCurrent",
+    "HalloweenHellHeal",
+    "PowerUpModeDominant",
+    "ImmuneToPushback",
+];
+
+/// Whether condition number `n` is set.
+fn has_cond_bit(words: &[u32; 6], n: usize) -> bool {
     let word = if n < 32 { words[0] | words[1] } else { words.get(n / 32 + 1).copied().unwrap_or(0) };
     word >> (n % 32) & 1 == 1
 }
 
-fn cond_names(words: &[u32; 6]) -> Vec<String> {
-    (0..=PlayerCondition::MAX as u8)
-        .filter_map(|n| PlayerCondition::try_from(n).ok())
-        .filter(|&c| has_cond(words, c))
-        .map(|c| format!("{c:?}"))
+fn has_cond(words: &[u32; 6], c: PlayerCondition) -> bool {
+    has_cond_bit(words, c as usize)
+}
+
+fn cond_names(words: &[u32; 6]) -> Vec<&'static str> {
+    COND_NAMES
+        .iter()
+        .enumerate()
+        .filter(|&(n, name)| !name.is_empty() && has_cond_bit(words, n))
+        .map(|(_, name)| *name)
         .collect()
+}
+
+fn chat_kind(kind: ChatMessageKind) -> &'static str {
+    match kind {
+        ChatMessageKind::ChatAll => "ChatAll",
+        ChatMessageKind::ChatTeam => "ChatTeam",
+        ChatMessageKind::ChatAllDead => "ChatAllDead",
+        ChatMessageKind::ChatTeamDead => "ChatTeamDead",
+        ChatMessageKind::ChatAllSpec => "ChatAllSpec",
+        ChatMessageKind::NameChange => "NameChange",
+        ChatMessageKind::Empty => "Empty",
+    }
 }
 
 /// The medigun charge effect a player is under, from their conditions.
@@ -444,7 +604,7 @@ impl Extractor {
         self.tick_interval.unwrap_or(DEFAULT_TICK_INTERVAL)
     }
 
-    fn projectile_kind(&self, pr: &Projectile) -> String {
+    fn projectile_kind(&self, pr: &Projectile) -> &'static str {
         projectile_kind(pr.ty, self.class_names.get(usize::from(pr.class)).map_or("", String::as_str))
     }
 
@@ -1390,7 +1550,7 @@ impl MessageHandler for Extractor {
                     "player": player,
                     "name": m.from.as_ref().map(ToString::to_string),
                     "text": strip_colors(m.text.as_ref()),
-                    "kind": format!("{:?}", m.kind),
+                    "kind": chat_kind(m.kind),
                 }));
             }
             _ => {}
@@ -1503,6 +1663,14 @@ mod cond_tests {
         assert_eq!(projectile_kind(ProjectileType::Unknown, "CTFProjectile_Arrow"), "Arrow");
         assert_eq!(projectile_kind(ProjectileType::Unknown, "CTFProjectile_JarMilk"), "MadMilk");
         assert_eq!(projectile_kind(ProjectileType::Unknown, "CTFProjectile_SpellBats"), "Unknown");
+    }
+
+    #[test]
+    fn condition_names_match_the_parser() {
+        for n in 0..=PlayerCondition::MAX as u8 {
+            let expected = PlayerCondition::try_from(n).map(|c| format!("{c:?}")).unwrap_or_default();
+            assert_eq!(COND_NAMES[usize::from(n)], expected, "condition {n}");
+        }
     }
 
     #[test]
