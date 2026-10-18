@@ -11,12 +11,14 @@ use super::reliable::{self, Reassembler};
 use super::split::SplitReassembler;
 use std::time::Instant;
 
+#[derive(Debug)]
 pub struct MsgStream {
     pub reliable: bool,
     pub data: Vec<u8>,
     pub nbits: usize,
 }
 
+#[derive(Debug)]
 pub struct Received {
     pub header: Header,
     pub subchannel: Option<u8>,
@@ -32,12 +34,13 @@ pub struct Counters {
     pub packets: u64,
     pub bad_checksum: u64,
     pub stale: u64,
+    pub bad_challenge: u64,
     pub lost: u64,
     pub reliable_errors: u64,
     pub compressed_bad: u64,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Receiver {
     pub in_seq: i32,
     /// Only packets carrying this challenge belong to our connection.
@@ -83,9 +86,12 @@ impl Receiver {
             return None;
         }
         let header = netchan::decode_header(data).ok()?;
-        if let (Some(theirs), Some(ours)) = (header.challenge, self.challenge)
-            && theirs != ours
+        // The server stamps every packet of the connection with our challenge; one
+        // without it would let a spoofer skip the check by clearing the flag.
+        if let Some(ours) = self.challenge
+            && header.challenge != Some(ours)
         {
+            self.counters.bad_challenge += 1;
             return None;
         }
         if header.sequence <= self.in_seq {
@@ -93,7 +99,7 @@ impl Receiver {
             return None;
         }
         if self.in_seq != 0 {
-            let gap = (header.sequence - self.in_seq - 1).max(0) as u64;
+            let gap = u64::try_from(header.sequence - self.in_seq - 1).unwrap_or(0);
             self.counters.lost += gap.saturating_sub(u64::from(header.choked.unwrap_or(0)));
         }
         self.in_seq = header.sequence;
@@ -104,15 +110,16 @@ impl Receiver {
         let mut reliable_ok = false;
         let mut tail = Some(header.body_offset * 8);
         if header.reliable() {
-            subchannel = reliable::latch_subchannel(data, header.body_offset);
             if let Ok(region) = self.reasm.feed(data, header.body_offset) {
                 reliable_ok = true;
+                subchannel = Some(region.subchannel);
                 for payload in region.completed {
                     let nbits = payload.len() * 8;
                     streams.push(MsgStream { reliable: true, data: payload, nbits });
                 }
                 tail = Some(region.end_bit);
             } else {
+                subchannel = reliable::latch_subchannel(data, header.body_offset);
                 self.counters.reliable_errors += 1;
                 tail = None;
             }
@@ -167,6 +174,22 @@ mod tests {
         let p9 = build_packet(9, 0, 77, 0, None, Some((&tick.0, tick.1)));
         assert!(rx.feed(&p9, Instant::now()).is_some());
         assert_eq!(rx.counters.lost, 3);
+    }
+
+    #[test]
+    fn packet_without_challenge_is_dropped() {
+        let tick = messages::tick(1);
+        let mut pkt = build_packet(5, 0, 77, 0, None, Some((&tick.0, tick.1)));
+        // Clear CHALLENGE, drop the 4 challenge bytes and fix up the checksum.
+        pkt[8] &= !netchan::FLAG_CHALLENGE;
+        pkt.drain(12..16);
+        let sum = netchan::fold_checksum(&pkt[11..]);
+        pkt[9..11].copy_from_slice(&sum.to_le_bytes());
+        assert!(netchan::verify_checksum(&pkt));
+        let mut rx = Receiver::new(Some(77));
+        assert!(rx.feed(&pkt, Instant::now()).is_none());
+        assert_eq!(rx.counters.bad_challenge, 1);
+        assert_eq!(rx.in_seq, 0, "a dropped packet must not move the sequence");
     }
 
     #[test]

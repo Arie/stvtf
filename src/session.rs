@@ -207,8 +207,11 @@ impl<'o> Session<'o> {
     }
 
     fn datagram(&mut self, data: &[u8], dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Value)) {
-        self.last_inbound = Instant::now();
-        let Some(pkt) = self.rx.feed(data, Instant::now()) else { return };
+        let now = Instant::now();
+        let Some(pkt) = self.rx.feed(data, now) else { return };
+        // Only a packet that passed the checksum, challenge and sequence checks proves
+        // the connection is alive; junk must not hold off the silence timeout.
+        self.last_inbound = now;
         if pkt.header.reliable()
             && pkt.reliable_ok
             && let Some(sub) = pkt.subchannel
