@@ -14,14 +14,19 @@ use anyhow::{Result, bail};
 
 const FRAGMENT_SIZE: usize = 256;
 const MAX_TRANSFER: usize = 4 << 20;
+/// Index of the message stream in `Reassembler::streams` (1 is the file stream).
+const STREAM_MESSAGES: usize = 0;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Transfer {
     nbytes: usize,
     total_frags: usize,
     have: Vec<bool>,
+    /// Number of `true` entries in `have`.
+    received: usize,
     buf: Vec<u8>,
-    compressed: bool,
+    /// Declared size after decompression, for compressed transfers.
+    uncompressed: Option<usize>,
 }
 
 impl Transfer {
@@ -30,15 +35,16 @@ impl Transfer {
     }
 
     fn complete(&self) -> bool {
-        self.active() && self.have.iter().all(|&h| h)
+        self.active() && self.received == self.total_frags
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Reassembler {
     streams: [Transfer; 2],
 }
 
+#[derive(Debug)]
 pub struct Region {
     pub subchannel: u8,
     /// Completed message-stream payloads (the file stream is discarded).
@@ -56,12 +62,12 @@ impl Reassembler {
         let mut br = BitReader::at(data, body_offset * 8);
         let subchannel = br.read_bits(3)? as u8;
         let mut completed = Vec::new();
-        for idx in 0..2 {
+        for (idx, st) in self.streams.iter_mut().enumerate() {
             if !br.read_bit()? {
                 continue;
             }
-            if let Some(done) = read_block(&mut br, &mut self.streams[idx])?
-                && idx == 0
+            if let Some(done) = read_block(&mut br, st)?
+                && idx == STREAM_MESSAGES
             {
                 completed.push(done);
             }
@@ -81,35 +87,39 @@ fn read_block(br: &mut BitReader<'_>, st: &mut Transfer) -> Result<Option<Vec<u8
                 br.read_bits(32)?;
                 br.read_string(260)?;
             }
-            st.compressed = br.read_bit()?;
-            if st.compressed {
-                br.read_bits(26)?;
+            if br.read_bit()? {
+                st.uncompressed = Some(br.read_bits(26)? as usize);
             }
             st.nbytes = br.read_bits(26)? as usize;
         } else {
-            st.compressed = br.read_bit()?;
-            if st.compressed {
-                br.read_bits(26)?;
+            if br.read_bit()? {
+                st.uncompressed = Some(br.read_bits(26)? as usize);
             }
             st.nbytes = br.read_varint32()? as usize;
             num_frags = st.nbytes.div_ceil(FRAGMENT_SIZE);
+            if st.nbytes == 0 {
+                // An empty single block carries nothing to deliver.
+                *st = Transfer::default();
+                return Ok(None);
+            }
         }
-        if st.nbytes > MAX_TRANSFER {
+        let nbytes = st.nbytes;
+        if nbytes > MAX_TRANSFER {
             *st = Transfer::default();
-            bail!("declared transfer {} over cap", st.nbytes);
+            bail!("declared transfer {nbytes} over cap");
         }
-        st.total_frags = st.nbytes.div_ceil(FRAGMENT_SIZE);
+        st.total_frags = nbytes.div_ceil(FRAGMENT_SIZE);
         st.have = vec![false; st.total_frags];
     }
     if !st.active() {
         bail!("continuation of an unseen transfer");
     }
-    if start_frag >= st.total_frags {
+    if start_frag + num_frags > st.total_frags {
         *st = Transfer::default();
-        bail!("fragment {start_frag} past transfer end");
+        bail!("fragments {start_frag}+{num_frags} past transfer end");
     }
     let mut length = num_frags * FRAGMENT_SIZE;
-    if start_frag + num_frags >= st.total_frags {
+    if start_frag + num_frags == st.total_frags {
         let trim = st.nbytes % FRAGMENT_SIZE;
         if trim != 0 {
             length -= FRAGMENT_SIZE - trim;
@@ -121,20 +131,29 @@ fn read_block(br: &mut BitReader<'_>, st: &mut Transfer) -> Result<Option<Vec<u8
         st.buf.resize(offset + chunk.len(), 0);
     }
     st.buf[offset..offset + chunk.len()].copy_from_slice(&chunk);
-    for f in start_frag..(start_frag + num_frags).min(st.total_frags) {
-        st.have[f] = true;
+    for have in &mut st.have[start_frag..start_frag + num_frags] {
+        if !*have {
+            *have = true;
+            st.received += 1;
+        }
     }
     if !st.complete() {
         return Ok(None);
     }
     let mut out = std::mem::take(&mut st.buf);
     out.truncate(st.nbytes);
-    let compressed = st.compressed;
+    let uncompressed = st.uncompressed;
     *st = Transfer::default();
-    if compressed {
-        return Ok(Some(compress::inflate_transfer(&out)?));
+    match uncompressed {
+        Some(size) => {
+            let inflated = compress::inflate_transfer(&out)?;
+            if inflated.len() != size {
+                bail!("transfer inflated to {} bytes, declared {size}", inflated.len());
+            }
+            Ok(Some(inflated))
+        }
+        None => Ok(Some(out)),
     }
-    Ok(Some(out))
 }
 
 #[cfg(test)]
@@ -202,6 +221,19 @@ mod tests {
     fn continuation_without_start_is_an_error() {
         let pkt = multi_fragment(0, 1, 1, 0, &[0u8; 256]);
         assert!(Reassembler::default().feed(&pkt, 0).is_err());
+    }
+
+    #[test]
+    fn fragments_past_transfer_end_are_an_error() {
+        // A 300-byte transfer has two fragments; the first block claims three.
+        let pkt = multi_fragment(0, 0, 3, 300, &[0u8; 768]);
+        assert!(Reassembler::default().feed(&pkt, 0).is_err());
+    }
+
+    #[test]
+    fn empty_single_block_delivers_nothing() {
+        let region = Reassembler::default().feed(&single_block(0, b""), 0).unwrap();
+        assert!(region.completed.is_empty());
     }
 
     #[test]
