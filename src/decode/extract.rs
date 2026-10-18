@@ -14,16 +14,18 @@ use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::usermessage::{ChatMessageKind, UserMessage};
 
-use tf_demo_parser::demo::message::packetentities::UpdateType;
-use tf_demo_parser::demo::message::{Message, MessageType};
+use tf_demo_parser::demo::message::packetentities::{EntityId, UpdateType};
+use tf_demo_parser::demo::message::{
+    Message, MessageType, PacketEntitiesMessage, PacketEntity, ServerInfoMessage, SetConVarMessage, TempEntitiesMessage,
+};
 use tf_demo_parser::demo::packet::datatable::{ParseSendTable, ServerClass};
 use tf_demo_parser::demo::packet::message::MessagePacketMeta;
 use tf_demo_parser::demo::packet::stringtable::StringTableEntry;
 use tf_demo_parser::demo::parser::MessageHandler;
-use tf_demo_parser::demo::parser::analyser::{Class, Team};
+use tf_demo_parser::demo::parser::analyser::{Class, Team, UserId};
 use tf_demo_parser::demo::parser::gamestateanalyser::GameStateAnalyser;
 use tf_demo_parser::demo::parser::handler::BorrowMessageHandler;
-use tf_demo_parser::demo::sendprop::{SendProp, SendPropValue};
+use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
 
 /// TF2 sets DMG_ACID on critical hits.
@@ -65,11 +67,67 @@ fn debug_entity() -> Option<u32> {
     DEBUG.as_deref()?.strip_prefix("ent:")?.parse().ok()
 }
 
+/// A send prop by send table and name. Elements of an array prop have the array as
+/// table and their index as name.
+const fn prop_id(table: &str, name: &str) -> SendPropIdentifier {
+    SendPropIdentifier::new(table, name)
+}
+
+const PROP_TEAM_NUM: SendPropIdentifier = prop_id("DT_BaseEntity", "m_iTeamNum");
+const PROP_ORIGIN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_vecOrigin");
+const PROP_ROTATION: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
+/// The condition words of a player: m_nPlayerCond, _condition_bits, m_nPlayerCondEx..Ex4.
+const PROP_CONDS: [SendPropIdentifier; 6] = [
+    prop_id("DT_TFPlayerShared", "m_nPlayerCond"),
+    prop_id("DT_TFPlayerConditionListExclusive", "_condition_bits"),
+    prop_id("DT_TFPlayerShared", "m_nPlayerCondEx"),
+    prop_id("DT_TFPlayerShared", "m_nPlayerCondEx2"),
+    prop_id("DT_TFPlayerShared", "m_nPlayerCondEx3"),
+    prop_id("DT_TFPlayerShared", "m_nPlayerCondEx4"),
+];
+const PROP_TEAM_TEAM_NUM: SendPropIdentifier = prop_id("DT_Team", "m_iTeamNum");
+const PROP_TEAM_SCORE: SendPropIdentifier = prop_id("DT_Team", "m_iScore");
+const PROP_TIMER_END_TIME: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_flTimerEndTime");
+const PROP_TIMER_REMAINING: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_flTimeRemaining");
+const PROP_TIMER_PAUSED: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bTimerPaused");
+const PROP_TIMER_SHOW_IN_HUD: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bShowInHUD");
+const PROP_TIMER_DISABLED: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bIsDisabled");
+const PROP_TIMER_STATE: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_nState");
+const PROP_SENTRY_POSE_PITCH: SendPropIdentifier = prop_id("m_flPoseParameter", "000");
+const PROP_SENTRY_POSE_YAW: SendPropIdentifier = prop_id("m_flPoseParameter", "001");
+const PROP_SENTRY_ENEMY: SendPropIdentifier = prop_id("DT_ObjectSentrygun", "m_hEnemy");
+const PROP_SENTRY_STATE: SendPropIdentifier = prop_id("DT_ObjectSentrygun", "m_iState");
+const PROP_SENTRY_SHELLS: SendPropIdentifier = prop_id("DT_ObjectSentrygun", "m_iAmmoShells");
+const PROP_WATCHER_PROGRESS: SendPropIdentifier = prop_id("DT_TeamTrainWatcher", "m_flTotalProgress");
+const PROP_WATCHER_CAPPERS: SendPropIdentifier = prop_id("DT_TeamTrainWatcher", "m_nNumCappers");
+const PROP_WATCHER_SPEED: SendPropIdentifier = prop_id("DT_TeamTrainWatcher", "m_iTrainSpeedLevel");
+const PROP_WATCHER_GLOW: SendPropIdentifier = prop_id("DT_TeamTrainWatcher", "m_hGlowEnt");
+const PROP_ROUND_STATE: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_iRoundState");
+const PROP_MAP_RESET_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flMapResetTime");
+const PROP_STATE_TRANSITION_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flStateTransitionTime");
+const PROP_WEAPON_OWNER: SendPropIdentifier = prop_id("DT_BaseCombatWeapon", "m_hOwner");
+const PROP_ITEM_DEFINITION: SendPropIdentifier = prop_id("DT_ScriptCreatedItem", "m_iItemDefinitionIndex");
+const PROP_MEDIGUN_RELEASING: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_bChargeRelease");
+const PROP_MEDIGUN_RESIST: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_nChargeResistType");
+const PROP_MEDIGUN_TARGET: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_hHealingTarget");
+const PROP_BULLETS_PLAYER: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_iPlayer");
+const PROP_BULLETS_ORIGIN: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecOrigin");
+const PROP_BULLETS_PITCH: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecAngles[0]");
+const PROP_BULLETS_YAW: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecAngles[1]");
+const PROP_BULLETS_WEAPON: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_iWeaponID");
+const PROP_BULLETS_CRIT: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_bCritical");
+const PROP_EXPLOSION_ORIGIN: [SendPropIdentifier; 3] = [
+    prop_id("DT_TETFExplosion", "m_vecOrigin[0]"),
+    prop_id("DT_TETFExplosion", "m_vecOrigin[1]"),
+    prop_id("DT_TETFExplosion", "m_vecOrigin[2]"),
+];
+const PROP_EXPLOSION_WEAPON: SendPropIdentifier = prop_id("DT_TETFExplosion", "m_iWeaponID");
+
 #[derive(Default)]
 pub struct Extractor {
-    pub gs: GameStateAnalyser,
+    gs: GameStateAnalyser,
     /// Latest server tick seen in a net_Tick.
-    pub server_tick: u32,
+    pub(crate) server_tick: u32,
     events: RefCell<Vec<Value>>,
     world_sent: Cell<bool>,
     control_points: Vec<ControlPoint>,
@@ -81,8 +139,7 @@ pub struct Extractor {
     class_names: Vec<String>,
     /// Seconds per tick from ServerInfo.
     tick_interval: Option<f32>,
-    /// Team entity -> (team number, score).
-    teams: BTreeMap<u32, (u8, i64)>,
+    teams: BTreeMap<u32, TeamScore>,
     timers: BTreeMap<u32, RoundTimer>,
     round_state: RoundState,
     /// Server time the match started (m_flMapResetTime) and the current round went live.
@@ -93,12 +150,12 @@ pub struct Extractor {
     state_transition: f32,
     /// Where each player entity last was while alive: a dead player's own position is
     /// their spectator camera, which follows teammates.
-    last_alive: HashMap<u32, (Vector, f32, f32)>,
+    last_alive: HashMap<u32, Pose>,
     /// mp_timelimit (minutes) and mp_winlimit, replicated to clients as convars.
     time_limit: Option<f32>,
     win_limit: Option<i64>,
-    /// Per medic entity: charge and whether it was being released, to report changes.
-    medic_charge: HashMap<u32, (u8, bool)>,
+    /// Per medic entity, to report changes.
+    medic_charge: HashMap<u32, Charge>,
     /// Payload: tf-demo-parser takes every func_tracktrain for a cart, but only a payload
     /// map has a team_train_watcher (KotH and other maps use trains for lifts and props).
     train_watchers: BTreeMap<u32, TrainWatcher>,
@@ -108,15 +165,29 @@ pub struct Extractor {
     prop_origins: HashMap<u32, Vector>,
     sentries: HashMap<u32, Sentry>,
     /// player_spawn arrives before the player's new position: held until the next entity update.
-    pending_spawns: RefCell<Vec<(u16, Value)>>,
+    pending_spawns: Vec<(u16, Value)>,
 }
 
-impl Sentry {
-    /// World yaw of the turret: the yaw pose parameter covers a full turn, centred on the
-    /// direction the sentry was placed in (checked against its targets while firing).
-    fn aim(&self) -> f32 {
-        (self.yaw + (0.5 - self.pose[1]) * 360.0).rem_euclid(360.0)
-    }
+/// A team entity's team number and score.
+#[derive(Default, Clone, Copy)]
+struct TeamScore {
+    team: u8,
+    score: i64,
+}
+
+/// Where a player was and where they looked.
+#[derive(Clone, Copy)]
+struct Pose {
+    pos: Vector,
+    yaw: f32,
+    pitch: f32,
+}
+
+/// A medic's charge and whether it was being released.
+#[derive(Clone, Copy, PartialEq)]
+struct Charge {
+    charge: u8,
+    releasing: bool,
 }
 
 #[derive(Default, Clone)]
@@ -128,6 +199,14 @@ struct Sentry {
     enemy: Option<u32>,
     shells: Option<i64>,
     state: i64,
+}
+
+impl Sentry {
+    /// World yaw of the turret: the yaw pose parameter covers a full turn, centred on the
+    /// direction the sentry was placed in (checked against its targets while firing).
+    fn aim(&self) -> f32 {
+        (self.yaw + (0.5 - self.pose[1]) * 360.0).rem_euclid(360.0)
+    }
 }
 
 #[derive(Default, Clone)]
@@ -217,9 +296,6 @@ struct Medigun {
     resist: i64,
     target: Option<u32>,
 }
-
-const COND_PROPS: [&str; 6] =
-    ["m_nPlayerCond", "_condition_bits", "m_nPlayerCondEx", "m_nPlayerCondEx2", "m_nPlayerCondEx3", "m_nPlayerCondEx4"];
 
 /// tf-demo-parser names the common projectiles; the rest go by their server class.
 fn projectile_kind(ty: ProjectileType, class: &str) -> &'static str {
@@ -456,27 +532,27 @@ fn ubered(words: &[u32; 6]) -> Option<&'static str> {
 }
 
 #[derive(Default, Clone)]
-pub struct ControlPoint {
-    pub pos: Option<Vector>,
-    pub owner: u8,
-    pub capping_team: u8,
+struct ControlPoint {
+    pos: Option<Vector>,
+    owner: u8,
+    capping_team: u8,
     /// Progress 0..1 of the capping team as of `progress_tick`. The server sends it
     /// (as m_flLazyCapPerc, counting down) only now and then; in between it is advanced
     /// at `cap_rate`, rolled forward whenever an input of the rate changes.
-    pub progress: f32,
-    pub progress_tick: u32,
-    pub locked: bool,
-    pub blocked: bool,
-    pub team_in_zone: u8,
+    progress: f32,
+    progress_tick: u32,
+    locked: bool,
+    blocked: bool,
+    team_in_zone: u8,
     /// Per team: seconds to cap alone, and team members on the point.
-    pub cap_time: [f32; 4],
-    pub members: [u8; 4],
+    cap_time: [f32; 4],
+    members: [u8; 4],
 }
 
 impl ControlPoint {
     /// Progress per second towards capping (negative while it decays back), the way
     /// TF2's client extrapolates between lazy updates: each extra capper adds 1/n.
-    pub fn cap_rate(&self) -> f32 {
+    fn cap_rate(&self) -> f32 {
         let team = self.capping_team as usize;
         let time = self.cap_time.get(team).copied().unwrap_or(0.0);
         if team == 0 || time <= 0.0 || self.blocked {
@@ -491,7 +567,7 @@ impl ControlPoint {
         }
     }
 
-    pub fn progress_at(&self, tick: u32, interval: f32) -> f32 {
+    fn progress_at(&self, tick: u32, interval: f32) -> f32 {
         if self.capping_team == 0 {
             return 0.0;
         }
@@ -506,8 +582,14 @@ impl ControlPoint {
 }
 
 /// Entity handles carry the entity index in their low 11 bits.
-pub fn handle_entity(handle: i64) -> u32 {
+fn handle_entity(handle: i64) -> u32 {
     (handle & 0x7ff) as u32
+}
+
+/// The entity of a building's builder. tf-demo-parser stores the builder's entity
+/// handle (m_hBuilder) in a `UserId`, so despite its type it is not a user id.
+fn builder_entity(builder: UserId) -> u32 {
+    handle_entity(i64::from(u16::from(builder)))
 }
 
 /// The entity a handle prop points at; none for the invalid handle (and 0, the world).
@@ -520,7 +602,7 @@ fn team_byte(v: i64) -> u8 {
     u8::try_from(v).unwrap_or(0)
 }
 
-pub fn team_name(t: Team) -> &'static str {
+fn team_name(t: Team) -> &'static str {
     match t {
         Team::Red => "red",
         Team::Blue => "blue",
@@ -536,7 +618,7 @@ where
     team_name(Team::new(n))
 }
 
-pub fn class_name(c: Class) -> &'static str {
+fn class_name(c: Class) -> &'static str {
     match c {
         Class::Scout => "scout",
         Class::Sniper => "sniper",
@@ -567,35 +649,44 @@ fn round1(f: f32) -> f64 {
     (f64::from(f) * 10.0).round() / 10.0
 }
 
-fn prop<'p>(props: &'p [SendProp], name: &str) -> Option<&'p SendPropValue> {
-    props.iter().find(|p| p.identifier.names().is_some_and(|(_, n)| n.as_str() == name)).map(|p| &p.value)
-}
-
-fn prop_f(props: &[SendProp], name: &str) -> Option<f32> {
-    match prop(props, name)? {
-        SendPropValue::Float(f) => Some(*f),
-        SendPropValue::Integer(i) => Some(*i as f32),
-        _ => None,
+/// A prop value as a number, whichever number type the table gave it; 0 otherwise.
+fn as_int(v: &SendPropValue) -> i64 {
+    match v {
+        SendPropValue::Integer(i) => *i,
+        SendPropValue::Float(f) => *f as i64,
+        _ => 0,
     }
 }
 
-fn prop_i(props: &[SendProp], name: &str) -> Option<i64> {
-    match prop(props, name)? {
-        SendPropValue::Integer(i) => Some(*i),
-        SendPropValue::Float(f) => Some(*f as i64),
-        _ => None,
+fn as_float(v: &SendPropValue) -> f32 {
+    match v {
+        SendPropValue::Float(f) => *f,
+        SendPropValue::Integer(i) => *i as f32,
+        _ => 0.0,
     }
 }
 
-fn prop_vec(props: &[SendProp], name: &str) -> Option<Vector> {
-    match prop(props, name)? {
+fn prop(props: &[SendProp], id: SendPropIdentifier) -> Option<&SendPropValue> {
+    props.iter().find(|p| p.identifier == id).map(|p| &p.value)
+}
+
+fn prop_f(props: &[SendProp], id: SendPropIdentifier) -> f32 {
+    prop(props, id).map_or(0.0, as_float)
+}
+
+fn prop_i(props: &[SendProp], id: SendPropIdentifier) -> i64 {
+    prop(props, id).map_or(0, as_int)
+}
+
+fn prop_vec(props: &[SendProp], id: SendPropIdentifier) -> Option<Vector> {
+    match prop(props, id)? {
         SendPropValue::Vector(v) => Some(*v),
         _ => None,
     }
 }
 
 impl Extractor {
-    pub fn state(&self) -> &GameState {
+    fn state(&self) -> &GameState {
         &self.gs.state
     }
 
@@ -612,9 +703,9 @@ impl Extractor {
     /// before deleting it; a game client hides it at the explosion, so do the same: drop
     /// the nearest matching projectile: rockets for rocket launchers, grenades otherwise.
     fn exploded(&mut self, props: &[SendProp]) {
-        let axis = |i: usize| prop_f(props, &format!("m_vecOrigin[{i}]")).unwrap_or(0.0);
-        let origin = Vector { x: axis(0), y: axis(1), z: axis(2) };
-        let rocket = prop_i(props, "m_iWeaponID").unwrap_or(0) == WEAPON_ROCKET_LAUNCHER;
+        let [x, y, z] = PROP_EXPLOSION_ORIGIN.map(|id| prop_f(props, id));
+        let origin = Vector { x, y, z };
+        let rocket = prop_i(props, PROP_EXPLOSION_WEAPON) == WEAPON_ROCKET_LAUNCHER;
         let nearest = self
             .gs
             .state
@@ -667,13 +758,13 @@ impl Extractor {
                 continue;
             }
             let gun = self.mediguns.values().find(|m| m.owner == Some(ent));
-            let now = (p.charge, gun.is_some_and(|m| m.releasing));
-            if let Some(&(charge, releasing)) = self.medic_charge.get(&ent) {
+            let now = Charge { charge: p.charge, releasing: gun.is_some_and(|m| m.releasing) };
+            if let Some(&before) = self.medic_charge.get(&ent) {
                 let medigun = gun.map(|m| medigun_kind(m.item));
-                if charge < 100 && now.0 >= 100 && !now.1 {
+                if before.charge < 100 && now.charge >= 100 && !now.releasing {
                     events.push(json!({"type": "uber_ready", "medic": u16::from(info.user_id), "medigun": medigun}));
                 }
-                if releasing && !now.1 {
+                if before.releasing && !now.releasing {
                     events.push(json!({"type": "uber_ended", "medic": u16::from(info.user_id), "medigun": medigun}));
                 }
             }
@@ -716,15 +807,17 @@ impl Extractor {
         }))
     }
 
-    pub fn push(&self, mut v: Value) {
+    /// Queues an event, stamped with the current tick unless it has its own.
+    fn push(&self, mut v: Value) {
         if let Some(obj) = v.as_object_mut() {
-            obj.insert("tick".into(), json!(self.server_tick));
+            obj.entry("tick").or_insert_with(|| json!(self.server_tick));
         }
         self.events.borrow_mut().push(v);
     }
 
-    pub fn drain(&self) -> Vec<Value> {
-        std::mem::take(&mut self.events.borrow_mut())
+    /// Takes the queued events.
+    pub(crate) fn drain(&self) -> Vec<Value> {
+        self.events.take()
     }
 
     fn user_pos(&self, user_id: u16) -> Value {
@@ -744,6 +837,8 @@ impl Extractor {
             .map(|i| u16::from(i.user_id))
     }
 
+    /// One prop of CTFObjectiveResource. Its per point arrays come as elements named
+    /// after the array with the index as name, so they go by name rather than identifier.
     fn objective_prop(&mut self, p: &SendProp) {
         let Some((table, name)) = p.identifier.names() else { return };
         if name.as_str() == "m_vCPPositions" {
@@ -794,11 +889,7 @@ impl Extractor {
         }
         let cp = &mut self.control_points[idx];
         cp.advance(tick, interval);
-        let int = match &p.value {
-            SendPropValue::Integer(i) => *i,
-            SendPropValue::Float(f) => *f as i64,
-            _ => 0,
-        };
+        let int = as_int(&p.value);
         match table.as_str() {
             "m_vCPPositions" => {
                 if let SendPropValue::Vector(v) = p.value {
@@ -828,7 +919,7 @@ impl Extractor {
         if id == 0 { Value::Null } else { json!(id) }
     }
 
-    fn game_event(&self, event: &GameEvent) {
+    fn game_event(&mut self, event: &GameEvent) {
         match event {
             GameEvent::PlayerDeath(d) => {
                 // Building kills (sentries) report the building as inflictor; attacker stays the engineer.
@@ -863,9 +954,8 @@ impl Extractor {
                 "weapon_id": h.weapon_id,
             })),
             GameEvent::PlayerSpawn(s) => {
-                let mut pending = self.pending_spawns.borrow_mut();
-                if pending.len() < MAX_PENDING_SPAWNS {
-                    pending.push((
+                if self.pending_spawns.len() < MAX_PENDING_SPAWNS {
+                    self.pending_spawns.push((
                         s.user_id,
                         json!({
                             "type": "spawn",
@@ -975,7 +1065,7 @@ impl Extractor {
         }
     }
 
-    fn temp_entity(&self, class: &str, props: &[SendProp]) {
+    fn temp_entity(&mut self, class: &str, props: &[SendProp]) {
         if debug(class) {
             for p in props {
                 eprintln!("{class} {:?} = {:?}", p.identifier.names(), p.value);
@@ -984,25 +1074,25 @@ impl Extractor {
         match class {
             "CTEFireBullets" => {
                 // m_iPlayer is the player's entity index minus one.
-                let player = prop_i(props, "m_iPlayer")
-                    .and_then(|i| u32::try_from(i).ok()?.checked_add(1))
+                let player = u32::try_from(prop_i(props, PROP_BULLETS_PLAYER))
+                    .ok()
+                    .and_then(|i| i.checked_add(1))
                     .and_then(|ent| self.user_of_entity(ent));
                 self.push(json!({
                     "type": "shot",
                     "player": player,
-                    "origin": vec3(prop_vec(props, "m_vecOrigin").unwrap_or_default()),
-                    "pitch": round1(prop_f(props, "m_vecAngles[0]").unwrap_or(0.0)),
-                    "yaw": round1(prop_f(props, "m_vecAngles[1]").unwrap_or(0.0)),
-                    "weapon_id": prop_i(props, "m_iWeaponID").unwrap_or(0),
-                    "crit": prop_i(props, "m_bCritical").unwrap_or(0) != 0,
+                    "origin": vec3(prop_vec(props, PROP_BULLETS_ORIGIN).unwrap_or_default()),
+                    "pitch": round1(prop_f(props, PROP_BULLETS_PITCH)),
+                    "yaw": round1(prop_f(props, PROP_BULLETS_YAW)),
+                    "weapon_id": prop_i(props, PROP_BULLETS_WEAPON),
+                    "crit": prop_i(props, PROP_BULLETS_CRIT) != 0,
                 }));
             }
             "CTETFExplosion" => {
-                let axis = |i: usize| round1(prop_f(props, &format!("m_vecOrigin[{i}]")).unwrap_or(0.0));
                 self.push(json!({
                     "type": "explosion",
-                    "origin": [axis(0), axis(1), axis(2)],
-                    "weapon_id": prop_i(props, "m_iWeaponID").unwrap_or(0),
+                    "origin": PROP_EXPLOSION_ORIGIN.map(|id| round1(prop_f(props, id))),
+                    "weapon_id": prop_i(props, PROP_EXPLOSION_WEAPON),
                 }));
             }
             _ => {}
@@ -1010,7 +1100,7 @@ impl Extractor {
     }
 
     /// Emits a `world` event once the world bounds are known.
-    pub fn announce(&self) {
+    pub(crate) fn announce(&self) {
         if !self.world_sent.get()
             && let Some(w) = &self.state().world
         {
@@ -1020,7 +1110,7 @@ impl Extractor {
         }
     }
 
-    pub fn snapshot(&self) -> Value {
+    pub(crate) fn snapshot(&self) -> Value {
         let gs = self.state();
         let players: Vec<Value> = gs
             .players
@@ -1034,7 +1124,7 @@ impl Extractor {
                 let alive = p.state == PlayerState::Alive;
                 // Dead: where they died, or nothing if that happened before we connected.
                 let last = if alive {
-                    Some((p.position, p.view_angle, p.pitch_angle))
+                    Some(Pose { pos: p.position, yaw: p.view_angle, pitch: p.pitch_angle })
                 } else {
                     self.last_alive.get(&u32::from(p.entity)).copied()
                 };
@@ -1048,9 +1138,9 @@ impl Extractor {
                     "alive": alive,
                     "hp": p.health,
                     "max_hp": p.max_health,
-                    "pos": last.map(|l| vec3(l.0)),
-                    "yaw": last.map(|l| round1(l.1)),
-                    "pitch": last.map(|l| round1(l.2)),
+                    "pos": last.map(|l| vec3(l.pos)),
+                    "yaw": last.map(|l| round1(l.yaw)),
+                    "pitch": last.map(|l| round1(l.pitch)),
                     "uber": p.charge,
                     "ping": p.ping,
                     "conds": self.conds.get(&u32::from(p.entity)).map(cond_names).unwrap_or_default(),
@@ -1093,7 +1183,7 @@ impl Extractor {
                     "max_hp": b.max_health(),
                     "pos": vec3(b.position()),
                     "yaw": round1(b.angle()),
-                    "builder": self.user_of_entity(handle_entity(i64::from(u16::from(b.builder())))),
+                    "builder": self.user_of_entity(builder_entity(b.builder())),
                     "sapped": b.sapped(),
                 });
                 if let Building::Teleporter(t) = b {
@@ -1170,8 +1260,8 @@ impl Extractor {
             "win_limit": self.win_limit,
             "match_time": (self.match_start > 0.0).then(|| round1((self.server_tick as f32 * self.interval() - self.match_start).max(0.0))),
             "score": {
-                "red": self.teams.values().find(|t| t.0 == 2).map_or(0, |t| t.1),
-                "blue": self.teams.values().find(|t| t.0 == 3).map_or(0, |t| t.1),
+                "red": self.teams.values().find(|t| t.team == Team::Red as u8).map_or(0, |t| t.score),
+                "blue": self.teams.values().find(|t| t.team == Team::Blue as u8).map_or(0, |t| t.score),
             },
             "timers": self
                 .timers
@@ -1189,7 +1279,7 @@ impl Extractor {
 }
 
 /// Removes TF2 chat colour codes: \x01-\x06 select a colour, \x07 takes RRGGBB, \x08 RRGGBBAA.
-pub fn strip_colors(text: &str) -> String {
+fn strip_colors(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
@@ -1226,6 +1316,307 @@ fn building_kind(object: u16) -> &'static str {
     }
 }
 
+/// Per-class entity handlers. Each reads the props of one entity update.
+impl Extractor {
+    fn packet_entities(&mut self, pe: &PacketEntitiesMessage, state: &ParserState) {
+        if let Some(ent) = debug_entity() {
+            for e in pe.entities.iter().filter(|e| u32::from(e.entity_index) == ent) {
+                let class = state.server_classes.get(usize::from(e.server_class)).map_or("?", |c| c.name.as_str());
+                eprintln!(
+                    "tick {} ent {ent} {:?} {class} props {} delta {:?}",
+                    self.server_tick,
+                    e.update_type,
+                    e.props.len(),
+                    pe.delta
+                );
+            }
+            if pe.removed_entities.iter().any(|id| u32::from(*id) == ent) {
+                eprintln!("tick {} ent {ent} removed", self.server_tick);
+            }
+        }
+        for id in &pe.removed_entities {
+            self.forget_entity(u32::from(*id));
+        }
+        for e in &pe.entities {
+            self.entity(e, state);
+        }
+        for p in &self.gs.state.players {
+            if p.state == PlayerState::Alive {
+                self.last_alive
+                    .insert(u32::from(p.entity), Pose { pos: p.position, yaw: p.view_angle, pitch: p.pitch_angle });
+            }
+        }
+        self.medic_changes();
+        for (user, mut ev) in std::mem::take(&mut self.pending_spawns) {
+            ev["pos"] = self.user_pos(user);
+            self.push(ev);
+        }
+    }
+
+    fn entity(&mut self, e: &PacketEntity, state: &ParserState) {
+        let idx = u32::from(e.entity_index);
+        if e.update_type == UpdateType::Delete {
+            self.forget_entity(idx);
+            return;
+        }
+        // An entity leaving SourceTV's view is not updated (or deleted) any more;
+        // tf-demo-parser keeps projectiles frozen where they were.
+        if e.update_type == UpdateType::Leave {
+            self.gs.state.projectiles.remove(&e.entity_index);
+            return;
+        }
+        // Every entity class has its own `moveparent` prop, so this one goes by name.
+        if let Some(parent) =
+            e.props.iter().find(|p| p.identifier.names().is_some_and(|(_, n)| n.as_str() == "moveparent"))
+        {
+            match opt_handle(as_int(&parent.value)) {
+                None => self.parents.remove(&idx),
+                Some(p) => self.parents.insert(idx, p),
+            };
+        }
+        let class = state.server_classes.get(usize::from(e.server_class));
+        if matches!(class.map(|c| c.name.as_str()), Some("CPhysicsProp" | "CDynamicProp" | "CPhysicsPropMultiplayer"))
+            && let Some(v) = prop_vec(&e.props, PROP_ORIGIN)
+        {
+            self.prop_origins.insert(idx, v);
+        }
+        // A slot taken over by an entity of another class (an implicit delete).
+        if self.gs.state.projectiles.get(&e.entity_index).is_some_and(|p| p.class != e.server_class) {
+            self.gs.state.projectiles.remove(&e.entity_index);
+        }
+        let Some(class) = class else { return };
+        if debug(class.name.as_str()) {
+            for p in e.props(state) {
+                eprintln!("{}#{idx} {:?} = {:?}", class.name.as_str(), p.identifier.names(), p.value);
+            }
+        }
+        let props = e.props(state);
+        match class.name.as_str() {
+            "CTFPlayer" => self.on_player(idx, props),
+            "CTFTeam" => self.on_team(idx, props),
+            "CTeamRoundTimer" => self.on_round_timer(idx, props),
+            "CObjectSentrygun" => self.on_sentry(idx, props),
+            "CTeamTrainWatcher" => self.on_train_watcher(idx, props),
+            "CTFGameRulesProxy" => self.on_game_rules(props),
+            "CWeaponMedigun" => self.on_medigun(idx, props),
+            "CTFObjectiveResource" => self.on_objective_resource(props),
+            _ => {}
+        }
+    }
+
+    fn on_player(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        let words = self.conds.entry(idx).or_default();
+        for p in props {
+            if let Some(i) = PROP_CONDS.iter().position(|id| *id == p.identifier) {
+                // A bit field: the bits are wanted, not the number.
+                words[i] = as_int(&p.value) as u32;
+            }
+        }
+    }
+
+    fn on_team(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        let t = self.teams.entry(idx).or_default();
+        for p in props {
+            match p.identifier {
+                PROP_TEAM_NUM | PROP_TEAM_TEAM_NUM => t.team = team_byte(as_int(&p.value)),
+                PROP_TEAM_SCORE => t.score = as_int(&p.value),
+                _ => {}
+            }
+        }
+    }
+
+    fn on_round_timer(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        let t = self.timers.entry(idx).or_default();
+        for p in props {
+            let f = as_float(&p.value);
+            match p.identifier {
+                PROP_TEAM_NUM => t.team = team_byte(as_int(&p.value)),
+                PROP_TIMER_END_TIME => t.end_time = f,
+                PROP_TIMER_REMAINING => t.remaining = f,
+                PROP_TIMER_PAUSED => t.paused = f != 0.0,
+                PROP_TIMER_SHOW_IN_HUD => t.show = f != 0.0,
+                PROP_TIMER_DISABLED => t.disabled = f != 0.0,
+                PROP_TIMER_STATE => t.setup = f == 0.0,
+                _ => {}
+            }
+        }
+    }
+
+    fn on_sentry(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        let sentry = self.sentries.entry(idx).or_default();
+        let mut fired = 0;
+        for p in props {
+            let v = as_int(&p.value);
+            match p.identifier {
+                PROP_SENTRY_POSE_PITCH => sentry.pose[0] = as_float(&p.value),
+                PROP_SENTRY_POSE_YAW => sentry.pose[1] = as_float(&p.value),
+                PROP_ROTATION => {
+                    if let SendPropValue::Vector(a) = p.value {
+                        sentry.yaw = a.y;
+                    }
+                }
+                PROP_SENTRY_ENEMY => sentry.enemy = opt_handle(v),
+                PROP_SENTRY_STATE => sentry.state = v,
+                PROP_SENTRY_SHELLS => {
+                    if let Some(before) = sentry.shells
+                        && v < before
+                    {
+                        fired = before - v;
+                    }
+                    sentry.shells = Some(v);
+                }
+                _ => {}
+            }
+        }
+        if fired > 0 {
+            let target = sentry.enemy;
+            let builder = self.gs.state.buildings.get(&EntityId::from(idx)).map(Building::builder);
+            self.push(json!({
+                "type": "sentry_shot",
+                "sentry": idx,
+                "builder": builder.and_then(|b| self.user_of_entity(builder_entity(b))),
+                "target": target.and_then(|t| self.user_of_entity(t)),
+                "shells": fired,
+            }));
+        }
+    }
+
+    fn on_train_watcher(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        let w = self.train_watchers.entry(idx).or_default();
+        for p in props {
+            let v = as_int(&p.value);
+            match p.identifier {
+                PROP_TEAM_NUM => w.team = team_byte(v),
+                PROP_WATCHER_PROGRESS => w.progress = as_float(&p.value),
+                PROP_WATCHER_CAPPERS => w.cappers = v,
+                PROP_WATCHER_SPEED => w.speed = v,
+                PROP_WATCHER_GLOW => w.glow = opt_handle(v),
+                _ => {}
+            }
+        }
+    }
+
+    fn on_game_rules(&mut self, props: impl Iterator<Item = SendProp>) {
+        for p in props {
+            match p.identifier {
+                PROP_ROUND_STATE => self.round_state = RoundState::from_raw(as_int(&p.value)),
+                PROP_MAP_RESET_TIME => self.match_start = as_float(&p.value),
+                PROP_STATE_TRANSITION_TIME => self.state_transition = as_float(&p.value),
+                _ => {}
+            }
+        }
+        self.track_round_time();
+    }
+
+    fn on_medigun(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        let m = self.mediguns.entry(idx).or_default();
+        for p in props {
+            let v = as_int(&p.value);
+            match p.identifier {
+                PROP_WEAPON_OWNER => m.owner = opt_handle(v),
+                PROP_ITEM_DEFINITION => m.item = v,
+                PROP_MEDIGUN_RELEASING => m.releasing = v != 0,
+                PROP_MEDIGUN_RESIST => m.resist = v,
+                PROP_MEDIGUN_TARGET => m.target = opt_handle(v),
+                _ => {}
+            }
+        }
+    }
+
+    fn on_objective_resource(&mut self, props: impl Iterator<Item = SendProp>) {
+        // Capping-team changes reset progress, so they go before the cap percentages.
+        let mut props: Vec<SendProp> = props.collect();
+        props.sort_by_key(|p| p.identifier.names().is_none_or(|(t, _)| t.as_str() != "m_iCappingTeam"));
+        for p in &props {
+            self.objective_prop(p);
+        }
+    }
+
+    fn temp_entities(&mut self, te: &TempEntitiesMessage, state: &ParserState) {
+        // An event of the same class as the one before it in the message is
+        // delta-encoded against it; any other against zeros, so a missing prop is 0.
+        let mut prev: Option<(u16, Vec<SendProp>)> = None;
+        for ev in &te.events {
+            let class_id = u16::from(ev.class_id);
+            let mut props = match prev.take() {
+                Some((c, p)) if c == class_id => p,
+                _ => Vec::new(),
+            };
+            for p in &ev.props {
+                match props.iter_mut().find(|q| q.identifier == p.identifier) {
+                    Some(q) => q.value = p.value.clone(),
+                    None => props.push(p.clone()),
+                }
+            }
+            if let Some(class) = state.server_classes.get(usize::from(class_id)) {
+                self.temp_entity(class.name.as_str(), &props);
+                if class.name.as_str() == "CTETFExplosion" {
+                    self.exploded(&props);
+                }
+            }
+            prev = Some((class_id, props));
+        }
+    }
+
+    fn convars(&mut self, c: &SetConVarMessage) {
+        let dbg = debug("convars");
+        for v in &c.vars {
+            if dbg {
+                // Debug formatting escapes control characters from the server.
+                eprintln!("convar {:?} = {:?}", v.key, v.value);
+            }
+            match v.key.as_str() {
+                "mp_timelimit" => self.time_limit = v.value.parse().ok().filter(|m: &f32| *m > 0.0),
+                "mp_winlimit" => self.win_limit = v.value.parse().ok().filter(|w: &i64| *w > 0),
+                _ => {}
+            }
+        }
+    }
+
+    fn server_info(&mut self, info: &ServerInfoMessage) {
+        if info.interval_per_tick > 0.0 {
+            self.tick_interval = Some(info.interval_per_tick);
+        }
+        self.push(json!({
+            "type": "server",
+            "map": info.map,
+            "hostname": info.server_name,
+            "tick_interval": info.interval_per_tick,
+            "max_players": info.max_player_count,
+            "spawn_count": info.server_count,
+        }));
+    }
+
+    fn user_message(&mut self, message: &UserMessage<'_>) {
+        match message {
+            UserMessage::Unknown(u) if u.raw_type == USER_MESSAGE_SAY_TEXT => {
+                // SayText: console `say` and server notices. u8 client, string text.
+                let mut d = u.data.clone();
+                let client: u8 = d.read().unwrap_or(0);
+                let text: String = d.read().unwrap_or_default();
+                self.push(json!({
+                    "type": "chat",
+                    "player": if client == 0 { None } else { self.user_of_entity(u32::from(client)) },
+                    "name": Value::Null,
+                    "text": strip_colors(&text),
+                    "kind": "SayText",
+                }));
+            }
+            UserMessage::SayText2(m) => {
+                let player = self.user_of_entity(u32::from(m.client));
+                self.push(json!({
+                    "type": "chat",
+                    "player": player,
+                    "name": m.from.as_ref().map(ToString::to_string),
+                    "text": strip_colors(m.text.as_ref()),
+                    "kind": chat_kind(m.kind),
+                }));
+            }
+            _ => {}
+        }
+    }
+}
+
 impl MessageHandler for Extractor {
     type Output = Self;
 
@@ -1250,309 +1641,19 @@ impl MessageHandler for Extractor {
         if GameStateAnalyser::does_handle(message.get_message_type()) {
             self.gs.handle_message(message, tick, state);
         }
-        if let Message::PacketEntities(pe) = message {
-            if let Some(ent) = debug_entity() {
-                for e in pe.entities.iter().filter(|e| u32::from(e.entity_index) == ent) {
-                    let class = state.server_classes.get(usize::from(e.server_class)).map_or("?", |c| c.name.as_str());
-                    eprintln!(
-                        "tick {} ent {ent} {:?} {class} props {} delta {:?}",
-                        self.server_tick,
-                        e.update_type,
-                        e.props.len(),
-                        pe.delta
-                    );
-                }
-                if pe.removed_entities.iter().any(|id| u32::from(*id) == ent) {
-                    eprintln!("tick {} ent {ent} removed", self.server_tick);
-                }
-            }
-            for id in &pe.removed_entities {
-                self.forget_entity(u32::from(*id));
-            }
-            for e in &pe.entities {
-                let idx = u32::from(e.entity_index);
-                if e.update_type == UpdateType::Delete {
-                    self.forget_entity(idx);
-                    continue;
-                }
-                // An entity leaving SourceTV's view is not updated (or deleted) any more;
-                // tf-demo-parser keeps projectiles frozen where they were.
-                if e.update_type == UpdateType::Leave {
-                    self.gs.state.projectiles.remove(&e.entity_index);
-                    continue;
-                }
-                if let Some(parent) =
-                    e.props.iter().find(|p| p.identifier.names().is_some_and(|(_, n)| n.as_str() == "moveparent"))
-                {
-                    match opt_handle(i64::try_from(&parent.value).unwrap_or(INVALID_EHANDLE)) {
-                        None => self.parents.remove(&idx),
-                        Some(p) => self.parents.insert(idx, p),
-                    };
-                }
-                if matches!(
-                    state.server_classes.get(usize::from(e.server_class)).map(|c| c.name.as_str()),
-                    Some("CPhysicsProp" | "CDynamicProp" | "CPhysicsPropMultiplayer")
-                ) && let Some(SendPropValue::Vector(v)) = prop(&e.props, "m_vecOrigin")
-                {
-                    self.prop_origins.insert(idx, *v);
-                }
-                // A slot taken over by an entity of another class (an implicit delete).
-                if self.gs.state.projectiles.get(&e.entity_index).is_some_and(|p| p.class != e.server_class) {
-                    self.gs.state.projectiles.remove(&e.entity_index);
-                }
-                let Some(class) = state.server_classes.get(usize::from(e.server_class)) else { continue };
-                if debug(class.name.as_str()) {
-                    for p in e.props(state) {
-                        eprintln!(
-                            "{}#{} {:?} = {:?}",
-                            class.name.as_str(),
-                            u32::from(e.entity_index),
-                            p.identifier.names(),
-                            p.value
-                        );
-                    }
-                }
-                match class.name.as_str() {
-                    "CTFPlayer" => {
-                        let words = self.conds.entry(idx).or_default();
-                        for p in e.props(state) {
-                            let Some((_, name)) = p.identifier.names() else { continue };
-                            if let Some(i) = COND_PROPS.iter().position(|n| *n == name.as_str()) {
-                                words[i] = i64::try_from(&p.value).unwrap_or_default() as u32;
-                            }
-                        }
-                    }
-                    "CTFTeam" => {
-                        let t = self.teams.entry(idx).or_default();
-                        for p in e.props(state) {
-                            let Some((_, name)) = p.identifier.names() else { continue };
-                            let v = i64::try_from(&p.value).unwrap_or_default();
-                            match name.as_str() {
-                                "m_iTeamNum" => t.0 = team_byte(v),
-                                "m_iScore" => t.1 = v,
-                                _ => {}
-                            }
-                        }
-                    }
-                    "CTeamRoundTimer" => {
-                        let t = self.timers.entry(idx).or_default();
-                        for p in e.props(state) {
-                            let Some((_, name)) = p.identifier.names() else { continue };
-                            let f = f32::try_from(&p.value)
-                                .unwrap_or_else(|_| i64::try_from(&p.value).unwrap_or_default() as f32);
-                            match name.as_str() {
-                                "m_iTeamNum" => t.team = team_byte(f as i64),
-                                "m_flTimerEndTime" => t.end_time = f,
-                                "m_flTimeRemaining" => t.remaining = f,
-                                "m_bTimerPaused" => t.paused = f != 0.0,
-                                "m_bShowInHUD" => t.show = f != 0.0,
-                                "m_bIsDisabled" => t.disabled = f != 0.0,
-                                "m_nState" => t.setup = f == 0.0,
-                                _ => {}
-                            }
-                        }
-                    }
-                    "CObjectSentrygun" => {
-                        let sentry = self.sentries.entry(idx).or_default();
-                        let mut fired = 0;
-                        for p in e.props(state) {
-                            let Some((table, name)) = p.identifier.names() else { continue };
-                            let v = i64::try_from(&p.value).unwrap_or_default();
-                            match (table.as_str(), name.as_str()) {
-                                ("m_flPoseParameter", "000") => {
-                                    sentry.pose[0] = f32::try_from(&p.value).unwrap_or_default();
-                                }
-                                ("m_flPoseParameter", "001") => {
-                                    sentry.pose[1] = f32::try_from(&p.value).unwrap_or_default();
-                                }
-                                (_, "m_angRotation") => {
-                                    if let SendPropValue::Vector(a) = p.value {
-                                        sentry.yaw = a.y;
-                                    }
-                                }
-                                (_, "m_hEnemy") => sentry.enemy = opt_handle(v),
-                                (_, "m_iState") => sentry.state = v,
-                                (_, "m_iAmmoShells") => {
-                                    if let Some(before) = sentry.shells
-                                        && v < before
-                                    {
-                                        fired = before - v;
-                                    }
-                                    sentry.shells = Some(v);
-                                }
-                                _ => {}
-                            }
-                        }
-                        if fired > 0 {
-                            let (target, builder) =
-                                (sentry.enemy, self.gs.state.buildings.get(&e.entity_index).map(Building::builder));
-                            self.push(json!({
-                                "type": "sentry_shot",
-                                "sentry": idx,
-                                "builder": builder.and_then(|b| self.user_of_entity(handle_entity(i64::from(u16::from(b))))),
-                                "target": target.and_then(|t| self.user_of_entity(t)),
-                                "shells": fired,
-                            }));
-                        }
-                    }
-                    "CTeamTrainWatcher" => {
-                        let w = self.train_watchers.entry(idx).or_default();
-                        for p in e.props(state) {
-                            let Some((_, name)) = p.identifier.names() else { continue };
-                            let v = i64::try_from(&p.value).unwrap_or_default();
-                            match name.as_str() {
-                                "m_iTeamNum" => w.team = team_byte(v),
-                                "m_flTotalProgress" => w.progress = f32::try_from(&p.value).unwrap_or_default(),
-                                "m_nNumCappers" => w.cappers = v,
-                                "m_iTrainSpeedLevel" => w.speed = v,
-                                "m_hGlowEnt" => w.glow = opt_handle(v),
-                                _ => {}
-                            }
-                        }
-                    }
-                    "CTFGameRulesProxy" => {
-                        for p in e.props(state) {
-                            let Some((_, name)) = p.identifier.names() else { continue };
-                            match name.as_str() {
-                                "m_iRoundState" => {
-                                    self.round_state =
-                                        RoundState::from_raw(i64::try_from(&p.value).unwrap_or_default());
-                                }
-                                "m_flMapResetTime" => self.match_start = f32::try_from(&p.value).unwrap_or_default(),
-                                "m_flStateTransitionTime" => {
-                                    self.state_transition = f32::try_from(&p.value).unwrap_or_default();
-                                }
-                                _ => {}
-                            }
-                        }
-                        self.track_round_time();
-                    }
-                    "CWeaponMedigun" => {
-                        let m = self.mediguns.entry(idx).or_default();
-                        for p in e.props(state) {
-                            let Some((_, name)) = p.identifier.names() else { continue };
-                            let v = i64::try_from(&p.value).unwrap_or_default();
-                            match name.as_str() {
-                                "m_hOwner" => m.owner = opt_handle(v),
-                                "m_iItemDefinitionIndex" => m.item = v,
-                                "m_bChargeRelease" => m.releasing = v != 0,
-                                "m_nChargeResistType" => m.resist = v,
-                                "m_hHealingTarget" => m.target = opt_handle(v),
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                if class.name.as_str() == "CTFObjectiveResource" {
-                    // Capping-team changes reset progress, so they go before the cap percentages.
-                    let mut props: Vec<SendProp> = e.props(state).collect();
-                    props.sort_by_key(|p| p.identifier.names().is_none_or(|(t, _)| t.as_str() != "m_iCappingTeam"));
-                    for p in &props {
-                        self.objective_prop(p);
-                    }
-                }
-            }
-        }
-        if let Message::PacketEntities(_) = message {
-            for p in &self.gs.state.players {
-                if p.state == PlayerState::Alive {
-                    self.last_alive.insert(u32::from(p.entity), (p.position, p.view_angle, p.pitch_angle));
-                }
-            }
-            self.medic_changes();
-            for (user, mut ev) in std::mem::take(&mut *self.pending_spawns.borrow_mut()) {
-                let tick = ev["tick"].clone();
-                ev["pos"] = self.user_pos(user);
-                self.push(ev);
-                if let Some(last) = self.events.borrow_mut().last_mut() {
-                    last["tick"] = tick;
-                }
-            }
-        }
         match message {
+            Message::PacketEntities(pe) => self.packet_entities(pe, state),
             Message::NetTick(t) => self.server_tick = u32::from(t.tick),
-            Message::SetConVar(c) => {
-                let dbg = debug("convars");
-                for v in &c.vars {
-                    if dbg {
-                        // Debug formatting escapes control characters from the server.
-                        eprintln!("convar {:?} = {:?}", v.key, v.value);
-                    }
-                    match v.key.as_str() {
-                        "mp_timelimit" => self.time_limit = v.value.parse().ok().filter(|m: &f32| *m > 0.0),
-                        "mp_winlimit" => self.win_limit = v.value.parse().ok().filter(|w: &i64| *w > 0),
-                        _ => {}
-                    }
-                }
-            }
-            Message::ServerInfo(info) => {
-                if info.interval_per_tick > 0.0 {
-                    self.tick_interval = Some(info.interval_per_tick);
-                }
-                self.push(json!({
-                    "type": "server",
-                    "map": info.map,
-                    "hostname": info.server_name,
-                    "tick_interval": info.interval_per_tick,
-                    "max_players": info.max_player_count,
-                    "spawn_count": info.server_count,
-                }));
-            }
+            Message::SetConVar(c) => self.convars(c),
+            Message::ServerInfo(info) => self.server_info(info),
             Message::GameEvent(e) => {
                 if debug("gameevents") {
                     eprintln!("gameevent {:?}", e.event.event_type());
                 }
                 self.game_event(&e.event);
             }
-            Message::TempEntities(te) => {
-                // An event of the same class as the one before it in the message is
-                // delta-encoded against it; any other against zeros, so a missing prop is 0.
-                let mut prev: Option<(u16, Vec<SendProp>)> = None;
-                for ev in &te.events {
-                    let class_id = u16::from(ev.class_id);
-                    let mut props = match prev.take() {
-                        Some((c, p)) if c == class_id => p,
-                        _ => Vec::new(),
-                    };
-                    for p in &ev.props {
-                        match props.iter_mut().find(|q| q.identifier == p.identifier) {
-                            Some(q) => q.value = p.value.clone(),
-                            None => props.push(p.clone()),
-                        }
-                    }
-                    if let Some(class) = state.server_classes.get(usize::from(class_id)) {
-                        self.temp_entity(class.name.as_str(), &props);
-                        if class.name.as_str() == "CTETFExplosion" {
-                            self.exploded(&props);
-                        }
-                    }
-                    prev = Some((class_id, props));
-                }
-            }
-            Message::UserMessage(UserMessage::Unknown(u)) if u.raw_type == USER_MESSAGE_SAY_TEXT => {
-                // SayText: console `say` and server notices. u8 client, string text.
-                let mut d = u.data.clone();
-                let client: u8 = d.read().unwrap_or(0);
-                let text: String = d.read().unwrap_or_default();
-                self.push(json!({
-                    "type": "chat",
-                    "player": if client == 0 { None } else { self.user_of_entity(u32::from(client)) },
-                    "name": Value::Null,
-                    "text": strip_colors(&text),
-                    "kind": "SayText",
-                }));
-            }
-            Message::UserMessage(UserMessage::SayText2(m)) => {
-                let player = self.user_of_entity(u32::from(m.client));
-                self.push(json!({
-                    "type": "chat",
-                    "player": player,
-                    "name": m.from.as_ref().map(ToString::to_string),
-                    "text": strip_colors(m.text.as_ref()),
-                    "kind": chat_kind(m.kind),
-                }));
-            }
+            Message::TempEntities(te) => self.temp_entities(te, state),
+            Message::UserMessage(m) => self.user_message(m),
             _ => {}
         }
     }
@@ -1605,6 +1706,51 @@ mod tests {
     }
 
     #[test]
+    fn prop_identifiers_name_known_props() {
+        // An identifier with a typo in its table or name would silently match nothing.
+        let ids = [
+            PROP_TEAM_NUM,
+            PROP_ORIGIN,
+            PROP_ROTATION,
+            PROP_TEAM_TEAM_NUM,
+            PROP_TEAM_SCORE,
+            PROP_TIMER_END_TIME,
+            PROP_TIMER_REMAINING,
+            PROP_TIMER_PAUSED,
+            PROP_TIMER_SHOW_IN_HUD,
+            PROP_TIMER_DISABLED,
+            PROP_TIMER_STATE,
+            PROP_SENTRY_POSE_PITCH,
+            PROP_SENTRY_POSE_YAW,
+            PROP_SENTRY_ENEMY,
+            PROP_SENTRY_STATE,
+            PROP_SENTRY_SHELLS,
+            PROP_WATCHER_PROGRESS,
+            PROP_WATCHER_CAPPERS,
+            PROP_WATCHER_SPEED,
+            PROP_WATCHER_GLOW,
+            PROP_ROUND_STATE,
+            PROP_MAP_RESET_TIME,
+            PROP_STATE_TRANSITION_TIME,
+            PROP_WEAPON_OWNER,
+            PROP_ITEM_DEFINITION,
+            PROP_MEDIGUN_RELEASING,
+            PROP_MEDIGUN_RESIST,
+            PROP_MEDIGUN_TARGET,
+            PROP_BULLETS_PLAYER,
+            PROP_BULLETS_ORIGIN,
+            PROP_BULLETS_PITCH,
+            PROP_BULLETS_YAW,
+            PROP_BULLETS_WEAPON,
+            PROP_BULLETS_CRIT,
+            PROP_EXPLOSION_WEAPON,
+        ];
+        for id in ids.iter().chain(&PROP_CONDS).chain(&PROP_EXPLOSION_ORIGIN) {
+            assert!(id.names().is_some(), "{id:?}");
+        }
+    }
+
+    #[test]
     fn team_numbers_out_of_range_are_no_team() {
         assert_eq!(team_num(2u8), "red");
         assert_eq!(team_num(3u16), "blue");
@@ -1615,7 +1761,7 @@ mod tests {
     #[test]
     fn a_reused_entity_slot_forgets_the_medic_charge() {
         let mut x = Extractor::default();
-        x.medic_charge.insert(5, (100, true));
+        x.medic_charge.insert(5, Charge { charge: 100, releasing: true });
         x.forget_entity(5);
         assert!(x.medic_charge.is_empty());
     }
