@@ -697,7 +697,7 @@ impl Extractor {
     }
 
     /// Seconds per server tick.
-    fn interval(&self) -> f32 {
+    pub(crate) fn interval(&self) -> f32 {
         self.tick_interval.unwrap_or(DEFAULT_TICK_INTERVAL)
     }
 
