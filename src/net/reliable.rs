@@ -72,7 +72,7 @@ impl Reassembler {
                 completed.push(done);
             }
         }
-        Ok(Region { subchannel, completed, end_bit: br.pos })
+        Ok(Region { subchannel, completed, end_bit: br.pos() })
     }
 }
 

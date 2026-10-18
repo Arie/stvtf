@@ -2,9 +2,35 @@
 
 use anyhow::{Result, bail};
 
+/// A bit stream packed from bit 0: `bytes` holds exactly `nbits` bits, the last byte
+/// possibly partial. Only `BitWriter`, `from_bytes` and `read_remaining` build one,
+/// which keeps the two fields consistent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BitBuf {
+    bytes: Vec<u8>,
+    nbits: usize,
+}
+
+impl BitBuf {
+    /// Whole bytes as a bit stream.
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        let nbits = bytes.len() * 8;
+        BitBuf { bytes, nbits }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn nbits(&self) -> usize {
+        self.nbits
+    }
+}
+
+#[derive(Debug)]
 pub struct BitReader<'a> {
     data: &'a [u8],
-    pub pos: usize,
+    pos: usize,
 }
 
 impl<'a> BitReader<'a> {
@@ -14,6 +40,11 @@ impl<'a> BitReader<'a> {
 
     pub fn at(data: &'a [u8], pos: usize) -> Self {
         BitReader { data, pos }
+    }
+
+    /// The current bit position.
+    pub fn pos(&self) -> usize {
+        self.pos
     }
 
     pub fn bits_left(&self) -> usize {
@@ -75,7 +106,7 @@ impl<'a> BitReader<'a> {
     }
 
     pub fn read_bytes(&mut self, n: usize) -> Result<Vec<u8>> {
-        if n * 8 > self.bits_left() {
+        if n.checked_mul(8).is_none_or(|bits| bits > self.bits_left()) {
             bail!("read_bytes({n}) past end");
         }
         if self.pos & 7 == 0 {
@@ -86,8 +117,8 @@ impl<'a> BitReader<'a> {
         (0..n).map(|_| self.read_u8()).collect()
     }
 
-    /// Every remaining bit, repacked to start at bit 0. Returns (bytes, bit count).
-    pub fn read_remaining(&mut self) -> (Vec<u8>, usize) {
+    /// Every remaining bit, repacked to start at bit 0.
+    pub fn read_remaining(&mut self) -> BitBuf {
         let nbits = self.bits_left();
         let mut out = vec![0u8; nbits.div_ceil(8)];
         let shift = self.pos & 7;
@@ -102,11 +133,11 @@ impl<'a> BitReader<'a> {
             out[last] &= (1u8 << (nbits % 8)) - 1;
         }
         self.pos += nbits;
-        (out, nbits)
+        BitBuf { bytes: out, nbits }
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct BitWriter {
     bytes: Vec<u8>,
     nbits: usize,
@@ -118,6 +149,7 @@ impl BitWriter {
     }
 
     pub fn write_bits(&mut self, val: u32, n: usize) {
+        debug_assert!(n <= 32, "write_bits({n})");
         for i in 0..n {
             if self.nbits.is_multiple_of(8) {
                 self.bytes.push(0);
@@ -153,6 +185,18 @@ impl BitWriter {
         self.write_u8(0);
     }
 
+    /// Appends all bits of another stream.
+    pub fn write_buf(&mut self, buf: &BitBuf) {
+        let mut r = BitReader::new(&buf.bytes);
+        let mut left = buf.nbits;
+        while left > 0 {
+            let n = left.min(32);
+            // In range: a BitBuf holds exactly nbits bits.
+            self.write_bits(r.read_bits(n).unwrap_or(0), n);
+            left -= n;
+        }
+    }
+
     pub fn write_varint32(&mut self, mut v: u32) {
         loop {
             let b = (v & 0x7f) as u8;
@@ -172,6 +216,10 @@ impl BitWriter {
 
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
+    }
+
+    pub fn finish(self) -> BitBuf {
+        BitBuf { bytes: self.bytes, nbits: self.nbits }
     }
 }
 
@@ -215,8 +263,9 @@ mod tests {
         w.write_bits(0b11, 2);
         let bytes = w.into_bytes();
         let mut r = BitReader::at(&bytes, 3);
-        let (out, n) = r.read_remaining();
-        assert_eq!(n, 18 + 3 - 3 + (bytes.len() * 8 - 21));
+        let rest = r.read_remaining();
+        let out = rest.bytes();
+        assert_eq!(rest.nbits(), bytes.len() * 8 - 3);
         assert_eq!(out[0], 0xAB);
         assert_eq!(out[1], 0xCD);
         assert_eq!(out[2] & 0b11, 0b11);
@@ -229,5 +278,18 @@ mod tests {
         assert!(r.read_bits(9).is_err());
         assert_eq!(r.read_bits(8).unwrap(), 0xff);
         assert!(r.read_bit().is_err());
+        assert!(BitReader::new(&data).read_bytes(usize::MAX).is_err(), "no overflow in the length check");
+    }
+
+    #[test]
+    fn write_buf_appends_unaligned() {
+        let mut a = BitWriter::new();
+        a.write_bits(0b101, 3);
+        let mut w = BitWriter::new();
+        w.write_bit(true);
+        w.write_buf(&a.finish());
+        let b = w.finish();
+        assert_eq!(b.nbits(), 4);
+        assert_eq!(b.bytes(), &[0b1011]);
     }
 }
