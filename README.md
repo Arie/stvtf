@@ -270,5 +270,5 @@ session and decoder, including a map change followed in place. `tests/payload.rs
 runs the start of a real pl_upward match (`tests/fixtures/pl_upward.dem`) through the
 demo path: setup, the cart pushed and rolling back, and the first capture.
 
-`tools/cut_demo.py IN.dem OUT.dem --tick N` cuts a demo after demo tick N, to make
-a fixture of a long recording.
+`cargo run --example cut_demo -- IN.dem OUT.dem N` cuts a demo after demo tick N
+(counted from the start of the recording), to make a fixture of a long recording.

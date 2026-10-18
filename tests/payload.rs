@@ -1,7 +1,7 @@
 //! Payload: carts, rollback and the first capture, from a real highlander match.
 //!
 //! `pl_upward.dem` is the first 3.4 minutes of an STV demo of a 9v9 on pl_upward_f12
-//! (serveme.tf, 2026-10-18, from demos.tf), cut with `tools/cut_demo.py --tick 13600`:
+//! (serveme.tf, 2026-10-18, from demos.tf), cut with `cargo run --example cut_demo -- IN.dem OUT.dem 13600`:
 //! setup, BLU pushing the cart, a rollback, and the first point captured.
 
 use serde_json::Value;
