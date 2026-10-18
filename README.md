@@ -124,6 +124,8 @@ image to; use per-map overview coordinates (or the extent of observed positions)
   "paused": bool, "setup": bool}]` (one per team on King of the Hill). The round timer gets time
   added on captures; for a steady clock use `round_time` (seconds since the round went live,
   stopping at the win, null before it starts) or `match_time` (seconds since the match started).
+  `time_left` is what remains of `mp_timelimit` (null without one), the clock TF2 shows when a map
+  has no active round timer; `win_limit` is `mp_winlimit`.
 - Snapshots are full state, not deltas. Dead players stay listed with `"alive": false`, at the
   `pos`/`yaw` where they died (the server's own position for a dead player is their spectator
   camera, which follows teammates); these are null if they died before the tool connected.

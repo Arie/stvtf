@@ -59,6 +59,9 @@ pub struct Extractor {
     /// Where each player entity last was while alive: a dead player's own position is
     /// their spectator camera, which follows teammates.
     last_alive: HashMap<u32, (Vector, f32, f32)>,
+    /// mp_timelimit (minutes) and mp_winlimit, replicated to clients as convars.
+    time_limit: Option<f32>,
+    win_limit: Option<i64>,
     /// Per medic entity: charge and whether it was being released, to report changes.
     medic_charge: HashMap<u32, (u8, bool)>,
     /// Payload: tf-demo-parser takes every func_tracktrain for a cart, but only a payload
@@ -400,6 +403,13 @@ impl Extractor {
             _ if self.round_live_since.is_some() && self.round_ended_at.is_none() => self.round_ended_at = Some(now),
             _ => {}
         }
+    }
+
+    /// Seconds left of mp_timelimit, which counts from the start of the match.
+    fn time_left(&self) -> Option<f32> {
+        let limit = self.time_limit?;
+        (self.match_start > 0.0)
+            .then(|| (limit * 60.0 - (self.server_tick as f32 * TICK_INTERVAL - self.match_start)).max(0.0))
     }
 
     fn round_time(&self) -> Option<f32> {
@@ -909,6 +919,8 @@ impl Extractor {
             "round": round_state_name(self.round_state),
             // Seconds since the round went live and since the match started (null if unknown).
             "round_time": self.round_time().map(round1),
+            "time_left": self.time_left().map(round1),
+            "win_limit": self.win_limit,
             "match_time": (self.match_start > 0.0).then(|| round1((self.server_tick as f32 * TICK_INTERVAL - self.match_start).max(0.0))),
             "score": {
                 "red": self.teams.values().find(|t| t.0 == 2).map_or(0, |t| t.1),
@@ -979,6 +991,7 @@ impl MessageHandler for Extractor {
                     | MessageType::TempEntities
                     | MessageType::UserMessage
                     | MessageType::ServerInfo
+                    | MessageType::SetConVar
             )
     }
 
@@ -1210,6 +1223,19 @@ impl MessageHandler for Extractor {
         }
         match message {
             Message::NetTick(t) => self.server_tick = u32::from(t.tick),
+            Message::SetConVar(c) => {
+                let dbg = std::env::var("STVMAP_DEBUG").is_ok_and(|v| v == "convars");
+                for v in &c.vars {
+                    if dbg {
+                        eprintln!("convar {} = {}", v.key, v.value);
+                    }
+                    match v.key.as_str() {
+                        "mp_timelimit" => self.time_limit = v.value.parse().ok().filter(|m: &f32| *m > 0.0),
+                        "mp_winlimit" => self.win_limit = v.value.parse().ok().filter(|w: &i64| *w > 0),
+                        _ => {}
+                    }
+                }
+            }
             Message::ServerInfo(info) => {
                 self.push(json!({
                     "type": "server",
@@ -1516,6 +1542,18 @@ mod timer_tests {
         x.server_tick = (seconds / TICK_INTERVAL).round() as u32;
         x.track_round_time();
         x.round_time().map(|t| (t * 10.0).round() / 10.0)
+    }
+
+    #[test]
+    fn time_left_counts_down_from_the_match_start() {
+        let mut x = Extractor::default();
+        assert_eq!(x.time_left(), None, "no mp_timelimit");
+        x.time_limit = Some(30.0);
+        x.match_start = 200.0;
+        x.server_tick = (500.0 / TICK_INTERVAL) as u32;
+        assert!((x.time_left().unwrap() - 1500.0).abs() < 0.1, "{:?}", x.time_left());
+        x.server_tick = (3000.0 / TICK_INTERVAL) as u32;
+        assert_eq!(x.time_left(), Some(0.0));
     }
 
     #[test]
