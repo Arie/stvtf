@@ -61,10 +61,8 @@ fn main() -> Result<()> {
     let mut emit = |mut v: Value| {
         // Wall-clock receive time (ms since the Unix epoch), for live streams only.
         if live && let Some(o) = v.as_object_mut() {
-            let ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
+            let ms =
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
             o.insert("time".into(), ms.into());
         }
         let _ = writeln!(out, "{v}");
