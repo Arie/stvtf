@@ -5,6 +5,8 @@
 //! [`capture`] replays recorded traffic and [`decode::demo_file`] runs a `.dem`
 //! through the same extractor.
 
+#![warn(missing_docs)]
+
 pub mod capture;
 pub mod decode;
 mod net;

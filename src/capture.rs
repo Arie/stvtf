@@ -18,13 +18,14 @@ const RECORD_HEADER: usize = 13;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Kind {
+pub(crate) enum Kind {
     Datagram = 1,
     Session = 2,
 }
 
+/// Writes a capture during a live session.
 #[derive(Debug)]
-pub struct Recorder {
+pub(crate) struct Recorder {
     out: BufWriter<File>,
     start: Instant,
 }
@@ -61,12 +62,15 @@ impl Recorder {
 /// One record, borrowing its data from the capture bytes.
 #[derive(Debug)]
 pub struct Record<'a> {
+    /// Microseconds since recording started.
     pub t_us: u64,
     /// The raw kind byte; unknown kinds are skipped on replay.
     pub kind: u8,
+    /// The datagram, or the challenge for a session record.
     pub data: &'a [u8],
 }
 
+/// Splits a capture into its records.
 pub fn read(bytes: &[u8]) -> Result<Vec<Record<'_>>> {
     let Some(mut r) = bytes.strip_prefix(MAGIC) else { bail!("not a stvmap capture") };
     let mut out = Vec::new();

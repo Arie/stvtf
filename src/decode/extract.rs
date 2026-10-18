@@ -125,7 +125,7 @@ const PROP_EXPLOSION_ORIGIN: [SendPropIdentifier; 3] = [
 const PROP_EXPLOSION_WEAPON: SendPropIdentifier = prop_id("DT_TETFExplosion", "m_iWeaponID");
 
 #[derive(Default)]
-pub struct Extractor {
+pub(crate) struct Extractor {
     gs: GameStateAnalyser,
     /// Latest server tick seen in a net_Tick.
     pub(crate) server_tick: u32,

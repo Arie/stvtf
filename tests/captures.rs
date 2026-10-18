@@ -53,11 +53,11 @@ fn states(events: &[Value]) -> Vec<String> {
 #[test]
 fn current_build_tables_are_built_in() {
     let t = tables();
-    assert!(t.datatables.server_classes.len() > 300);
-    assert!(t.datatables.server_classes.iter().any(|c| c.name.as_str() == "CTFPlayer"));
+    assert!(t.class_names().count() > 300);
+    assert!(t.class_names().any(|c| c == "CTFPlayer"));
     let full = Tables::from_demo(format!("{FIXTURES}/tables_11138802.dem").as_ref()).unwrap();
-    assert_eq!(t.datatables.server_classes.len(), full.datatables.server_classes.len());
-    assert_eq!(t.datatables.tables.len(), full.datatables.tables.len());
+    assert_eq!(t.class_names().count(), full.class_names().count());
+    assert_eq!(t.send_table_count(), full.send_table_count());
 }
 
 #[test]
