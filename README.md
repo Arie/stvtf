@@ -16,22 +16,32 @@ stvmap replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
 stvmap demo    FILE.dem [--hz 20]
 ```
 
-For example, `stvmap connect 1.2.3.4:27020 --password tv > match.jsonl`.
+For example, `STVMAP_PASSWORD=tv stvmap connect 1.2.3.4:27020 > match.jsonl`.
 
 - `HOST:PORT` is the SourceTV port (`tv_port`), not the game port.
-- `--password` is the server's `tv_password`.
+- `--password` is the server's `tv_password`. Prefer the `STVMAP_PASSWORD` environment
+  variable: other local users can read command-line arguments (`ps`).
+- Flags can be written `--hz 10` or `--hz=10`; an unknown flag is an error. `--help` prints the usage.
 - `--hz` caps the snapshot rate (default 20 per second, 0 disables snapshots). Events are never rate limited.
-- `--record` saves the raw inbound datagrams; `replay` decodes such a capture offline through the same code.
+- `--record` saves the raw inbound datagrams to a new file (it refuses to overwrite one); `replay`
+  decodes such a capture offline through the same code.
 - `demo` runs a recorded `.dem` through the same extractor.
 
 The process reconnects by itself (with backoff) when the server drops it and
 follows map changes on the same connection. It exits with an error when
 reconnecting cannot help: a wrong password or class tables of another build.
-Ctrl-C disconnects cleanly (otherwise SourceTV holds the slot for 300 s); a second
-Ctrl-C exits at once.
+Ctrl-C, or closing its output (`| head`), disconnects cleanly (otherwise SourceTV
+holds the slot for 300 s); a second Ctrl-C exits at once.
 
 The same loop is available as a library (`stvmap::watch`), which
-[stvmap-web](../stvmap-web) uses for a live browser view.
+[stvmap-web](../stvmap-web) uses for a live browser view. `watch` returns a
+`WatchError` that tells a rejection (`Rejected { kind: Fatal::BadPassword, .. }`)
+apart from other failures.
+
+Names, chat and other strings in the output come from the game server and its
+players. They are valid JSON, but can hold any Unicode, such as right-to-left
+overrides and zero-width characters: escape them before showing them in a
+terminal or a web page.
 
 ## TF2 builds: tables and CRC
 
@@ -211,6 +221,8 @@ The network layer is a port of [stv-watch](https://github.com/dmitry-ra/stv-watc
 - Memory grows with the data of the current map (the raw message streams are kept
   in an arena for the parser) and is released at every map change: about 26 MB
   for a 3-minute 6v6, so a long map of a full server reaches a few hundred MB.
+  Past 1 GiB (`Options::max_decoder_bytes`) the tool reconnects to start afresh,
+  so a map that never ends cannot exhaust memory.
 - SourceTV keeps an exploded projectile's entity around, unchanging, for up to seconds before
   deleting it. A game client hides it at the explosion; so does the tool, dropping the nearest
   rocket (rocket launcher explosions) or grenade (others) within 150 units of each `explosion`.
