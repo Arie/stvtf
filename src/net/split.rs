@@ -6,11 +6,13 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+const HEADER_LEN: usize = 12;
 const MAX_PARTS: u8 = 128;
 const MAX_JOINED: usize = 1 << 18;
 const MAX_OPEN: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Debug)]
 struct Group {
     count: u8,
     split_size: u16,
@@ -18,7 +20,7 @@ struct Group {
     parts: HashMap<u8, Vec<u8>>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct SplitReassembler {
     open: HashMap<i32, Group>,
     pub dropped: u64,
@@ -27,19 +29,20 @@ pub struct SplitReassembler {
 impl SplitReassembler {
     pub fn feed(&mut self, data: &[u8], now: Instant) -> Option<Vec<u8>> {
         self.open.retain(|_, g| now.duration_since(g.started) < TIMEOUT);
-        if data.len() < 12 {
+        if data.len() < HEADER_LEN {
             self.dropped += 1;
             return None;
         }
-        let gid = i32::from_le_bytes(data[4..8].try_into().ok()?);
+        let gid = i32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         let (count, number) = (data[8], data[9]);
         let split_size = u16::from_le_bytes([data[10], data[11]]);
-        if count == 0 || number >= count || count > MAX_PARTS || count as usize * split_size as usize > MAX_JOINED {
+        let split_len = usize::from(split_size);
+        if count == 0 || number >= count || count > MAX_PARTS || usize::from(count) * split_len > MAX_JOINED {
             self.dropped += 1;
             return None;
         }
-        let payload = &data[12..];
-        if payload.len() > split_size as usize || (number < count - 1 && payload.len() != split_size as usize) {
+        let payload = &data[HEADER_LEN..];
+        if payload.len() > split_len || (number < count - 1 && payload.len() != split_len) {
             self.dropped += 1;
             return None;
         }
@@ -58,11 +61,11 @@ impl SplitReassembler {
         let g =
             self.open.entry(gid).or_insert_with(|| Group { count, split_size, started: now, parts: HashMap::new() });
         g.parts.entry(number).or_insert_with(|| payload.to_vec());
-        if g.parts.len() < count as usize {
+        if g.parts.len() < usize::from(count) {
             return None;
         }
         let g = self.open.remove(&gid)?;
-        let mut joined = Vec::with_capacity(count as usize * split_size as usize);
+        let mut joined = Vec::with_capacity(usize::from(count) * split_len);
         for n in 0..count {
             joined.extend_from_slice(g.parts.get(&n)?);
         }
