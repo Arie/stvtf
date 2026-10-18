@@ -6,6 +6,7 @@
 
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
 use stvmap::Options;
 use stvmap::capture;
 use stvmap::decode::{self, Tables};
@@ -16,8 +17,13 @@ fn tables() -> Tables {
     Tables::from_demo_bytes(stvmap::builtin(stvmap::CURRENT_BUILD).unwrap().tables).unwrap()
 }
 
-fn replay(name: &str) -> Vec<Value> {
-    replay_with(name, &Options { snapshot_hz: 10.0, ..Options::default() })
+/// Decodes a fixture once and shares the result between tests.
+fn replay(name: &str) -> &'static [Value] {
+    static CACHE: LazyLock<Mutex<HashMap<String, &'static [Value]>>> = LazyLock::new(Mutex::default);
+    let mut cache = CACHE.lock().unwrap();
+    cache
+        .entry(name.to_string())
+        .or_insert_with(|| replay_with(name, &Options { snapshot_hz: 10.0, ..Options::default() }).leak())
 }
 
 fn replay_with(name: &str, opt: &Options) -> Vec<Value> {
@@ -57,18 +63,18 @@ fn current_build_tables_are_built_in() {
 #[test]
 fn session_reaches_full_without_decode_errors() {
     let ev = replay("bots_cp_badlands.cap");
-    let st = states(&ev);
+    let st = states(ev);
     assert!(st.contains(&"full".to_string()), "{st:?}");
-    let last = of_type(&ev, "status").last().copied().unwrap().clone();
+    let last = of_type(ev, "status").last().copied().unwrap().clone();
     assert_eq!(last["decode_errors"], 0);
-    assert_eq!(of_type(&ev, "server")[0]["map"], "cp_badlands");
-    assert_eq!(of_type(&ev, "world").len(), 1);
+    assert_eq!(of_type(ev, "server")[0]["map"], "cp_badlands");
+    assert_eq!(of_type(ev, "world").len(), 1);
 }
 
 #[test]
 fn snapshots_track_all_bots_moving() {
     let ev = replay("bots_cp_badlands.cap");
-    let snaps = of_type(&ev, "snapshot");
+    let snaps = of_type(ev, "snapshot");
     assert!(snaps.len() > 200, "{} snapshots", snaps.len());
     let mut first: HashMap<u64, [f64; 3]> = HashMap::new();
     let mut moved: HashMap<u64, f64> = HashMap::new();
@@ -100,7 +106,7 @@ fn snapshots_track_all_bots_moving() {
 #[test]
 fn control_points_have_positions_and_owners() {
     let ev = replay("bots_cp_badlands.cap");
-    let snap = of_type(&ev, "snapshot").last().copied().unwrap().clone();
+    let snap = of_type(ev, "snapshot").last().copied().unwrap().clone();
     let cps = snap["objectives"].as_array().unwrap();
     assert_eq!(cps.len(), 5, "cp_badlands has five points");
     for cp in cps {
@@ -113,8 +119,8 @@ fn control_points_have_positions_and_owners() {
 #[test]
 fn shots_are_attributed_to_the_shooter() {
     let ev = replay("bots_cp_badlands.cap");
-    let snaps = of_type(&ev, "snapshot");
-    let shots = of_type(&ev, "shot");
+    let snaps = of_type(ev, "snapshot");
+    let shots = of_type(ev, "shot");
     assert!(shots.len() > 50);
     let mut right = 0;
     for shot in &shots {
@@ -136,26 +142,26 @@ fn shots_are_attributed_to_the_shooter() {
 #[test]
 fn events_reference_known_players() {
     let ev = replay("bots_cp_badlands.cap");
-    let ids: HashSet<u64> = of_type(&ev, "snapshot")
+    let ids: HashSet<u64> = of_type(ev, "snapshot")
         .iter()
         .flat_map(|s| s["players"].as_array().unwrap().iter().map(|p| p["id"].as_u64().unwrap()))
         .collect();
-    let kills = of_type(&ev, "kill");
+    let kills = of_type(ev, "kill");
     assert!(!kills.is_empty());
     for k in &kills {
         assert!(ids.contains(&k["victim"].as_u64().unwrap()));
         assert!(k["victim_pos"].is_array());
     }
-    for d in of_type(&ev, "damage") {
+    for d in of_type(ev, "damage") {
         assert!(ids.contains(&d["victim"].as_u64().unwrap()));
     }
-    for p in of_type(&ev, "point_captured") {
+    for p in of_type(ev, "point_captured") {
         for c in p["cappers"].as_array().unwrap() {
             assert!(ids.contains(&c.as_u64().unwrap()));
         }
     }
     let projectiles: Vec<&Value> =
-        of_type(&ev, "snapshot").iter().flat_map(|s| s["projectiles"].as_array().unwrap()).collect();
+        of_type(ev, "snapshot").iter().flat_map(|s| s["projectiles"].as_array().unwrap()).collect();
     assert!(!projectiles.is_empty());
     assert!(projectiles.iter().all(|p| p["owner"].as_u64().is_some_and(|o| ids.contains(&o))));
 }
@@ -163,19 +169,19 @@ fn events_reference_known_players() {
 #[test]
 fn map_change_is_followed_in_place() {
     let ev = replay("bots_map_change.cap");
-    let st = states(&ev);
+    let st = states(ev);
     let change = st.iter().position(|s| s == "map_change").expect("map change seen");
     assert!(st[..change].contains(&"full".to_string()));
     assert!(st[change..].contains(&"full".to_string()), "signon completes again: {st:?}");
     let changes = st.iter().filter(|s| *s == "map_change").count();
-    assert_eq!(of_type(&ev, "server").len(), changes + 1, "every signon restart re-announces the server");
+    assert_eq!(of_type(ev, "server").len(), changes + 1, "every signon restart re-announces the server");
     let change_at = ev.iter().rposition(|e| e["type"] == "status" && e["state"] == "map_change").unwrap();
     let after = ev[change_at..]
         .iter()
         .filter(|e| e["type"] == "snapshot" && !e["players"].as_array().unwrap().is_empty())
         .count();
     assert!(after > 100, "{after} snapshots with players after the map change");
-    assert_eq!(of_type(&ev, "status").last().unwrap()["decode_errors"], 0);
+    assert_eq!(of_type(ev, "status").last().unwrap()["decode_errors"], 0);
 }
 
 #[test]
@@ -188,8 +194,7 @@ fn demo_files_use_the_same_extractor() {
 
 #[test]
 fn explosions_land_near_players() {
-    let mut ev = replay("bots_cp_badlands.cap");
-    ev.extend(replay("bots_map_change.cap"));
+    let ev = [replay("bots_cp_badlands.cap"), replay("bots_map_change.cap")].concat();
     let mut last: Option<&Value> = None;
     let mut dists = Vec::new();
     for e in &ev {
@@ -220,7 +225,7 @@ fn explosions_land_near_players() {
 fn conditions_are_plausible() {
     // tf-demo-parser's own decoding reported Halloween and spy conditions on every player.
     let ev = replay("bots_cp_badlands.cap");
-    let conds: HashSet<String> = of_type(&ev, "snapshot")
+    let conds: HashSet<String> = of_type(ev, "snapshot")
         .iter()
         .flat_map(|s| s["players"].as_array().unwrap().iter())
         .flat_map(|p| p["conds"].as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()))
@@ -232,7 +237,7 @@ fn conditions_are_plausible() {
 #[test]
 fn snapshots_carry_score_round_and_timer() {
     let ev = replay("bots_cp_badlands.cap");
-    let last = of_type(&ev, "snapshot").last().copied().unwrap().clone();
+    let last = of_type(ev, "snapshot").last().copied().unwrap().clone();
     assert_eq!(last["score"], serde_json::json!({"red": 0, "blue": 0}));
     assert_eq!(last["round"], "running");
     // No match was started on the bot server, so its 10 minute timer waits, paused.
@@ -245,8 +250,7 @@ fn snapshots_carry_score_round_and_timer() {
 #[test]
 fn dead_players_stay_where_they_died() {
     // A dead player's own position is their spectator camera, which follows teammates.
-    let mut ev = replay("bots_cp_badlands.cap");
-    ev.extend(replay("bots_map_change.cap"));
+    let ev = [replay("bots_cp_badlands.cap"), replay("bots_map_change.cap")].concat();
     let mut died_at: HashMap<u64, [f64; 3]> = HashMap::new();
     let mut dead_snapshots = 0;
     for s in of_type(&ev, "snapshot") {
@@ -271,9 +275,9 @@ fn dead_players_stay_where_they_died() {
 fn sentries_aim_at_what_they_shoot() {
     // bots_engineers.cap: engineer bots building on red, soldiers and a medic attacking from blue.
     let ev = replay("bots_engineers.cap");
-    let shots = of_type(&ev, "sentry_shot");
+    let shots = of_type(ev, "sentry_shot");
     assert!(shots.len() >= 10, "{} sentry shots", shots.len());
-    let snaps = of_type(&ev, "snapshot");
+    let snaps = of_type(ev, "snapshot");
     let (mut errors, mut attacking) = (Vec::new(), 0);
     for shot in &shots {
         assert!(shot["target"].is_u64() && shot["builder"].is_u64(), "{shot}");
@@ -297,7 +301,7 @@ fn sentries_aim_at_what_they_shoot() {
 fn engineer_buildings_have_kinds_levels_and_teleporter_ends() {
     let ev = replay("bots_engineers.cap");
     let mut seen = HashSet::new();
-    for s in of_type(&ev, "snapshot") {
+    for s in of_type(ev, "snapshot") {
         for b in s["buildings"].as_array().unwrap() {
             assert!(b["builder"].is_u64(), "{b}");
             seen.insert(format!(
@@ -319,8 +323,8 @@ fn spawn_events_carry_the_spawn_position() {
     let (mut near, mut total) = (0, 0);
     for fixture in ["bots_cp_badlands.cap", "bots_engineers.cap"] {
         let ev = replay(fixture);
-        let snaps = of_type(&ev, "snapshot");
-        for spawn in of_type(&ev, "spawn") {
+        let snaps = of_type(ev, "snapshot");
+        for spawn in of_type(ev, "spawn") {
             let tick = spawn["tick"].as_u64().unwrap();
             // The first snapshot showing the player alive after spawning.
             let Some(p) = snaps.iter().filter(|s| s["tick"].as_u64().unwrap() >= tick).take(3).find_map(|s| {
