@@ -4,7 +4,7 @@
 //! before touching any state, drop stale sequences, parse the reliable region,
 //! then cut the unreliable tail out at the bit where the reliable region ended.
 
-use super::bits::BitReader;
+use super::bits::{BitBuf, BitReader};
 use super::compress;
 use super::netchan::{self, Header, Kind};
 use super::reliable::{self, Reassembler};
@@ -14,8 +14,7 @@ use std::time::Instant;
 #[derive(Debug)]
 pub struct MsgStream {
     pub reliable: bool,
-    pub data: Vec<u8>,
-    pub nbits: usize,
+    pub bits: BitBuf,
 }
 
 #[derive(Debug)]
@@ -114,8 +113,7 @@ impl Receiver {
                 reliable_ok = true;
                 subchannel = Some(region.subchannel);
                 for payload in region.completed {
-                    let nbits = payload.len() * 8;
-                    streams.push(MsgStream { reliable: true, data: payload, nbits });
+                    streams.push(MsgStream { reliable: true, bits: BitBuf::from_bytes(payload) });
                 }
                 tail = Some(region.end_bit);
             } else {
@@ -127,8 +125,7 @@ impl Receiver {
         if let Some(bit) = tail
             && bit < data.len() * 8
         {
-            let (bytes, nbits) = BitReader::at(data, bit).read_remaining();
-            streams.push(MsgStream { reliable: false, data: bytes, nbits });
+            streams.push(MsgStream { reliable: false, bits: BitReader::at(data, bit).read_remaining() });
         }
         Some(Received { header, subchannel, reliable_ok, streams })
     }
@@ -137,21 +134,26 @@ impl Receiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::{messages, netchan::build_packet};
+    use crate::net::messages;
+    use crate::net::netchan::{OutHeader, build_packet};
+
+    fn packet(sequence: i32, challenge: u32, reliable: Option<&BitBuf>, unreliable: Option<&BitBuf>) -> Vec<u8> {
+        build_packet(&OutHeader { sequence, ack: 0, challenge, reliable_state: 0 }, reliable, unreliable)
+    }
 
     #[test]
     fn reliable_then_unreliable_streams() {
         let body = messages::signonstate(messages::Signon::PreSpawn, 9);
         let region = messages::reliable_region(&body, 2);
         let tick = messages::tick(1000);
-        let pkt = build_packet(5, 0, 77, 0, Some((&region.0, region.1)), Some((&tick.0, tick.1)));
+        let pkt = packet(5, 77, Some(&region), Some(&tick));
         let mut rx = Receiver::new(Some(77));
         let got = rx.feed(&pkt, Instant::now()).unwrap();
         assert!(got.reliable_ok);
         assert_eq!(got.subchannel, Some(2));
         assert_eq!(got.streams.len(), 2);
         assert!(got.streams[0].reliable);
-        let mut r = BitReader::new(&got.streams[1].data);
+        let mut r = BitReader::new(got.streams[1].bits.bytes());
         assert_eq!(r.read_bits(6).unwrap(), messages::NET_TICK);
         assert_eq!(r.read_i32().unwrap(), 1000);
     }
@@ -160,18 +162,18 @@ mod tests {
     fn stale_wrong_challenge_and_corrupt_are_dropped() {
         let tick = messages::tick(1);
         let mut rx = Receiver::new(Some(77));
-        let p5 = build_packet(5, 0, 77, 0, None, Some((&tick.0, tick.1)));
+        let p5 = packet(5, 77, None, Some(&tick));
         assert!(rx.feed(&p5, Instant::now()).is_some());
         assert!(rx.feed(&p5, Instant::now()).is_none(), "duplicate");
-        let other = build_packet(6, 0, 78, 0, None, Some((&tick.0, tick.1)));
+        let other = packet(6, 78, None, Some(&tick));
         assert!(rx.feed(&other, Instant::now()).is_none(), "other challenge");
-        let mut bad = build_packet(7, 0, 77, 0, None, Some((&tick.0, tick.1)));
+        let mut bad = packet(7, 77, None, Some(&tick));
         let last = bad.len() - 1;
         bad[last] ^= 1;
         assert!(rx.feed(&bad, Instant::now()).is_none());
         assert_eq!(rx.counters.stale, 1);
         assert_eq!(rx.counters.bad_checksum, 1);
-        let p9 = build_packet(9, 0, 77, 0, None, Some((&tick.0, tick.1)));
+        let p9 = packet(9, 77, None, Some(&tick));
         assert!(rx.feed(&p9, Instant::now()).is_some());
         assert_eq!(rx.counters.lost, 3);
     }
@@ -179,11 +181,11 @@ mod tests {
     #[test]
     fn packet_without_challenge_is_dropped() {
         let tick = messages::tick(1);
-        let mut pkt = build_packet(5, 0, 77, 0, None, Some((&tick.0, tick.1)));
+        let mut pkt = packet(5, 77, None, Some(&tick));
         // Clear CHALLENGE, drop the 4 challenge bytes and fix up the checksum.
         pkt[8] &= !netchan::FLAG_CHALLENGE;
         pkt.drain(12..16);
-        let sum = netchan::fold_checksum(&pkt[11..]);
+        let sum = netchan::fold_checksum(&pkt[netchan::CHECKSUM_START..]);
         pkt[9..11].copy_from_slice(&sum.to_le_bytes());
         assert!(netchan::verify_checksum(&pkt));
         let mut rx = Receiver::new(Some(77));
@@ -195,7 +197,7 @@ mod tests {
     #[test]
     fn snap_compressed_split_datagram() {
         let tick = messages::tick(42);
-        let inner = build_packet(3, 0, 1, 0, None, Some((&tick.0, tick.1)));
+        let inner = packet(3, 1, None, Some(&tick));
         let mut comp = (-3i32).to_le_bytes().to_vec();
         comp.extend_from_slice(b"SNAP");
         comp.extend_from_slice(&snap::raw::Encoder::new().compress_vec(&inner).unwrap());
@@ -213,7 +215,7 @@ mod tests {
         let mut rx = Receiver::new(Some(1));
         assert!(rx.feed(&parts[1], Instant::now()).is_none());
         let got = rx.feed(&parts[0], Instant::now()).unwrap();
-        let mut r = BitReader::new(&got.streams[0].data);
+        let mut r = BitReader::new(got.streams[0].bits.bytes());
         assert_eq!(r.read_bits(6).unwrap(), messages::NET_TICK);
         assert_eq!(r.read_i32().unwrap(), 42);
     }

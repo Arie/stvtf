@@ -13,9 +13,10 @@
 
 use crate::capture::Recorder;
 use crate::decode::{Decoder, Lifecycle, Tables};
+use crate::net::bits::BitBuf;
 use crate::net::handshake::Connection;
-use crate::net::messages::{self, Bits, Signon};
-use crate::net::netchan;
+use crate::net::messages::{self, Signon};
+use crate::net::netchan::{self, OutHeader};
 use crate::net::receiver::Receiver;
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -57,7 +58,7 @@ const RESEND_AFTER: Duration = Duration::from_millis(500);
 const TICK_ACK_EVERY: Duration = Duration::from_millis(100);
 
 struct Pending {
-    region: Bits,
+    region: BitBuf,
     subchannel: u8,
     sent_at: Instant,
 }
@@ -120,7 +121,7 @@ struct Session<'o> {
     broke: Option<(String, Option<Fatal>)>,
     /// Set when the server restarts signon on this connection (a map change): the
     /// streams from that point on are replayed into a fresh decoder for the new map.
-    remap: Option<Vec<(Vec<u8>, usize)>>,
+    remap: Option<Vec<BitBuf>>,
 }
 
 impl<'o> Session<'o> {
@@ -153,23 +154,22 @@ impl<'o> Session<'o> {
         self.broke.get_or_insert((reason, fatal));
     }
 
-    fn send(&mut self, reliable: Option<&Bits>, unreliable: Option<&Bits>) {
+    fn send(&mut self, reliable: Option<&BitBuf>, unreliable: Option<&BitBuf>) {
         self.out_seq += 1;
         let Some(sock) = self.sock else { return };
-        let pkt = netchan::build_packet(
-            self.out_seq - 1,
-            self.rx.in_seq,
-            self.challenge,
-            self.in_reliable_state,
-            reliable.map(|b| (b.0.as_slice(), b.1)),
-            unreliable.map(|b| (b.0.as_slice(), b.1)),
-        );
+        let header = OutHeader {
+            sequence: self.out_seq - 1,
+            ack: self.rx.in_seq,
+            challenge: self.challenge,
+            reliable_state: self.in_reliable_state,
+        };
+        let pkt = netchan::build_packet(&header, reliable, unreliable);
         if let Err(e) = sock.send(&pkt) {
             self.break_with(format!("socket error: {e}"), None);
         }
     }
 
-    fn send_reliable(&mut self, body: &Bits, subchannel: Option<u8>) {
+    fn send_reliable(&mut self, body: &BitBuf, subchannel: Option<u8>) {
         let sub = subchannel.unwrap_or_else(|| {
             let s = self.next_subchannel;
             self.next_subchannel = (self.next_subchannel + 1) % 8;
@@ -267,15 +267,15 @@ impl<'o> Session<'o> {
         {
             self.in_reliable_state ^= 1 << sub;
         }
-        for stream in &pkt.streams {
+        for stream in pkt.streams {
             if let Some(rest) = &mut self.remap {
-                rest.push((stream.data.clone(), stream.nbits));
+                rest.push(stream.bits);
                 continue;
             }
-            let life = dec.feed(&stream.data, stream.nbits);
+            let life = dec.feed(stream.bits.bytes(), stream.bits.nbits());
             self.lifecycle(life, emit);
             if let Some(rest) = &mut self.remap {
-                rest.push((stream.data.clone(), stream.nbits));
+                rest.push(stream.bits);
             }
         }
         for v in dec.take_output() {
@@ -341,12 +341,12 @@ fn drive(
         let mut dec = Decoder::new(&arena, tables, s.opt.snapshot_hz)?;
         if let Some(streams) = s.remap.take() {
             let mut rest = streams.into_iter();
-            for (data, nbits) in rest.by_ref() {
-                let life = dec.feed(&data, nbits);
+            for bits in rest.by_ref() {
+                let life = dec.feed(bits.bytes(), bits.nbits());
                 s.lifecycle(life, emit);
                 if let Some(next_map) = &mut s.remap {
                     // Signon restarted again: the rest belongs to the map after this one.
-                    next_map.push((data, nbits));
+                    next_map.push(bits);
                     break;
                 }
             }

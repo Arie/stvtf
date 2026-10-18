@@ -147,7 +147,8 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     }
     // The server may have opened a channel whose accept we missed; close it.
     let bye = messages::disconnect("Disconnect by user.");
-    let pkt = netchan::build_packet(1, 0, ch.challenge, 0, None, Some((&bye.0, bye.1)));
+    let header = netchan::OutHeader { sequence: 1, ack: 0, challenge: ch.challenge, reliable_state: 0 };
+    let pkt = netchan::build_packet(&header, None, Some(&bye));
     let _ = sock.send(&pkt);
     bail!("no accept within {timeout:?}")
 }
