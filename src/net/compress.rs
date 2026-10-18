@@ -25,18 +25,17 @@ pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
     let mut src = 8;
     let mut cmd = 0u8;
     let mut left = 0;
-    while out.len() < actual && src < data.len() {
+    while out.len() < actual {
         if left == 0 {
-            cmd = data[src];
+            let Some(&c) = data.get(src) else { break };
+            cmd = c;
             src += 1;
             left = 8;
         }
         if cmd & 1 == 1 {
-            if src + 1 >= data.len() {
-                break;
-            }
-            let pos = ((data[src] as usize) << 4) | (data[src + 1] as usize >> 4);
-            let count = (data[src + 1] & 0xf) as usize + 1;
+            let Some(&[hi, lo]) = data.get(src..src + 2) else { break };
+            let pos = (usize::from(hi) << 4) | usize::from(lo >> 4);
+            let count = usize::from(lo & 0xf) + 1;
             src += 2;
             if count == 1 {
                 break;
@@ -44,16 +43,24 @@ pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
             let Some(mut r) = out.len().checked_sub(pos + 1) else {
                 bail!("LZSS back-reference before start");
             };
+            if out.len() + count > actual {
+                bail!("LZSS back-reference past declared size {actual}");
+            }
             for _ in 0..count {
                 out.push(out[r]);
                 r += 1;
             }
         } else {
-            out.push(data[src]);
+            let Some(&b) = data.get(src) else { break };
+            out.push(b);
             src += 1;
         }
         cmd >>= 1;
         left -= 1;
+    }
+    // Like the engine, reject a stream that ends early.
+    if out.len() != actual {
+        bail!("LZSS produced {} of {actual} bytes", out.len());
     }
     Ok(out)
 }
@@ -92,6 +99,31 @@ mod tests {
         data.push((2 >> 4) as u8);
         data.push(((2 & 0xf) << 4) as u8 | 5);
         assert_eq!(lzss(&data).unwrap(), b"abcabcabc");
+    }
+
+    fn lzss_block(size: u32, body: &[u8]) -> Vec<u8> {
+        let mut data = b"LZSS".to_vec();
+        data.extend_from_slice(&size.to_le_bytes());
+        data.extend_from_slice(body);
+        data
+    }
+
+    #[test]
+    fn lzss_command_byte_at_end_is_an_error() {
+        // The command byte promises a literal that is not there: used to index past the end.
+        assert!(lzss(&lzss_block(1, &[0x00])).is_err());
+    }
+
+    #[test]
+    fn lzss_truncated_stream_is_an_error() {
+        assert!(lzss(&lzss_block(4, &[0x00, b'a', b'b'])).is_err());
+        assert!(lzss(&lzss_block(4, &[0x01, 0x00])).is_err(), "half a back-reference");
+    }
+
+    #[test]
+    fn lzss_back_reference_past_declared_size_is_an_error() {
+        // One literal, then a back-reference of 16 bytes into a 4-byte output.
+        assert!(lzss(&lzss_block(4, &[0b10, b'a', 0x00, 0x0f])).is_err());
     }
 
     #[test]
