@@ -63,7 +63,7 @@ pub struct Decoder<'a> {
     /// Bytes copied into `arena`: it is only released with the decoder.
     arena_bytes: usize,
     handler: DemoHandler<'a, Extractor>,
-    snapshot_ticks: u32,
+    snapshot_hz: f32,
     last_snapshot: Option<u32>,
     parse_errors: u64,
     /// The parser panicked on some input; its state can no longer be trusted.
@@ -80,7 +80,7 @@ impl<'a> Decoder<'a> {
             arena,
             arena_bytes: 0,
             handler,
-            snapshot_ticks: snapshot_every(snapshot_hz),
+            snapshot_hz,
             last_snapshot: None,
             parse_errors: 0,
             panicked: false,
@@ -143,7 +143,7 @@ impl<'a> Decoder<'a> {
                 Ok(Some(m)) => messages.push(m),
                 Ok(None) => {}
                 Err(e) => {
-                    if std::env::var("STVMAP_DEBUG").is_ok_and(|v| v == "errors") {
+                    if extract::debug("errors") {
                         eprintln!("decode error at bit {start} of {nbits}, message id {id}: {e}");
                     }
                     self.parse_errors += 1;
@@ -170,8 +170,9 @@ impl<'a> Decoder<'a> {
         x.announce();
         let drained = x.drain();
         let now = x.server_tick;
+        let every = snapshot_every(self.snapshot_hz, x.interval());
         self.out.extend(drained);
-        if has_entities && snapshot_due(self.last_snapshot, now, self.snapshot_ticks) {
+        if has_entities && snapshot_due(self.last_snapshot, now, every) {
             self.last_snapshot = Some(now);
             let snap = self.extractor().snapshot();
             self.out.push(snap);
@@ -215,10 +216,10 @@ fn signon(s: &SignOnState) -> Signon {
     }
 }
 
-/// Server ticks between snapshots for a rate cap; 0 disables snapshots.
-fn snapshot_every(hz: f32) -> u32 {
-    const TICKS_PER_SECOND: f32 = 66.67;
-    if hz <= 0.0 { 0 } else { (TICKS_PER_SECOND / hz).round().max(1.0) as u32 }
+/// Server ticks between snapshots for a rate cap, at `interval` seconds per tick;
+/// 0 disables snapshots.
+fn snapshot_every(hz: f32, interval: f32) -> u32 {
+    if hz <= 0.0 { 0 } else { (1.0 / (interval * hz)).round().max(1.0) as u32 }
 }
 
 /// Whether a snapshot is due at server tick `now`. The tick restarts at a map load, so a
@@ -232,7 +233,6 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Value)) ->
     let demo = tf_demo_parser::Demo::new(bytes);
     let parser = tf_demo_parser::DemoParser::new_with_analyser(demo.get_stream(), Extractor::default());
     let (_header, mut ticker) = parser.ticker()?;
-    let every = snapshot_every(snapshot_hz);
     let mut last: Option<u32> = None;
     while ticker.tick()? {
         let x = ticker.state();
@@ -241,7 +241,7 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Value)) ->
             emit(v);
         }
         let now = x.server_tick;
-        if now > 0 && snapshot_due(last, now, every) {
+        if now > 0 && snapshot_due(last, now, snapshot_every(snapshot_hz, x.interval())) {
             last = Some(now);
             emit(x.snapshot());
         }
@@ -261,7 +261,8 @@ mod tests {
         assert!(snapshot_due(Some(500), 2, 3), "tick restarted at a map load");
         assert!(!snapshot_due(Some(u32::MAX - 1), u32::MAX, 3), "no overflow near u32::MAX");
         assert!(!snapshot_due(None, 5, 0), "disabled");
-        assert_eq!(snapshot_every(20.0), 3);
-        assert_eq!(snapshot_every(0.0), 0);
+        assert_eq!(snapshot_every(20.0, 0.015), 3);
+        assert_eq!(snapshot_every(20.0, 1.0 / 128.0), 6, "128-tick server");
+        assert_eq!(snapshot_every(0.0, 0.015), 0);
     }
 }
