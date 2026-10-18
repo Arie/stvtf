@@ -1,0 +1,4 @@
+target/
+*.cap
+# Test fixtures are recorded captures and must be committed.
+!tests/fixtures/*.cap
