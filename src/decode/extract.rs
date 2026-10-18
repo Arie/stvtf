@@ -1519,11 +1519,26 @@ impl Extractor {
         {
             self.prop_origins.insert(idx, v);
         }
-        // A slot taken over by an entity of another class (an implicit delete).
+        // A slot taken over by an entity of another class (an implicit delete); tf-demo-parser
+        // keeps the old projectile or building.
         if self.gs.state.projectiles.get(&e.entity_index).is_some_and(|p| p.class != e.server_class) {
             self.gs.state.projectiles.remove(&e.entity_index);
         }
         let Some(class) = class else { return };
+        if e.update_type == UpdateType::Enter {
+            self.sentries.remove(&idx);
+            let same = |b: &Building| {
+                matches!(
+                    (b, class.name.as_str()),
+                    (Building::Sentry(_), "CObjectSentrygun")
+                        | (Building::Dispenser(_), "CObjectDispenser")
+                        | (Building::Teleporter(_), "CObjectTeleporter")
+                )
+            };
+            if self.gs.state.buildings.get(&e.entity_index).is_some_and(|b| !same(b)) {
+                self.gs.state.buildings.remove(&e.entity_index);
+            }
+        }
         if debug(class.name.as_str()) {
             for p in e.props(state) {
                 eprintln!("{}#{idx} {:?} = {:?}", class.name.as_str(), p.identifier.names(), p.value);
