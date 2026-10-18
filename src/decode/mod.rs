@@ -8,6 +8,7 @@
 
 pub mod extract;
 
+use crate::net::messages::Signon;
 use anyhow::{Context, Result, bail};
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
 use extract::Extractor;
@@ -51,7 +52,7 @@ impl Tables {
 /// What the session needs to know from the streams it just fed.
 #[derive(Default, Debug)]
 pub struct Lifecycle {
-    pub signon: Vec<u8>,
+    pub signon: Vec<Signon>,
     pub server_info: Option<(i32, String)>,
     pub tick: Option<i32>,
     pub disconnect: Option<String>,
@@ -59,11 +60,15 @@ pub struct Lifecycle {
 
 pub struct Decoder<'a> {
     arena: &'a Arena<u8>,
+    /// Bytes copied into `arena`: it is only released with the decoder.
+    arena_bytes: usize,
     handler: DemoHandler<'a, Extractor>,
     snapshot_ticks: u32,
     last_snapshot: Option<u32>,
-    pub parse_errors: u64,
-    pub out: Vec<Value>,
+    parse_errors: u64,
+    /// The parser panicked on some input; its state can no longer be trusted.
+    panicked: bool,
+    out: Vec<Value>,
 }
 
 impl<'a> Decoder<'a> {
@@ -71,8 +76,16 @@ impl<'a> Decoder<'a> {
         let mut handler = DemoHandler::with_analyser(Extractor::default());
         handler.handle_header(&tables.header);
         handler.handle_packet(Packet::DataTables(tables.datatables.clone()))?;
-        let snapshot_ticks = if snapshot_hz <= 0.0 { 0 } else { (66.67 / snapshot_hz).round().max(1.0) as u32 };
-        Ok(Decoder { arena, handler, snapshot_ticks, last_snapshot: None, parse_errors: 0, out: Vec::new() })
+        Ok(Decoder {
+            arena,
+            arena_bytes: 0,
+            handler,
+            snapshot_ticks: snapshot_every(snapshot_hz),
+            last_snapshot: None,
+            parse_errors: 0,
+            panicked: false,
+            out: Vec::new(),
+        })
     }
 
     /// Feeds one message stream (bit packed from bit 0) and returns its lifecycle messages.
@@ -81,11 +94,27 @@ impl<'a> Decoder<'a> {
     /// junk padding bits, and once realigned to bit 0 a byte-granular reader would
     /// see enough bits to decode them as a bogus message.
     pub fn feed(&mut self, data: &[u8], nbits: usize) -> Lifecycle {
+        if self.panicked {
+            return Lifecycle::default();
+        }
+        // The parser is a dependency fed with server data: contain a panic in it to
+        // this decoder (the session then reconnects) instead of the whole process.
+        let fed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.feed_inner(data, nbits)));
+        fed.unwrap_or_else(|_| {
+            self.panicked = true;
+            self.parse_errors += 1;
+            Lifecycle::default()
+        })
+    }
+
+    fn feed_inner(&mut self, data: &[u8], nbits: usize) -> Lifecycle {
         let mut life = Lifecycle::default();
         if nbits < 6 {
             return life;
         }
-        let bytes: &'a [u8] = self.arena.alloc_extend(data[..nbits.div_ceil(8)].iter().copied());
+        let nbytes = nbits.div_ceil(8);
+        let bytes: &'a [u8] = self.arena.alloc_extend(data[..nbytes].iter().copied());
+        self.arena_bytes += nbytes;
         let mut outer = BitReadStream::new(BitReadBuffer::new(bytes, LittleEndian));
         let Ok(mut stream) = outer.read_bits(nbits) else { return life };
         let state = self.handler.get_parser_state();
@@ -122,20 +151,18 @@ impl<'a> Decoder<'a> {
                 }
             }
         }
-        let tick = self.extractor().server_tick;
-        let packet = Packet::Message(MessagePacket { tick: DemoTick::from(tick), messages, meta: Default::default() });
         let mut has_entities = false;
-        if let Packet::Message(m) = &packet {
-            for msg in &m.messages {
-                match msg {
-                    Message::SignOnState(s) => life.signon.push(signon_num(&s.state)),
-                    Message::ServerInfo(i) => life.server_info = Some((i.server_count as i32, i.map.clone())),
-                    Message::NetTick(t) => life.tick = Some(u32::from(t.tick) as i32),
-                    Message::PacketEntities(_) => has_entities = true,
-                    _ => {}
-                }
+        for msg in &messages {
+            match msg {
+                Message::SignOnState(s) => life.signon.push(signon(&s.state)),
+                Message::ServerInfo(i) => life.server_info = Some((i.server_count as i32, i.map.clone())),
+                Message::NetTick(t) => life.tick = Some(u32::from(t.tick) as i32),
+                Message::PacketEntities(_) => has_entities = true,
+                _ => {}
             }
         }
+        let tick = self.extractor().server_tick;
+        let packet = Packet::Message(MessagePacket { tick: DemoTick::from(tick), messages, meta: Default::default() });
         if self.handler.handle_packet(packet).is_err() {
             self.parse_errors += 1;
         }
@@ -144,10 +171,7 @@ impl<'a> Decoder<'a> {
         let drained = x.drain();
         let now = x.server_tick;
         self.out.extend(drained);
-        if has_entities
-            && self.snapshot_ticks > 0
-            && self.last_snapshot.is_none_or(|l| now >= l + self.snapshot_ticks || now < l)
-        {
+        if has_entities && snapshot_due(self.last_snapshot, now, self.snapshot_ticks) {
             self.last_snapshot = Some(now);
             let snap = self.extractor().snapshot();
             self.out.push(snap);
@@ -158,19 +182,49 @@ impl<'a> Decoder<'a> {
     pub fn extractor(&self) -> &Extractor {
         self.handler.borrow_output()
     }
+
+    /// Takes the events and snapshots produced so far.
+    pub fn take_output(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.out)
+    }
+
+    pub fn parse_errors(&self) -> u64 {
+        self.parse_errors
+    }
+
+    /// Message bytes held for the parser since this decoder was created.
+    pub fn bytes(&self) -> usize {
+        self.arena_bytes
+    }
+
+    pub fn panicked(&self) -> bool {
+        self.panicked
+    }
 }
 
-fn signon_num(s: &SignOnState) -> u8 {
+fn signon(s: &SignOnState) -> Signon {
     match s {
-        SignOnState::None => 0,
-        SignOnState::Challenge => 1,
-        SignOnState::Connected => 2,
-        SignOnState::New => 3,
-        SignOnState::PreSpawn => 4,
-        SignOnState::Spawn => 5,
-        SignOnState::Full => 6,
-        SignOnState::ChangeLevel => 7,
+        SignOnState::None => Signon::None,
+        SignOnState::Challenge => Signon::Challenge,
+        SignOnState::Connected => Signon::Connected,
+        SignOnState::New => Signon::New,
+        SignOnState::PreSpawn => Signon::PreSpawn,
+        SignOnState::Spawn => Signon::Spawn,
+        SignOnState::Full => Signon::Full,
+        SignOnState::ChangeLevel => Signon::ChangeLevel,
     }
+}
+
+/// Server ticks between snapshots for a rate cap; 0 disables snapshots.
+fn snapshot_every(hz: f32) -> u32 {
+    const TICKS_PER_SECOND: f32 = 66.67;
+    if hz <= 0.0 { 0 } else { (TICKS_PER_SECOND / hz).round().max(1.0) as u32 }
+}
+
+/// Whether a snapshot is due at server tick `now`. The tick restarts at a map load, so a
+/// tick before the last snapshot is due too.
+fn snapshot_due(last: Option<u32>, now: u32, every: u32) -> bool {
+    every > 0 && last.is_none_or(|l| now < l || now - l >= every)
 }
 
 /// Runs a demo file through the same extractor a live session uses.
@@ -178,7 +232,7 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Value)) ->
     let demo = tf_demo_parser::Demo::new(bytes);
     let parser = tf_demo_parser::DemoParser::new_with_analyser(demo.get_stream(), Extractor::default());
     let (_header, mut ticker) = parser.ticker()?;
-    let every = if snapshot_hz <= 0.0 { 0 } else { (66.67 / snapshot_hz).round().max(1.0) as u32 };
+    let every = snapshot_every(snapshot_hz);
     let mut last: Option<u32> = None;
     while ticker.tick()? {
         let x = ticker.state();
@@ -187,10 +241,27 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Value)) ->
             emit(v);
         }
         let now = x.server_tick;
-        if every > 0 && now > 0 && last.is_none_or(|l| now >= l + every || now < l) {
+        if now > 0 && snapshot_due(last, now, every) {
             last = Some(now);
             emit(x.snapshot());
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_timing() {
+        assert!(snapshot_due(None, 5, 3));
+        assert!(!snapshot_due(Some(5), 7, 3));
+        assert!(snapshot_due(Some(5), 8, 3));
+        assert!(snapshot_due(Some(500), 2, 3), "tick restarted at a map load");
+        assert!(!snapshot_due(Some(u32::MAX - 1), u32::MAX, 3), "no overflow near u32::MAX");
+        assert!(!snapshot_due(None, 5, 0), "disabled");
+        assert_eq!(snapshot_every(20.0), 3);
+        assert_eq!(snapshot_every(0.0), 0);
+    }
 }

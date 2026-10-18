@@ -49,7 +49,7 @@ impl Args {
         Ok(self.get("hz").map(str::parse).transpose()?.unwrap_or(20.0))
     }
     fn tables(&self, build: &str) -> Result<Tables> {
-        watch::tables(build, self.get("tables").map(PathBuf::from).as_ref())
+        watch::tables(build, self.get("tables").map(PathBuf::from).as_deref())
     }
 }
 
@@ -77,8 +77,7 @@ fn main() -> Result<()> {
         Some("replay") => {
             let path = args.positional.get(1).ok_or_else(|| anyhow!(USAGE))?;
             let records = capture::read(&std::fs::read(path)?)?;
-            let opt =
-                Options { name: String::new(), crc: 0, snapshot_hz: args.hz()?, silence: Duration::from_secs(15) };
+            let opt = Options { snapshot_hz: args.hz()?, ..Options::default() };
             let build = args.get("build").unwrap_or(stvmap::CURRENT_BUILD);
             capture::replay(&records, &args.tables(build)?, &opt, &mut emit)
         }
@@ -100,9 +99,11 @@ fn connect(args: &Args, emit: &mut dyn FnMut(Value)) -> Result<()> {
     w.tables = args.get("tables").map(PathBuf::from);
     w.crc = args.get("crc").map(|h| u32::from_str_radix(h.trim_start_matches("0x"), 16)).transpose()?;
     w.build = args.get("build").map(str::to_string);
-    w.seconds = args.get("seconds").map(str::parse).transpose()?;
+    w.duration =
+        args.get("seconds").map(|s| Ok::<_, anyhow::Error>(Duration::try_from_secs_f64(s.parse()?)?)).transpose()?;
     w.record = args.get("record").map(PathBuf::from);
     static STOP: AtomicBool = AtomicBool::new(false);
     watch::stop_on_ctrl_c(&STOP)?;
-    watch::watch(&w, &STOP, emit)
+    watch::watch(&w, &STOP, emit)?;
+    Ok(())
 }
