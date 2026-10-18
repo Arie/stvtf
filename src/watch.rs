@@ -136,8 +136,9 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Resul
         .ok_or_else(|| anyhow!("no IPv4 address for {}", w.target))?;
     let build = match &w.build {
         Some(b) => b.clone(),
-        None => handshake::a2s_info(server, Duration::from_secs(3))
-            .map_or_else(|_| crate::CURRENT_BUILD.to_string(), |i| i.version),
+        None => {
+            handshake::a2s_version(server, Duration::from_secs(3)).unwrap_or_else(|_| crate::CURRENT_BUILD.to_string())
+        }
     };
     let Some(crc) = w.crc.or_else(|| crate::builtin(&build).map(|b| b.crc)) else {
         return Err(anyhow!("no known SendTable CRC for build {build}; pass --crc").into());

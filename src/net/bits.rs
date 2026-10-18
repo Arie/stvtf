@@ -77,6 +77,7 @@ impl<'a> BitReader<'a> {
         Ok(self.read_bits(8)? as u8)
     }
 
+    #[cfg(test)]
     pub fn read_i32(&mut self) -> Result<i32> {
         Ok(self.read_bits(32)? as i32)
     }
@@ -208,10 +209,6 @@ impl BitWriter {
                 return;
             }
         }
-    }
-
-    pub fn nbits(&self) -> usize {
-        self.nbits
     }
 
     pub fn into_bytes(self) -> Vec<u8> {

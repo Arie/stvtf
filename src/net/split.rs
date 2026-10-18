@@ -71,10 +71,6 @@ impl SplitReassembler {
         }
         Some(joined)
     }
-
-    pub fn reset(&mut self) {
-        self.open.clear();
-    }
 }
 
 #[cfg(test)]

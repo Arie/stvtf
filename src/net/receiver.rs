@@ -13,7 +13,6 @@ use std::time::Instant;
 
 #[derive(Debug)]
 pub struct MsgStream {
-    pub reliable: bool,
     pub bits: BitBuf,
 }
 
@@ -113,7 +112,7 @@ impl Receiver {
                 reliable_ok = true;
                 subchannel = Some(region.subchannel);
                 for payload in region.completed {
-                    streams.push(MsgStream { reliable: true, bits: BitBuf::from_bytes(payload) });
+                    streams.push(MsgStream { bits: BitBuf::from_bytes(payload) });
                 }
                 tail = Some(region.end_bit);
             } else {
@@ -125,7 +124,7 @@ impl Receiver {
         if let Some(bit) = tail
             && bit < data.len() * 8
         {
-            streams.push(MsgStream { reliable: false, bits: BitReader::at(data, bit).read_remaining() });
+            streams.push(MsgStream { bits: BitReader::at(data, bit).read_remaining() });
         }
         Some(Received { header, subchannel, reliable_ok, streams })
     }
@@ -152,7 +151,8 @@ mod tests {
         assert!(got.reliable_ok);
         assert_eq!(got.subchannel, Some(2));
         assert_eq!(got.streams.len(), 2);
-        assert!(got.streams[0].reliable);
+        let mut r = BitReader::new(got.streams[0].bits.bytes());
+        assert_eq!(r.read_bits(6).unwrap(), messages::NET_SIGNONSTATE);
         let mut r = BitReader::new(got.streams[1].bits.bytes());
         assert_eq!(r.read_bits(6).unwrap(), messages::NET_TICK);
         assert_eq!(r.read_i32().unwrap(), 1000);
