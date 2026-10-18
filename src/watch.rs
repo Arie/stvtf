@@ -26,9 +26,11 @@ pub struct Watch {
     pub name: String,
     /// Snapshot rate cap; 0 disables snapshots.
     pub snapshot_hz: f32,
-    /// Overrides for builds that are not compiled in.
+    /// A demo of the server's build, for builds whose tables are not compiled in.
     pub tables: Option<PathBuf>,
+    /// The build's SendTable CRC, for builds not compiled in.
     pub crc: Option<u32>,
+    /// The server build; asked from the server (A2S_INFO) when not set.
     pub build: Option<String>,
     /// Stop after this long.
     pub duration: Option<Duration>,
@@ -37,6 +39,7 @@ pub struct Watch {
 }
 
 impl Watch {
+    /// Defaults for everything but the address and password.
     pub fn new(target: &str, password: &str) -> Self {
         Watch {
             target: target.to_string(),
@@ -71,9 +74,13 @@ impl fmt::Debug for Watch {
 /// Why [`watch`] gave up.
 #[derive(Debug)]
 pub enum WatchError {
-    /// The server refused us for a reason reconnecting cannot fix. `reason` is the
-    /// server's text.
-    Rejected { kind: Fatal, reason: String },
+    /// The server refused us for a reason reconnecting cannot fix.
+    Rejected {
+        /// What kind of rejection.
+        kind: Fatal,
+        /// The server's text.
+        reason: String,
+    },
     /// Setup failed (address, build, tables, capture file) or local I/O failed.
     Other(anyhow::Error),
 }

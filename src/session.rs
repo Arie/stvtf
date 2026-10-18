@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use typed_arena::Arena;
 
+/// How a session behaves.
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Spectator name shown on the server.
@@ -66,6 +67,7 @@ struct Pending {
 /// Rejections that reconnecting cannot fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fatal {
+    /// The `tv_password` is wrong.
     BadPassword,
     /// The server runs a build whose class tables or CRC we do not have.
     ClassTables,

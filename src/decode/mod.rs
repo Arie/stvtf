@@ -6,7 +6,7 @@
 //! message stream is then wrapped as a demo `Message` packet and handed to the
 //! same DemoHandler a demo file would use.
 
-pub mod extract;
+mod extract;
 
 use crate::net::messages::Signon;
 use anyhow::{Context, Result, bail};
@@ -24,17 +24,20 @@ use tf_demo_parser::demo::parser::DemoHandler;
 use tf_demo_parser::demo::parser::RawPacketStream;
 use typed_arena::Arena;
 
+/// The entity class tables of one server build, taken from a demo of that build.
 pub struct Tables {
-    pub header: Header,
-    pub datatables: DataTablePacket,
+    header: Header,
+    datatables: DataTablePacket,
 }
 
 impl Tables {
+    /// Reads the tables from a demo file (any STV or POV demo of the build).
     pub fn from_demo(path: &std::path::Path) -> Result<Tables> {
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         Self::from_demo_bytes(&bytes)
     }
 
+    /// Reads the tables from demo bytes; everything after the data tables is ignored.
     pub fn from_demo_bytes(bytes: &[u8]) -> Result<Tables> {
         let mut stream = BitReadStream::new(BitReadBuffer::new(bytes, LittleEndian));
         let header = Header::read(&mut stream)?;
@@ -47,18 +50,28 @@ impl Tables {
         }
         bail!("no data tables in demo")
     }
+
+    /// The server class names (`CTFPlayer`, …), in class id order.
+    pub fn class_names(&self) -> impl Iterator<Item = &str> {
+        self.datatables.server_classes.iter().map(|c| c.name.as_str())
+    }
+
+    /// The number of send tables.
+    pub fn send_table_count(&self) -> usize {
+        self.datatables.tables.len()
+    }
 }
 
 /// What the session needs to know from the streams it just fed.
 #[derive(Default, Debug)]
-pub struct Lifecycle {
+pub(crate) struct Lifecycle {
     pub signon: Vec<Signon>,
     pub server_info: Option<(i32, String)>,
     pub tick: Option<i32>,
     pub disconnect: Option<String>,
 }
 
-pub struct Decoder<'a> {
+pub(crate) struct Decoder<'a> {
     arena: &'a Arena<u8>,
     /// Bytes copied into `arena`: it is only released with the decoder.
     arena_bytes: usize,
@@ -72,7 +85,7 @@ pub struct Decoder<'a> {
 }
 
 impl<'a> Decoder<'a> {
-    pub fn new(arena: &'a Arena<u8>, tables: &Tables, snapshot_hz: f32) -> Result<Self> {
+    pub(crate) fn new(arena: &'a Arena<u8>, tables: &Tables, snapshot_hz: f32) -> Result<Self> {
         let mut handler = DemoHandler::with_analyser(Extractor::default());
         handler.handle_header(&tables.header);
         handler.handle_packet(Packet::DataTables(tables.datatables.clone()))?;
@@ -93,7 +106,7 @@ impl<'a> Decoder<'a> {
     /// The stream is parsed with its exact bit length: a datagram ends in up to five
     /// junk padding bits, and once realigned to bit 0 a byte-granular reader would
     /// see enough bits to decode them as a bogus message.
-    pub fn feed(&mut self, data: &[u8], nbits: usize) -> Lifecycle {
+    pub(crate) fn feed(&mut self, data: &[u8], nbits: usize) -> Lifecycle {
         if self.panicked {
             return Lifecycle::default();
         }
@@ -180,25 +193,25 @@ impl<'a> Decoder<'a> {
         life
     }
 
-    pub fn extractor(&self) -> &Extractor {
+    pub(crate) fn extractor(&self) -> &Extractor {
         self.handler.borrow_output()
     }
 
     /// Takes the events and snapshots produced so far.
-    pub fn take_output(&mut self) -> Vec<Value> {
+    pub(crate) fn take_output(&mut self) -> Vec<Value> {
         std::mem::take(&mut self.out)
     }
 
-    pub fn parse_errors(&self) -> u64 {
+    pub(crate) fn parse_errors(&self) -> u64 {
         self.parse_errors
     }
 
     /// Message bytes held for the parser since this decoder was created.
-    pub fn bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         self.arena_bytes
     }
 
-    pub fn panicked(&self) -> bool {
+    pub(crate) fn panicked(&self) -> bool {
         self.panicked
     }
 }
@@ -228,7 +241,8 @@ fn snapshot_due(last: Option<u32>, now: u32, every: u32) -> bool {
     every > 0 && last.is_none_or(|l| now < l || now - l >= every)
 }
 
-/// Runs a demo file through the same extractor a live session uses.
+/// Runs a demo file through the same extractor a live session uses, passing events and
+/// snapshots (at most `snapshot_hz` per second; 0 disables them) to `emit`.
 pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Value)) -> Result<()> {
     let demo = tf_demo_parser::Demo::new(bytes);
     let parser = tf_demo_parser::DemoParser::new_with_analyser(demo.get_stream(), Extractor::default());
