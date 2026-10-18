@@ -266,4 +266,9 @@ Unit tests cover the bit codec, compression, checksum/header, split and reliable
 reassembly, handshake and client message layouts. The integration tests in
 `tests/captures.rs` replay real SourceTV traffic recorded from a TF2 server with
 bots (`tests/fixtures/*.cap`, recorded with `connect --record`) through the full
-session and decoder, including a map change followed in place.
+session and decoder, including a map change followed in place. `tests/payload.rs`
+runs the start of a real pl_upward match (`tests/fixtures/pl_upward.dem`) through the
+demo path: setup, the cart pushed and rolling back, and the first capture.
+
+`tools/cut_demo.py IN.dem OUT.dem --tick N` cuts a demo after demo tick N, to make
+a fixture of a long recording.
