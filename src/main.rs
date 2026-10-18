@@ -135,7 +135,6 @@ fn main() -> Result<()> {
         }
         _ => connect(&args, &mut emit)?,
     }
-    drop(emit);
     // Ignore a final flush error: it is the same closed pipe already handled above.
     let _ = out.flush();
     Ok(())
