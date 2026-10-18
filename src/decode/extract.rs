@@ -3,7 +3,8 @@
 
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::data::game_state::{
@@ -31,6 +32,38 @@ const DMG_CRIT: u32 = 1 << 20;
 const DEATH_DOMINATION: u16 = 0x1;
 const DEATH_REVENGE: u16 = 0x4;
 const DEATH_FEIGN: u16 = 0x20;
+/// player_death customkill values.
+const CUSTOM_KILL_HEADSHOT: u16 = 1;
+const CUSTOM_KILL_BACKSTAB: u16 = 2;
+/// TF_WEAPON_ROCKETLAUNCHER: its explosions are rockets, every other weapon's grenades.
+const WEAPON_ROCKET_LAUNCHER: i64 = 22;
+/// How far from an explosion the projectile that caused it may be.
+const EXPLOSION_RADIUS: f32 = 150.0;
+/// CObjectSentrygun m_iState while shooting at a target.
+const SENTRY_STATE_ATTACKING: i64 = 2;
+/// User message id of SayText (console `say` and server notices).
+const USER_MESSAGE_SAY_TEXT: u8 = 3;
+/// Unattended cap progress decays over mp_capdeteriorate_time (default 90 s).
+const CAP_DECAY_SECONDS: f32 = 90.0;
+/// The handle value of "no entity".
+const INVALID_EHANDLE: i64 = 0x1f_ffff;
+/// player_spawn events waiting for a position; more than this means entity updates stopped.
+const MAX_PENDING_SPAWNS: usize = 256;
+/// Seconds per server tick until the server's own value (ServerInfo) arrives.
+pub(crate) const DEFAULT_TICK_INTERVAL: f32 = 0.015;
+
+/// `STVMAP_DEBUG`, read once: a server class, temp entity class, `ent:N` or `gameevents`.
+static DEBUG: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("STVMAP_DEBUG").ok());
+
+/// Whether `STVMAP_DEBUG` asks for this topic.
+pub(crate) fn debug(topic: &str) -> bool {
+    DEBUG.as_deref() == Some(topic)
+}
+
+/// The entity `STVMAP_DEBUG=ent:N` asks to trace.
+fn debug_entity() -> Option<u32> {
+    DEBUG.as_deref()?.strip_prefix("ent:")?.parse().ok()
+}
 
 #[derive(Default)]
 pub struct Extractor {
@@ -46,10 +79,12 @@ pub struct Extractor {
     conds: HashMap<u32, [u32; 6]>,
     mediguns: HashMap<u32, Medigun>,
     class_names: Vec<String>,
+    /// Seconds per tick from ServerInfo.
+    tick_interval: Option<f32>,
     /// Team entity -> (team number, score).
-    teams: HashMap<u32, (u8, i64)>,
-    timers: HashMap<u32, RoundTimer>,
-    round_state: i64,
+    teams: BTreeMap<u32, (u8, i64)>,
+    timers: BTreeMap<u32, RoundTimer>,
+    round_state: RoundState,
     /// Server time the match started (m_flMapResetTime) and the current round went live.
     match_start: f32,
     round_live_since: Option<f32>,
@@ -66,7 +101,7 @@ pub struct Extractor {
     medic_charge: HashMap<u32, (u8, bool)>,
     /// Payload: tf-demo-parser takes every func_tracktrain for a cart, but only a payload
     /// map has a team_train_watcher (KotH and other maps use trains for lifts and props).
-    train_watchers: HashMap<u32, TrainWatcher>,
+    train_watchers: BTreeMap<u32, TrainWatcher>,
     /// Entity -> the entity it is attached to (`moveparent`), to find a watcher's cart.
     parents: HashMap<u32, u32>,
     /// World positions of prop entities: a payload cart can be a free physics prop.
@@ -118,30 +153,65 @@ struct RoundTimer {
 
 impl RoundTimer {
     /// Seconds left at a server tick; the end time is in server time (tick * interval).
-    fn remaining_at(&self, tick: u32) -> f32 {
-        if self.paused { self.remaining } else { (self.end_time - tick as f32 * TICK_INTERVAL).max(0.0) }
+    fn remaining_at(&self, tick: u32, interval: f32) -> f32 {
+        if self.paused { self.remaining } else { (self.end_time - tick as f32 * interval).max(0.0) }
     }
 }
 
-fn round_state_name(s: i64) -> &'static str {
-    match s {
-        0 => "init",
-        1 => "pregame",
-        2 => "start_game",
-        3 => "preround",
-        4 => "running",
-        5 => "team_win",
-        6 => "restart",
-        7 => "stalemate",
-        8 => "game_over",
-        9 => "bonus",
-        _ => "between_rounds",
+/// CTFGameRulesProxy m_iRoundState (gamerules_roundstate_t).
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum RoundState {
+    #[default]
+    Init,
+    Pregame,
+    StartGame,
+    Preround,
+    Running,
+    TeamWin,
+    Restart,
+    Stalemate,
+    GameOver,
+    Bonus,
+    BetweenRounds,
+}
+
+impl RoundState {
+    fn from_raw(v: i64) -> Self {
+        match v {
+            0 => Self::Init,
+            1 => Self::Pregame,
+            2 => Self::StartGame,
+            3 => Self::Preround,
+            4 => Self::Running,
+            5 => Self::TeamWin,
+            6 => Self::Restart,
+            7 => Self::Stalemate,
+            8 => Self::GameOver,
+            9 => Self::Bonus,
+            _ => Self::BetweenRounds,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Pregame => "pregame",
+            Self::StartGame => "start_game",
+            Self::Preround => "preround",
+            Self::Running => "running",
+            Self::TeamWin => "team_win",
+            Self::Restart => "restart",
+            Self::Stalemate => "stalemate",
+            Self::GameOver => "game_over",
+            Self::Bonus => "bonus",
+            Self::BetweenRounds => "between_rounds",
+        }
     }
 }
 
 #[derive(Default, Clone)]
 struct Medigun {
-    owner: u32,
+    owner: Option<u32>,
     item: i64,
     releasing: bool,
     resist: i64,
@@ -190,7 +260,7 @@ fn resist_name(r: i64) -> &'static str {
 
 fn has_cond(words: &[u32; 6], c: PlayerCondition) -> bool {
     let n = c as usize;
-    let word = if n < 32 { words[0] | words[1] } else { words[n / 32 + 1] };
+    let word = if n < 32 { words[0] | words[1] } else { words.get(n / 32 + 1).copied().unwrap_or(0) };
     word >> (n % 32) & 1 == 1
 }
 
@@ -243,8 +313,6 @@ pub struct ControlPoint {
     pub members: [u8; 4],
 }
 
-const TICK_INTERVAL: f32 = 0.015;
-
 impl ControlPoint {
     /// Progress per second towards capping (negative while it decays back), the way
     /// TF2's client extrapolates between lazy updates: each extra capper adds 1/n.
@@ -257,23 +325,22 @@ impl ControlPoint {
         if self.team_in_zone == self.capping_team {
             (1..=self.members[team].max(1)).map(|n| 1.0 / f32::from(n)).sum::<f32>() / time
         } else if self.team_in_zone == 0 {
-            // Unattended progress decays over mp_capdeteriorate_time (default 90 s).
-            -1.0 / 90.0
+            -1.0 / CAP_DECAY_SECONDS
         } else {
             0.0
         }
     }
 
-    pub fn progress_at(&self, tick: u32) -> f32 {
+    pub fn progress_at(&self, tick: u32, interval: f32) -> f32 {
         if self.capping_team == 0 {
             return 0.0;
         }
-        let elapsed = tick.saturating_sub(self.progress_tick) as f32 * TICK_INTERVAL;
+        let elapsed = tick.saturating_sub(self.progress_tick) as f32 * interval;
         (self.progress + self.cap_rate() * elapsed).clamp(0.0, 1.0)
     }
 
-    fn advance(&mut self, tick: u32) {
-        self.progress = self.progress_at(tick);
+    fn advance(&mut self, tick: u32, interval: f32) {
+        self.progress = self.progress_at(tick, interval);
         self.progress_tick = tick;
     }
 }
@@ -281,6 +348,16 @@ impl ControlPoint {
 /// Entity handles carry the entity index in their low 11 bits.
 pub fn handle_entity(handle: i64) -> u32 {
     (handle & 0x7ff) as u32
+}
+
+/// The entity a handle prop points at; none for the invalid handle (and 0, the world).
+fn opt_handle(handle: i64) -> Option<u32> {
+    (handle != INVALID_EHANDLE && handle != 0).then(|| handle_entity(handle))
+}
+
+/// A team number prop; out of range values are no team.
+fn team_byte(v: i64) -> u8 {
+    u8::try_from(v).unwrap_or(0)
 }
 
 pub fn team_name(t: Team) -> &'static str {
@@ -292,13 +369,11 @@ pub fn team_name(t: Team) -> &'static str {
     }
 }
 
-fn team_num(n: u8) -> &'static str {
-    match n {
-        2 => "red",
-        3 => "blue",
-        1 => "spectator",
-        _ => "none",
-    }
+fn team_num<N>(n: N) -> &'static str
+where
+    u8: TryFrom<N>,
+{
+    team_name(Team::new(n))
 }
 
 pub fn class_name(c: Class) -> &'static str {
@@ -364,18 +439,22 @@ impl Extractor {
         &self.gs.state
     }
 
+    /// Seconds per server tick.
+    fn interval(&self) -> f32 {
+        self.tick_interval.unwrap_or(DEFAULT_TICK_INTERVAL)
+    }
+
     fn projectile_kind(&self, pr: &Projectile) -> String {
         projectile_kind(pr.ty, self.class_names.get(usize::from(pr.class)).map_or("", String::as_str))
     }
 
     /// SourceTV keeps an exploded projectile's entity around, unchanging, for seconds
     /// before deleting it; a game client hides it at the explosion, so do the same: drop
-    /// the nearest matching projectile. Weapon id 22 (rocket launchers) explodes rockets,
-    /// the others grenades.
+    /// the nearest matching projectile: rockets for rocket launchers, grenades otherwise.
     fn exploded(&mut self, props: &[SendProp]) {
         let axis = |i: usize| prop_f(props, &format!("m_vecOrigin[{i}]")).unwrap_or(0.0);
         let origin = Vector { x: axis(0), y: axis(1), z: axis(2) };
-        let rocket = prop_i(props, "m_iWeaponID").unwrap_or(0) == 22;
+        let rocket = prop_i(props, "m_iWeaponID").unwrap_or(0) == WEAPON_ROCKET_LAUNCHER;
         let nearest = self
             .gs
             .state
@@ -386,7 +465,7 @@ impl Extractor {
                 let d = p.position - origin;
                 (p.id, (d.x * d.x + d.y * d.y + d.z * d.z).sqrt())
             })
-            .filter(|(_, d)| *d < 150.0)
+            .filter(|(_, d)| *d < EXPLOSION_RADIUS)
             .min_by(|a, b| a.1.total_cmp(&b.1));
         if let Some((id, _)) = nearest {
             self.gs.state.projectiles.remove(&id);
@@ -396,10 +475,10 @@ impl Extractor {
     /// While running, the last state transition is when the round went live; a win or
     /// stalemate stops its clock and the next pre-round clears it.
     fn track_round_time(&mut self) {
-        let now = self.server_tick as f32 * TICK_INTERVAL;
+        let now = self.server_tick as f32 * self.interval();
         match self.round_state {
-            4 => (self.round_live_since, self.round_ended_at) = (Some(self.state_transition), None),
-            3 => (self.round_live_since, self.round_ended_at) = (None, None),
+            RoundState::Running => (self.round_live_since, self.round_ended_at) = (Some(self.state_transition), None),
+            RoundState::Preround => (self.round_live_since, self.round_ended_at) = (None, None),
             _ if self.round_live_since.is_some() && self.round_ended_at.is_none() => self.round_ended_at = Some(now),
             _ => {}
         }
@@ -409,11 +488,11 @@ impl Extractor {
     fn time_left(&self) -> Option<f32> {
         let limit = self.time_limit?;
         (self.match_start > 0.0)
-            .then(|| (limit * 60.0 - (self.server_tick as f32 * TICK_INTERVAL - self.match_start)).max(0.0))
+            .then(|| (limit * 60.0 - (self.server_tick as f32 * self.interval() - self.match_start)).max(0.0))
     }
 
     fn round_time(&self) -> Option<f32> {
-        let now = self.server_tick as f32 * TICK_INTERVAL;
+        let now = self.server_tick as f32 * self.interval();
         self.round_live_since.map(|t| (self.round_ended_at.unwrap_or(now) - t).max(0.0))
     }
 
@@ -427,7 +506,7 @@ impl Extractor {
                 self.medic_charge.remove(&ent);
                 continue;
             }
-            let gun = self.mediguns.values().find(|m| m.owner == ent);
+            let gun = self.mediguns.values().find(|m| m.owner == Some(ent));
             let now = (p.charge, gun.is_some_and(|m| m.releasing));
             if let Some(&(charge, releasing)) = self.medic_charge.get(&ent) {
                 let medigun = gun.map(|m| medigun_kind(m.item));
@@ -455,6 +534,7 @@ impl Extractor {
         self.parents.remove(&idx);
         self.prop_origins.remove(&idx);
         self.sentries.remove(&idx);
+        self.medic_charge.remove(&idx);
     }
 
     fn entity_of_user(&self, user_id: u16) -> Option<u32> {
@@ -466,7 +546,7 @@ impl Extractor {
     }
 
     fn medigun_of(&self, player_ent: u32) -> Option<Value> {
-        let m = self.mediguns.values().find(|m| m.owner == player_ent)?;
+        let m = self.mediguns.values().find(|m| m.owner == Some(player_ent))?;
         let kind = medigun_kind(m.item);
         Some(json!({
             "kind": kind,
@@ -535,9 +615,9 @@ impl Extractor {
             if self.control_points.len() <= point {
                 self.control_points.resize(point + 1, ControlPoint::default());
             }
-            let tick = self.server_tick;
+            let (tick, interval) = (self.server_tick, self.interval());
             let cp = &mut self.control_points[point];
-            cp.advance(tick);
+            cp.advance(tick, interval);
             match &p.value {
                 SendPropValue::Float(f) if table.as_str() == "m_flTeamCapTime" => cp.cap_time[team] = *f,
                 SendPropValue::Integer(i) => cp.members[team] = (*i).clamp(0, 255) as u8,
@@ -548,12 +628,12 @@ impl Extractor {
         if idx >= 8 {
             return;
         }
-        let tick = self.server_tick;
+        let (tick, interval) = (self.server_tick, self.interval());
         if self.control_points.len() <= idx {
             self.control_points.resize(idx + 1, ControlPoint::default());
         }
         let cp = &mut self.control_points[idx];
-        cp.advance(tick);
+        cp.advance(tick, interval);
         let int = match &p.value {
             SendPropValue::Integer(i) => *i,
             SendPropValue::Float(f) => *f as i64,
@@ -565,19 +645,19 @@ impl Extractor {
                     cp.pos = Some(v);
                 }
             }
-            "m_iOwner" => cp.owner = int as u8,
+            "m_iOwner" => cp.owner = team_byte(int),
             "m_iCappingTeam" => {
-                if cp.capping_team != int as u8 {
+                if cp.capping_team != team_byte(int) {
                     cp.progress = 0.0;
                 }
-                cp.capping_team = int as u8;
+                cp.capping_team = team_byte(int);
             }
             "m_flLazyCapPerc" => {
                 if let SendPropValue::Float(f) = p.value {
                     cp.progress = (1.0 - f).clamp(0.0, 1.0);
                 }
             }
-            "m_iTeamInZone" => cp.team_in_zone = int as u8,
+            "m_iTeamInZone" => cp.team_in_zone = team_byte(int),
             "m_bCPLocked" => cp.locked = int != 0,
             "m_bBlocked" => cp.blocked = int != 0,
             _ => {}
@@ -599,8 +679,8 @@ impl Extractor {
                     "assister": if d.assister == u16::MAX { Value::Null } else { Self::opt_user(d.assister) },
                     "weapon": d.weapon.to_string(),
                     "crit": d.damage_bits & DMG_CRIT != 0,
-                    "headshot": d.custom_kill == 1,
-                    "backstab": d.custom_kill == 2,
+                    "headshot": d.custom_kill == CUSTOM_KILL_HEADSHOT,
+                    "backstab": d.custom_kill == CUSTOM_KILL_BACKSTAB,
                     "suicide": d.attacker == 0 || d.attacker == d.user_id,
                     "dominated": d.death_flags & DEATH_DOMINATION != 0,
                     "revenge": d.death_flags & DEATH_REVENGE != 0,
@@ -622,23 +702,28 @@ impl Extractor {
                 "minicrit": h.mini_crit,
                 "weapon_id": h.weapon_id,
             })),
-            GameEvent::PlayerSpawn(s) => self.pending_spawns.borrow_mut().push((
-                s.user_id,
-                json!({
-                    "type": "spawn",
-                    "player": s.user_id,
-                    "team": team_num(s.team as u8),
-                    "class": class_num(s.class),
-                    "tick": self.server_tick,
-                }),
-            )),
+            GameEvent::PlayerSpawn(s) => {
+                let mut pending = self.pending_spawns.borrow_mut();
+                if pending.len() < MAX_PENDING_SPAWNS {
+                    pending.push((
+                        s.user_id,
+                        json!({
+                            "type": "spawn",
+                            "player": s.user_id,
+                            "team": team_num(s.team),
+                            "class": class_num(s.class),
+                            "tick": self.server_tick,
+                        }),
+                    ));
+                }
+            }
             GameEvent::PlayerChargeDeployed(c) => self.push(json!({
                 "type": "uber",
                 "medic": c.user_id,
                 "target": Self::opt_user(c.target_id),
                 "medigun": self
                     .entity_of_user(c.user_id)
-                    .and_then(|e| self.mediguns.values().find(|m| m.owner == e))
+                    .and_then(|e| self.mediguns.values().find(|m| m.owner == Some(e)))
                     .map(|m| medigun_kind(m.item)),
             })),
             GameEvent::PlayerTeam(t) => self.push(json!({
@@ -731,7 +816,7 @@ impl Extractor {
     }
 
     fn temp_entity(&self, class: &str, props: &[SendProp]) {
-        if std::env::var("STVMAP_DEBUG").is_ok_and(|v| v == class) {
+        if debug(class) {
             for p in props {
                 eprintln!("{class} {:?} = {:?}", p.identifier.names(), p.value);
             }
@@ -739,7 +824,9 @@ impl Extractor {
         match class {
             "CTEFireBullets" => {
                 // m_iPlayer is the player's entity index minus one.
-                let player = self.user_of_entity(prop_i(props, "m_iPlayer").unwrap_or(0) as u32 + 1);
+                let player = prop_i(props, "m_iPlayer")
+                    .and_then(|i| u32::try_from(i).ok()?.checked_add(1))
+                    .and_then(|ent| self.user_of_entity(ent));
                 self.push(json!({
                     "type": "shot",
                     "player": player,
@@ -859,7 +946,7 @@ impl Extractor {
                         v["yaw"] = json!(round1(t.yaw));
                         v["aim"] = json!(round1(t.aim()));
                         v["target"] = json!(t.enemy.and_then(|e| self.user_of_entity(e)));
-                        v["attacking"] = json!(t.state == 2);
+                        v["attacking"] = json!(t.state == SENTRY_STATE_ATTACKING);
                     }
                 }
                 v
@@ -878,7 +965,7 @@ impl Extractor {
                     "owner": team_num(cp.owner),
                     "capping_team": team_num(cp.capping_team),
                     // m_flLazyCapPerc counts down from 1.0 while a team caps; it is stale otherwise.
-                    "cap_progress": round2(cp.progress_at(self.server_tick)),
+                    "cap_progress": round2(cp.progress_at(self.server_tick, self.interval())),
                     "cap_rate": (f64::from(cp.cap_rate()) * 1000.0).round() / 1000.0,
                     "locked": cp.locked,
                     "blocked": cp.blocked,
@@ -916,12 +1003,12 @@ impl Extractor {
             "projectiles": projectiles,
             "buildings": buildings,
             "objectives": objectives,
-            "round": round_state_name(self.round_state),
+            "round": self.round_state.name(),
             // Seconds since the round went live and since the match started (null if unknown).
             "round_time": self.round_time().map(round1),
             "time_left": self.time_left().map(round1),
             "win_limit": self.win_limit,
-            "match_time": (self.match_start > 0.0).then(|| round1((self.server_tick as f32 * TICK_INTERVAL - self.match_start).max(0.0))),
+            "match_time": (self.match_start > 0.0).then(|| round1((self.server_tick as f32 * self.interval() - self.match_start).max(0.0))),
             "score": {
                 "red": self.teams.values().find(|t| t.0 == 2).map_or(0, |t| t.1),
                 "blue": self.teams.values().find(|t| t.0 == 3).map_or(0, |t| t.1),
@@ -932,7 +1019,7 @@ impl Extractor {
                 .filter(|t| t.show && !t.disabled)
                 .map(|t| json!({
                     "team": team_num(t.team),
-                    "remaining": round1(t.remaining_at(self.server_tick)),
+                    "remaining": round1(t.remaining_at(self.server_tick, self.interval())),
                     "paused": t.paused,
                     "setup": t.setup,
                 }))
@@ -1004,8 +1091,7 @@ impl MessageHandler for Extractor {
             self.gs.handle_message(message, tick, state);
         }
         if let Message::PacketEntities(pe) = message {
-            let dbg = std::env::var("STVMAP_DEBUG").ok();
-            if let Some(ent) = dbg.as_deref().and_then(|d| d.strip_prefix("ent:")).and_then(|e| e.parse::<u32>().ok()) {
+            if let Some(ent) = debug_entity() {
                 for e in pe.entities.iter().filter(|e| u32::from(e.entity_index) == ent) {
                     let class = state.server_classes.get(usize::from(e.server_class)).map_or("?", |c| c.name.as_str());
                     eprintln!(
@@ -1038,9 +1124,9 @@ impl MessageHandler for Extractor {
                 if let Some(parent) =
                     e.props.iter().find(|p| p.identifier.names().is_some_and(|(_, n)| n.as_str() == "moveparent"))
                 {
-                    match i64::try_from(&parent.value).unwrap_or(0x1fffff) {
-                        0x1fffff => self.parents.remove(&idx),
-                        h => self.parents.insert(idx, handle_entity(h)),
+                    match opt_handle(i64::try_from(&parent.value).unwrap_or(INVALID_EHANDLE)) {
+                        None => self.parents.remove(&idx),
+                        Some(p) => self.parents.insert(idx, p),
                     };
                 }
                 if matches!(
@@ -1055,7 +1141,7 @@ impl MessageHandler for Extractor {
                     self.gs.state.projectiles.remove(&e.entity_index);
                 }
                 let Some(class) = state.server_classes.get(usize::from(e.server_class)) else { continue };
-                if dbg.as_deref() == Some(class.name.as_str()) {
+                if debug(class.name.as_str()) {
                     for p in e.props(state) {
                         eprintln!(
                             "{}#{} {:?} = {:?}",
@@ -1082,7 +1168,7 @@ impl MessageHandler for Extractor {
                             let Some((_, name)) = p.identifier.names() else { continue };
                             let v = i64::try_from(&p.value).unwrap_or_default();
                             match name.as_str() {
-                                "m_iTeamNum" => t.0 = v as u8,
+                                "m_iTeamNum" => t.0 = team_byte(v),
                                 "m_iScore" => t.1 = v,
                                 _ => {}
                             }
@@ -1095,7 +1181,7 @@ impl MessageHandler for Extractor {
                             let f = f32::try_from(&p.value)
                                 .unwrap_or_else(|_| i64::try_from(&p.value).unwrap_or_default() as f32);
                             match name.as_str() {
-                                "m_iTeamNum" => t.team = f as u8,
+                                "m_iTeamNum" => t.team = team_byte(f as i64),
                                 "m_flTimerEndTime" => t.end_time = f,
                                 "m_flTimeRemaining" => t.remaining = f,
                                 "m_bTimerPaused" => t.paused = f != 0.0,
@@ -1124,7 +1210,7 @@ impl MessageHandler for Extractor {
                                         sentry.yaw = a.y;
                                     }
                                 }
-                                (_, "m_hEnemy") => sentry.enemy = (v != 0x1fffff && v != 0).then(|| handle_entity(v)),
+                                (_, "m_hEnemy") => sentry.enemy = opt_handle(v),
                                 (_, "m_iState") => sentry.state = v,
                                 (_, "m_iAmmoShells") => {
                                     if let Some(before) = sentry.shells
@@ -1155,11 +1241,11 @@ impl MessageHandler for Extractor {
                             let Some((_, name)) = p.identifier.names() else { continue };
                             let v = i64::try_from(&p.value).unwrap_or_default();
                             match name.as_str() {
-                                "m_iTeamNum" => w.team = v as u8,
+                                "m_iTeamNum" => w.team = team_byte(v),
                                 "m_flTotalProgress" => w.progress = f32::try_from(&p.value).unwrap_or_default(),
                                 "m_nNumCappers" => w.cappers = v,
                                 "m_iTrainSpeedLevel" => w.speed = v,
-                                "m_hGlowEnt" => w.glow = (v != 0x1fffff).then(|| handle_entity(v)),
+                                "m_hGlowEnt" => w.glow = opt_handle(v),
                                 _ => {}
                             }
                         }
@@ -1168,7 +1254,10 @@ impl MessageHandler for Extractor {
                         for p in e.props(state) {
                             let Some((_, name)) = p.identifier.names() else { continue };
                             match name.as_str() {
-                                "m_iRoundState" => self.round_state = i64::try_from(&p.value).unwrap_or_default(),
+                                "m_iRoundState" => {
+                                    self.round_state =
+                                        RoundState::from_raw(i64::try_from(&p.value).unwrap_or_default());
+                                }
                                 "m_flMapResetTime" => self.match_start = f32::try_from(&p.value).unwrap_or_default(),
                                 "m_flStateTransitionTime" => {
                                     self.state_transition = f32::try_from(&p.value).unwrap_or_default();
@@ -1184,11 +1273,11 @@ impl MessageHandler for Extractor {
                             let Some((_, name)) = p.identifier.names() else { continue };
                             let v = i64::try_from(&p.value).unwrap_or_default();
                             match name.as_str() {
-                                "m_hOwner" => m.owner = handle_entity(v),
+                                "m_hOwner" => m.owner = opt_handle(v),
                                 "m_iItemDefinitionIndex" => m.item = v,
                                 "m_bChargeRelease" => m.releasing = v != 0,
                                 "m_nChargeResistType" => m.resist = v,
-                                "m_hHealingTarget" => m.target = (v != 0x1fffff).then(|| handle_entity(v)),
+                                "m_hHealingTarget" => m.target = opt_handle(v),
                                 _ => {}
                             }
                         }
@@ -1224,10 +1313,11 @@ impl MessageHandler for Extractor {
         match message {
             Message::NetTick(t) => self.server_tick = u32::from(t.tick),
             Message::SetConVar(c) => {
-                let dbg = std::env::var("STVMAP_DEBUG").is_ok_and(|v| v == "convars");
+                let dbg = debug("convars");
                 for v in &c.vars {
                     if dbg {
-                        eprintln!("convar {} = {}", v.key, v.value);
+                        // Debug formatting escapes control characters from the server.
+                        eprintln!("convar {:?} = {:?}", v.key, v.value);
                     }
                     match v.key.as_str() {
                         "mp_timelimit" => self.time_limit = v.value.parse().ok().filter(|m: &f32| *m > 0.0),
@@ -1237,6 +1327,9 @@ impl MessageHandler for Extractor {
                 }
             }
             Message::ServerInfo(info) => {
+                if info.interval_per_tick > 0.0 {
+                    self.tick_interval = Some(info.interval_per_tick);
+                }
                 self.push(json!({
                     "type": "server",
                     "map": info.map,
@@ -1247,7 +1340,7 @@ impl MessageHandler for Extractor {
                 }));
             }
             Message::GameEvent(e) => {
-                if std::env::var("STVMAP_DEBUG").is_ok_and(|v| v == "gameevents") {
+                if debug("gameevents") {
                     eprintln!("gameevent {:?}", e.event.event_type());
                 }
                 self.game_event(&e.event);
@@ -1277,7 +1370,7 @@ impl MessageHandler for Extractor {
                     prev = Some((class_id, props));
                 }
             }
-            Message::UserMessage(UserMessage::Unknown(u)) if u.raw_type == 3 => {
+            Message::UserMessage(UserMessage::Unknown(u)) if u.raw_type == USER_MESSAGE_SAY_TEXT => {
                 // SayText: console `say` and server notices. u8 client, string text.
                 let mut d = u.data.clone();
                 let client: u8 = d.read().unwrap_or(0);
@@ -1346,6 +1439,25 @@ mod tests {
     fn entity_handles() {
         assert_eq!(handle_entity(40967), 7);
         assert_eq!(handle_entity(7), 7);
+        assert_eq!(opt_handle(40967), Some(7));
+        assert_eq!(opt_handle(INVALID_EHANDLE), None);
+        assert_eq!(opt_handle(0), None);
+    }
+
+    #[test]
+    fn team_numbers_out_of_range_are_no_team() {
+        assert_eq!(team_num(2u8), "red");
+        assert_eq!(team_num(3u16), "blue");
+        assert_eq!(team_num(258u16), "none", "not truncated to red");
+        assert_eq!(team_byte(-1), 0);
+    }
+
+    #[test]
+    fn a_reused_entity_slot_forgets_the_medic_charge() {
+        let mut x = Extractor::default();
+        x.medic_charge.insert(5, (100, true));
+        x.forget_entity(5);
+        assert!(x.medic_charge.is_empty());
     }
 }
 
@@ -1493,7 +1605,7 @@ mod medic_tests {
             team: Team::Red,
         });
         x.gs.state.players.push(p);
-        x.mediguns.insert(9, Medigun { owner: 5, item: 35, releasing, ..Default::default() });
+        x.mediguns.insert(9, Medigun { owner: Some(5), item: 35, releasing, ..Default::default() });
         x
     }
 
@@ -1537,9 +1649,9 @@ mod timer_tests {
     use super::*;
 
     fn at(x: &mut Extractor, state: i64, transition: f32, seconds: f32) -> Option<f32> {
-        x.round_state = state;
+        x.round_state = RoundState::from_raw(state);
         x.state_transition = transition;
-        x.server_tick = (seconds / TICK_INTERVAL).round() as u32;
+        x.server_tick = (seconds / DEFAULT_TICK_INTERVAL).round() as u32;
         x.track_round_time();
         x.round_time().map(|t| (t * 10.0).round() / 10.0)
     }
@@ -1550,9 +1662,9 @@ mod timer_tests {
         assert_eq!(x.time_left(), None, "no mp_timelimit");
         x.time_limit = Some(30.0);
         x.match_start = 200.0;
-        x.server_tick = (500.0 / TICK_INTERVAL) as u32;
+        x.server_tick = (500.0 / DEFAULT_TICK_INTERVAL) as u32;
         assert!((x.time_left().unwrap() - 1500.0).abs() < 0.1, "{:?}", x.time_left());
-        x.server_tick = (3000.0 / TICK_INTERVAL) as u32;
+        x.server_tick = (3000.0 / DEFAULT_TICK_INTERVAL) as u32;
         assert_eq!(x.time_left(), Some(0.0));
     }
 
@@ -1569,10 +1681,11 @@ mod timer_tests {
     #[test]
     fn timer_counts_down_in_server_time_unless_paused() {
         let mut t = RoundTimer { end_time: 100.0, remaining: 42.0, ..Default::default() };
-        assert!((t.remaining_at(4000) - 40.0).abs() < 1e-3, "tick 4000 is 60 s of server time");
-        assert_eq!(t.remaining_at(9000), 0.0);
+        let at = |t: &RoundTimer, tick| t.remaining_at(tick, DEFAULT_TICK_INTERVAL);
+        assert!((at(&t, 4000) - 40.0).abs() < 1e-3, "tick 4000 is 60 s of server time");
+        assert_eq!(at(&t, 9000), 0.0);
         t.paused = true;
-        assert_eq!(t.remaining_at(4000), 42.0);
+        assert_eq!(at(&t, 4000), 42.0);
     }
 }
 
@@ -1607,11 +1720,11 @@ mod cap_tests {
     fn progress_rolls_forward_when_the_rate_changes() {
         let mut cp = point(2, 2, 1);
         // 1 s capping alone, then a second capper joins for 1 s.
-        cp.advance(0);
-        cp.advance(67);
+        cp.advance(0, DEFAULT_TICK_INTERVAL);
+        cp.advance(67, DEFAULT_TICK_INTERVAL);
         cp.members[2] = 2;
-        let p = cp.progress_at(134);
+        let p = cp.progress_at(134, DEFAULT_TICK_INTERVAL);
         assert!((p - (0.1005 + 0.15 * 1.005)).abs() < 0.01, "{p}");
-        assert_eq!(point(0, 0, 0).progress_at(1000), 0.0);
+        assert_eq!(point(0, 0, 0).progress_at(1000, DEFAULT_TICK_INTERVAL), 0.0);
     }
 }
