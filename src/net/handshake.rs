@@ -6,13 +6,37 @@
 
 use super::{messages, netchan};
 use anyhow::{Context, Result, anyhow, bail};
+use std::fmt;
+use std::hash::{BuildHasher, RandomState};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 const PROTOCOL_VERSION: i32 = 24;
 const AUTH_HASHEDCDKEY: u32 = 2;
-const MAGIC_VERSION: u32 = 0x5A4F4933;
+const MAGIC_VERSION: u32 = 0x5A4F_4933;
+const OOB_PREFIX: [u8; 4] = [0xff; 4];
 
+/// Offsets in the 'A' challenge reply: magic, server challenge, our nonce echoed, auth protocol.
+const CHALLENGE_MAGIC: usize = 5;
+const CHALLENGE_SERVER: usize = 9;
+const CHALLENGE_NONCE: usize = 13;
+const CHALLENGE_AUTH: usize = 17;
+const CHALLENGE_LEN: usize = 21;
+
+/// The server refused the connection ('9' reply); the reason is the server's text,
+/// often a `#GameUI_ServerReject…` localization token.
+#[derive(Debug)]
+pub struct Rejected(pub String);
+
+impl fmt::Display for Rejected {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "connect refused: {}", self.0)
+    }
+}
+
+impl std::error::Error for Rejected {}
+
+#[derive(Debug)]
 pub struct Connection {
     pub sock: UdpSocket,
     pub challenge: u32,
@@ -21,7 +45,8 @@ pub struct Connection {
 }
 
 fn oob(cmd: u8) -> Vec<u8> {
-    let mut v = vec![0xff, 0xff, 0xff, 0xff, cmd];
+    let mut v = OOB_PREFIX.to_vec();
+    v.push(cmd);
     v.reserve(64);
     v
 }
@@ -63,46 +88,56 @@ pub struct Challenge {
     pub auth_proto: u32,
 }
 
-pub fn parse_challenge(data: &[u8]) -> Result<Challenge> {
-    if data.len() < 5 || data[..4] != [0xff; 4] {
+/// Parses the 'A' reply to our getchallenge, which must echo our `nonce`.
+pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Challenge> {
+    if data.len() < 5 || data[..4] != OOB_PREFIX {
         bail!("not a connectionless reply");
     }
     match data[4] {
-        b'9' => bail!("refused: {}", reject_reason(data)),
+        b'9' => return Err(Rejected(reject_reason(data)).into()),
         b'A' => {}
-        c => bail!("unexpected reply {:?}", c as char),
+        c => bail!("unexpected reply {:?}", char::from(c)),
     }
-    if data.len() < 21 {
+    if data.len() < CHALLENGE_LEN {
         bail!("truncated challenge");
     }
-    let word = |o: usize| u32::from_le_bytes(data[o..o + 4].try_into().unwrap_or_default());
-    if word(5) != MAGIC_VERSION {
-        bail!("bad challenge magic {:#x}", word(5));
+    let word = |o: usize| u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
+    if word(CHALLENGE_MAGIC) != MAGIC_VERSION {
+        bail!("bad challenge magic {:#x}", word(CHALLENGE_MAGIC));
     }
-    Ok(Challenge { challenge: word(9), auth_proto: word(17) })
+    if word(CHALLENGE_NONCE) != nonce {
+        bail!("challenge reply for another client");
+    }
+    Ok(Challenge { challenge: word(CHALLENGE_SERVER), auth_proto: word(CHALLENGE_AUTH) })
 }
 
 pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, timeout: Duration) -> Result<Connection> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     sock.connect(server)?;
     sock.set_read_timeout(Some(timeout))?;
-    let nonce: u32 = rand_u32();
+    let nonce = random_u32();
     sock.send(&build_getchallenge(nonce))?;
     let mut buf = vec![0u8; 65536];
     let n = sock.recv(&mut buf).context("no challenge reply")?;
-    let ch = parse_challenge(&buf[..n])?;
+    let ch = parse_challenge(&buf[..n], nonce)?;
     if ch.auth_proto != AUTH_HASHEDCDKEY {
         bail!("server wants auth protocol {} (SourceTV accepts {})", ch.auth_proto, AUTH_HASHEDCDKEY);
     }
     sock.send(&build_connect(nonce, ch.challenge, name, password, build))?;
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
+    loop {
+        // Wait only for what is left of the timeout, however many datagrams arrive.
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        sock.set_read_timeout(Some(left))?;
         let Ok(n) = sock.recv(&mut buf) else { break };
         let data = &buf[..n];
         if netchan::classify(data) == netchan::Kind::Oob && n > 4 {
             match data[4] {
                 b'B' => return Ok(Connection { sock, challenge: ch.challenge, pending: None }),
-                b'9' => bail!("connect refused: {}", reject_reason(data)),
+                b'9' => return Err(Rejected(reject_reason(data)).into()),
                 _ => continue,
             }
         }
@@ -117,9 +152,10 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     bail!("no accept within {timeout:?}")
 }
 
-fn rand_u32() -> u32 {
-    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    (t.as_nanos() as u32) ^ std::process::id().rotate_left(16)
+/// An unpredictable nonce, so a spoofer cannot forge the challenge reply. `RandomState`
+/// is keyed from the OS random source; no extra dependency needed.
+fn random_u32() -> u32 {
+    RandomState::new().hash_one(Instant::now()) as u32
 }
 
 #[derive(Debug, Default, Clone)]
@@ -137,7 +173,8 @@ pub fn a2s_info(server: SocketAddr, timeout: Duration) -> Result<ServerInfo> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     sock.connect(server)?;
     sock.set_read_timeout(Some(timeout))?;
-    let mut req = vec![0xff, 0xff, 0xff, 0xff, b'T'];
+    let mut req = OOB_PREFIX.to_vec();
+    req.push(b'T');
     req.extend_from_slice(b"Source Engine Query\0");
     let mut buf = vec![0u8; 4096];
     let mut extra: Vec<u8> = Vec::new();
@@ -147,7 +184,7 @@ pub fn a2s_info(server: SocketAddr, timeout: Duration) -> Result<ServerInfo> {
         sock.send(&msg)?;
         let n = sock.recv(&mut buf).context("no A2S_INFO reply")?;
         let data = &buf[..n];
-        if n >= 9 && data[4] == b'A' {
+        if n >= 9 && data[..4] == OOB_PREFIX && data[4] == b'A' {
             extra = data[5..9].to_vec();
             continue;
         }
@@ -157,7 +194,7 @@ pub fn a2s_info(server: SocketAddr, timeout: Duration) -> Result<ServerInfo> {
 }
 
 pub fn parse_a2s_info(data: &[u8]) -> Result<ServerInfo> {
-    if data.len() < 6 || data[4] != b'I' {
+    if data.len() < 6 || data[..4] != OOB_PREFIX || data[4] != b'I' {
         bail!("not an A2S_INFO reply");
     }
     let mut pos = 6;
@@ -209,11 +246,22 @@ mod tests {
         ok.extend_from_slice(&77u32.to_le_bytes());
         ok.extend_from_slice(&5u32.to_le_bytes());
         ok.extend_from_slice(&2u32.to_le_bytes());
-        assert_eq!(parse_challenge(&ok).unwrap(), Challenge { challenge: 77, auth_proto: 2 });
+        assert_eq!(parse_challenge(&ok, 5).unwrap(), Challenge { challenge: 77, auth_proto: 2 });
+        assert!(parse_challenge(&ok, 6).is_err(), "reply echoing another nonce");
         let mut rej = vec![0xff, 0xff, 0xff, 0xff, b'9', 0, 0, 0, 0];
         rej.extend_from_slice(b"Bad password\0");
-        let err = parse_challenge(&rej).unwrap_err().to_string();
-        assert!(err.contains("Bad password"), "{err}");
+        let err = parse_challenge(&rej, 5).unwrap_err();
+        assert_eq!(err.downcast_ref::<Rejected>().map(|r| r.0.as_str()), Some("Bad password"));
+    }
+
+    #[test]
+    fn nonces_differ() {
+        assert_ne!(random_u32(), random_u32());
+    }
+
+    #[test]
+    fn a2s_info_requires_connectionless_prefix() {
+        assert!(parse_a2s_info(b"\xfe\xff\xff\xffI\x11rest").is_err());
     }
 
     #[test]
