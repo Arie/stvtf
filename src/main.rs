@@ -5,9 +5,9 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use stvmap::Options;
 use stvmap::capture;
 use stvmap::decode::{self, Tables};
-use stvmap::session::Options;
 use stvmap::watch::{self, Watch};
 
 const USAGE: &str = "\

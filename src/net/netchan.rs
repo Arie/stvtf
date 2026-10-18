@@ -19,7 +19,6 @@ pub const HEADER_MIN: usize = CHECKSUM_START + 1;
 #[derive(Debug, Clone)]
 pub struct Header {
     pub sequence: i32,
-    pub sequence_ack: i32,
     pub flags: u8,
     pub reliable_state: u8,
     pub choked: Option<u8>,
@@ -72,7 +71,6 @@ pub fn decode_header(data: &[u8]) -> Result<Header> {
         bail!("short packet ({} bytes)", data.len());
     }
     let sequence = i32::from_le_bytes(data[0..4].try_into()?);
-    let sequence_ack = i32::from_le_bytes(data[4..8].try_into()?);
     let flags = data[8];
     let mut off = CHECKSUM_START;
     let reliable_state = data[off];
@@ -88,7 +86,7 @@ pub fn decode_header(data: &[u8]) -> Result<Header> {
         challenge = Some(u32::from_le_bytes(b.try_into()?));
         off += 4;
     }
-    Ok(Header { sequence, sequence_ack, flags, reliable_state, choked, challenge, body_offset: off })
+    Ok(Header { sequence, flags, reliable_state, choked, challenge, body_offset: off })
 }
 
 /// The header fields of an outbound packet.
@@ -146,7 +144,6 @@ mod tests {
         assert!(verify_checksum(&pkt));
         let h = decode_header(&pkt).unwrap();
         assert_eq!(h.sequence, 7);
-        assert_eq!(h.sequence_ack, 42);
         assert!(h.reliable());
         assert_eq!(h.reliable_state, 0b101);
         assert_eq!(h.challenge, Some(0xdead_beef));

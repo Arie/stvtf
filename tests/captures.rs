@@ -6,9 +6,9 @@
 
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use stvmap::Options;
 use stvmap::capture;
 use stvmap::decode::{self, Tables};
-use stvmap::session::Options;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 

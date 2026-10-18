@@ -159,18 +159,8 @@ fn random_u32() -> u32 {
     RandomState::new().hash_one(Instant::now()) as u32
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct ServerInfo {
-    pub name: String,
-    pub map: String,
-    pub players: u8,
-    pub max_players: u8,
-    pub version: String,
-    pub password: bool,
-}
-
-/// A2S_INFO, following the challenge some servers require.
-pub fn a2s_info(server: SocketAddr, timeout: Duration) -> Result<ServerInfo> {
+/// The server build (A2S_INFO `version`), following the challenge some servers require.
+pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     sock.connect(server)?;
     sock.set_read_timeout(Some(timeout))?;
@@ -189,37 +179,26 @@ pub fn a2s_info(server: SocketAddr, timeout: Duration) -> Result<ServerInfo> {
             extra = data[5..9].to_vec();
             continue;
         }
-        return parse_a2s_info(data);
+        return parse_a2s_version(data);
     }
     Err(anyhow!("A2S_INFO challenge loop"))
 }
 
-pub fn parse_a2s_info(data: &[u8]) -> Result<ServerInfo> {
+fn parse_a2s_version(data: &[u8]) -> Result<String> {
     if data.len() < 6 || data[..4] != OOB_PREFIX || data[4] != b'I' {
         bail!("not an A2S_INFO reply");
     }
     let mut pos = 6;
-    let mut s = || -> Result<String> {
+    // Skip name, map, folder and game.
+    for _ in 0..4 {
         let rest = data.get(pos..).ok_or_else(|| anyhow!("truncated"))?;
         let end = rest.iter().position(|&b| b == 0).ok_or_else(|| anyhow!("unterminated string"))?;
         pos += end + 1;
-        Ok(String::from_utf8_lossy(&rest[..end]).into_owned())
-    };
-    let name = s()?;
-    let map = s()?;
-    let _folder = s()?;
-    let _game = s()?;
-    let rest = data.get(pos..).ok_or_else(|| anyhow!("truncated"))?;
-    if rest.len() < 9 {
-        bail!("truncated A2S_INFO");
     }
-    let players = rest[2];
-    let max_players = rest[3];
-    let password = rest[7] != 0;
-    let tail = &rest[9..];
+    // app id (u16), players, max players, bots, server type, environment, visibility, VAC.
+    let Some(tail) = data.get(pos + 9..) else { bail!("truncated A2S_INFO") };
     let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
-    let version = String::from_utf8_lossy(&tail[..end]).into_owned();
-    Ok(ServerInfo { name, map, players, max_players, version, password })
+    Ok(String::from_utf8_lossy(&tail[..end]).into_owned())
 }
 
 #[cfg(test)]
@@ -262,11 +241,11 @@ mod tests {
 
     #[test]
     fn a2s_info_requires_connectionless_prefix() {
-        assert!(parse_a2s_info(b"\xfe\xff\xff\xffI\x11rest").is_err());
+        assert!(parse_a2s_version(b"\xfe\xff\xff\xffI\x11rest").is_err());
     }
 
     #[test]
-    fn a2s_info_parse() {
+    fn a2s_version_parse() {
         let mut d = vec![0xff, 0xff, 0xff, 0xff, b'I', 17];
         for s in ["SourceTV", "cp_badlands", "tf", "Team Fortress"] {
             d.extend_from_slice(s.as_bytes());
@@ -275,11 +254,7 @@ mod tests {
         d.extend_from_slice(&440u16.to_le_bytes());
         d.extend_from_slice(&[3, 32, 0, b'p', b'l', 1, 0]);
         d.extend_from_slice(b"11138802\0");
-        let i = parse_a2s_info(&d).unwrap();
-        assert_eq!(i.map, "cp_badlands");
-        assert_eq!(i.players, 3);
-        assert_eq!(i.max_players, 32);
-        assert!(i.password);
-        assert_eq!(i.version, "11138802");
+        assert_eq!(parse_a2s_version(&d).unwrap(), "11138802");
+        assert!(parse_a2s_version(&d[..d.len() - 15]).is_err(), "truncated");
     }
 }
