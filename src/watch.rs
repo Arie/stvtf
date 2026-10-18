@@ -2,7 +2,7 @@
 
 use crate::capture::Recorder;
 use crate::decode::Tables;
-use crate::net::handshake::{self, Rejected};
+use crate::net::handshake::{self, GamePort, Rejected};
 use crate::session::{self, End, Fatal, Options};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -135,7 +135,7 @@ pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
 /// Runs until `stop`, the duration, or a rejection that reconnecting cannot fix,
 /// passing every event and snapshot to `emit`. Blocks the calling thread.
 pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Result<(), WatchError> {
-    let server: SocketAddr = w
+    let mut server: SocketAddr = w
         .target
         .to_socket_addrs()
         .with_context(|| format!("resolving {}", w.target))?
@@ -155,6 +155,7 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Resul
     let deadline = w.duration.map(|d| Instant::now() + d);
     let mut recorder = w.record.as_deref().map(Recorder::create).transpose()?;
     let mut backoff = BACKOFF_MIN;
+    let mut tried_tv_port = false;
     loop {
         if deadline.is_some_and(|d| Instant::now() >= d) || stop.load(Ordering::Relaxed) {
             return Ok(());
@@ -172,6 +173,15 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Resul
             },
             Err(e) => {
                 emit(json!({"type": "status", "state": "connect_failed", "reason": e.to_string()}));
+                // Given the game port, try SourceTV's default place next to it: game port + 5.
+                if e.downcast_ref::<GamePort>().is_some()
+                    && !tried_tv_port
+                    && let Some(port) = server.port().checked_add(5)
+                {
+                    tried_tv_port = true;
+                    server.set_port(port);
+                    continue;
+                }
                 if let Some(r) = e.downcast_ref::<Rejected>()
                     && let Some(kind) = Fatal::from_reason(&r.0)
                 {

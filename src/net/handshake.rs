@@ -37,6 +37,18 @@ impl fmt::Display for Rejected {
 
 impl std::error::Error for Rejected {}
 
+/// The address answered as a game server, not SourceTV.
+#[derive(Debug)]
+pub struct GamePort(pub SocketAddr);
+
+impl fmt::Display for GamePort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} is a game port, not SourceTV: use the server's tv_port", self.0)
+    }
+}
+
+impl std::error::Error for GamePort {}
+
 #[derive(Debug)]
 pub struct Connection {
     pub sock: UdpSocket,
@@ -122,8 +134,7 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     let n = sock.recv(&mut buf).context("no challenge reply")?;
     let ch = parse_challenge(&buf[..n], nonce)?;
     if ch.auth_proto == AUTH_STEAM {
-        let tv = server.port().checked_add(5).map_or(String::new(), |p| format!(", usually {p}"));
-        bail!("{server} is a game port, not SourceTV: use the server's tv_port{tv}");
+        return Err(GamePort(server).into());
     }
     if ch.auth_proto != AUTH_HASHEDCDKEY {
         bail!("server wants auth protocol {} (SourceTV accepts {})", ch.auth_proto, AUTH_HASHEDCDKEY);
