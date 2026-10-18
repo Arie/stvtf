@@ -1,0 +1,49 @@
+[package]
+name = "stvmap"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Headless SourceTV spectator for TF2 that emits top-down overview data as JSON lines"
+license = "MIT"
+
+[dependencies]
+tf-demo-parser = "0.6.4"
+bitbuffer = "0.11"
+serde_json = "1"
+snap = "1"
+crc32fast = "1"
+md5 = "0.7"
+typed-arena = "2"
+anyhow = "1"
+ctrlc = "3"
+
+[profile.release]
+debug = 1
+
+# Lints are checked by `cargo clippy` and enforced in CI (warnings fail the build).
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# stdout carries the JSON lines; a stray println! would corrupt the stream.
+print_stdout = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+# A curated subset of clippy::pedantic.
+cast_lossless = "warn"
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+if_not_else = "warn"
+implicit_clone = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+needless_pass_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+single_match_else = "warn"
+uninlined_format_args = "warn"
+unnested_or_patterns = "warn"
