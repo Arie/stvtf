@@ -111,6 +111,11 @@ const PROP_ITEM_DEFINITION: SendPropIdentifier = prop_id("DT_ScriptCreatedItem",
 const PROP_MEDIGUN_RELEASING: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_bChargeRelease");
 const PROP_MEDIGUN_RESIST: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_nChargeResistType");
 const PROP_MEDIGUN_TARGET: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_hHealingTarget");
+const PROP_FLAMETHROWER_STATE: SendPropIdentifier = prop_id("DT_WeaponFlameThrower", "m_iWeaponState");
+const PROP_FLAMETHROWER_CRIT: SendPropIdentifier = prop_id("DT_WeaponFlameThrower", "m_bCritFire");
+const PROP_FLAMETHROWER_HIT: SendPropIdentifier = prop_id("DT_WeaponFlameThrower", "m_bHitTarget");
+/// m_iWeaponState: idle, starting to fire, firing, airblast.
+const FLAMETHROWER_AIRBLAST: i64 = 3;
 const PROP_BULLETS_PLAYER: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_iPlayer");
 const PROP_BULLETS_ORIGIN: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecOrigin");
 const PROP_BULLETS_PITCH: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecAngles[0]");
@@ -137,6 +142,7 @@ pub(crate) struct Extractor {
     /// (tf-demo-parser 0.6.4's own `conditions()` decodes these wrongly.)
     conds: HashMap<u32, [u32; 6]>,
     mediguns: HashMap<u32, Medigun>,
+    flamethrowers: HashMap<u32, Flamethrower>,
     class_names: Vec<String>,
     /// Seconds per tick from ServerInfo.
     tick_interval: Option<f32>,
@@ -287,6 +293,14 @@ impl RoundState {
             Self::BetweenRounds => "between_rounds",
         }
     }
+}
+
+#[derive(Default)]
+struct Flamethrower {
+    owner: Option<u32>,
+    state: i64,
+    crit: bool,
+    hit: bool,
 }
 
 #[derive(Default, Clone)]
@@ -785,6 +799,7 @@ impl Extractor {
         self.last_alive.remove(&idx);
         self.conds.remove(&idx);
         self.mediguns.remove(&idx);
+        self.flamethrowers.remove(&idx);
         self.teams.remove(&idx);
         self.timers.remove(&idx);
         self.train_watchers.remove(&idx);
@@ -811,6 +826,12 @@ impl Extractor {
             resist: (kind == "vaccinator").then(|| resist_name(m.resist)),
             target: m.target.and_then(|t| self.user_of_entity(t)),
         })
+    }
+
+    /// A pyro's flamethrower while it is firing.
+    fn flames_of(&self, player_ent: u32) -> Option<FlamesOut> {
+        let f = self.flamethrowers.values().find(|f| f.owner == Some(player_ent) && matches!(f.state, 1 | 2))?;
+        Some(FlamesOut { crit: f.crit, hit: f.hit })
     }
 
     /// Queues an event, stamped with the current tick unless it has its own.
@@ -1155,6 +1176,7 @@ impl Extractor {
                     conds: conds.map(cond_names).unwrap_or_default(),
                     ubered: conds.and_then(ubered),
                     medigun: (p.class == Class::Medic).then(|| self.medigun_of(ent)).flatten(),
+                    flames: (p.class == Class::Pyro && alive).then(|| self.flames_of(ent)).flatten(),
                 })
             })
             .collect();
@@ -1328,6 +1350,13 @@ struct PlayerOut<'a> {
     conds: Vec<&'static str>,
     ubered: Option<&'static str>,
     medigun: Option<MedigunOut>,
+    flames: Option<FlamesOut>,
+}
+
+#[derive(Serialize)]
+struct FlamesOut {
+    crit: bool,
+    hit: bool,
 }
 
 #[derive(Serialize)]
@@ -1553,6 +1582,7 @@ impl Extractor {
             "CTeamTrainWatcher" => self.on_train_watcher(idx, props),
             "CTFGameRulesProxy" => self.on_game_rules(props),
             "CWeaponMedigun" => self.on_medigun(idx, props),
+            "CTFFlameThrower" => self.on_flamethrower(idx, props),
             "CTFObjectiveResource" => self.on_objective_resource(props),
             _ => {}
         }
@@ -1674,6 +1704,27 @@ impl Extractor {
                 PROP_MEDIGUN_TARGET => m.target = opt_handle(v),
                 _ => {}
             }
+        }
+    }
+
+    fn on_flamethrower(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        let f = self.flamethrowers.entry(idx).or_default();
+        let before = f.state;
+        for p in props {
+            let v = as_int(&p.value);
+            match p.identifier {
+                PROP_WEAPON_OWNER => f.owner = opt_handle(v),
+                PROP_FLAMETHROWER_STATE => f.state = v,
+                PROP_FLAMETHROWER_CRIT => f.crit = v != 0,
+                PROP_FLAMETHROWER_HIT => f.hit = v != 0,
+                _ => {}
+            }
+        }
+        if f.state == FLAMETHROWER_AIRBLAST
+            && before != FLAMETHROWER_AIRBLAST
+            && let Some(player) = f.owner.and_then(|o| self.user_of_entity(o))
+        {
+            self.push(json!({"type": "airblast", "player": player}));
         }
     }
 
@@ -1891,6 +1942,9 @@ mod tests {
             PROP_MEDIGUN_RELEASING,
             PROP_MEDIGUN_RESIST,
             PROP_MEDIGUN_TARGET,
+            PROP_FLAMETHROWER_STATE,
+            PROP_FLAMETHROWER_CRIT,
+            PROP_FLAMETHROWER_HIT,
             PROP_BULLETS_PLAYER,
             PROP_BULLETS_ORIGIN,
             PROP_BULLETS_PITCH,

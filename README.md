@@ -145,6 +145,8 @@ image to; use per-map overview coordinates (or the extent of observed positions)
   `vaccinator_bullet`, `vaccinator_blast` or `vaccinator_fire`. It covers the medic and whoever they charge.
 - Medics carry `medigun`: `{"kind": "medigun"|"kritzkrieg"|"quickfix"|"vaccinator", "releasing": bool,
   "resist": "bullet"|"blast"|"fire" (vaccinator only), "target": player id being healed or null}`.
+- Pyros carry `flames` while their flamethrower fires: `{"crit": bool, "hit": bool}` (`hit`: the
+  flames are hurting someone), else null.
 - Projectile `kind` is `Rocket`, `Pipe`, `Sticky`, `LooseCannon`, `Flare`, `HealingArrow` (crossbow),
   `Arrow` (huntsman), `EnergyBall` (Cow Mangler), `EnergyRing` (Bison, Pomson), `Fireball`
   (Dragon's Fury), `Cleaver`, `Jarate`, `MadMilk`, `GasPasser`, `ShortCircuitOrb` or `Unknown`;
@@ -171,6 +173,7 @@ image to; use per-map overview coordinates (or the extent of observed positions)
 | `spawn` | `player`, `team`, `class`, `pos` (where they spawned: the event waits for the player's new position, which arrives after it) |
 | `uber` | `medic`, `target`, `medigun` (kind, as above) |
 | `uber_ready`, `uber_ended` | `medic`, `medigun`: the charge filled up / a released charge ran out |
+| `airblast` | `player`: a pyro's compression blast |
 | `medic_death` | `medic`, `attacker`, `healing` (this life), `drop` (died with a full charge) |
 | `capture_blocked` | `point`, `name`, `blocker`, `victim` |
 | `reflect` | `player` (the pyro), `owner` (of the projectile), `weapon_id` |
