@@ -143,11 +143,21 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Resul
         .with_context(|| format!("resolving {}", w.target))?
         .find(SocketAddr::is_ipv4)
         .ok_or_else(|| anyhow!("no IPv4 address for {}", w.target))?;
+    // A2S_INFO is unauthenticated (and taken from any address, see handshake), so a
+    // build we cannot use falls back to the current one: a forged reply must not end the
+    // watch, and a server really on another build refuses our class tables anyway.
+    let usable = |b: &str| crate::builtin(b).is_some() || (w.crc.is_some() && w.tables.is_some());
+    let mut server_build = None;
     let build = match &w.build {
         Some(b) => b.clone(),
-        None => {
-            handshake::a2s_version(server, Duration::from_secs(3)).unwrap_or_else(|_| crate::CURRENT_BUILD.to_string())
-        }
+        None => match handshake::a2s_version(server, Duration::from_secs(3)) {
+            Ok(b) if usable(&b) => b,
+            Ok(b) => {
+                server_build = Some(b);
+                crate::CURRENT_BUILD.to_string()
+            }
+            Err(_) => crate::CURRENT_BUILD.to_string(),
+        },
     };
     let Some(crc) = w.crc.or_else(|| crate::builtin(&build).map(|b| b.crc)) else {
         return Err(anyhow!("no known SendTable CRC for build {build}; pass --crc").into());
@@ -162,7 +172,11 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Resul
         if deadline.is_some_and(|d| Instant::now() >= d) || stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        emit(json!({"type": "status", "state": "connecting", "server": server.to_string(), "build": build}));
+        let mut status = json!({"type": "status", "state": "connecting", "server": server.to_string(), "build": build});
+        if let Some(b) = &server_build {
+            status["server_build"] = b.as_str().into();
+        }
+        emit(status);
         let streamed = match handshake::connect(server, &opt.name, &w.password, &build, Duration::from_secs(6)) {
             Ok(conn) => match session::run(&conn, &tables, &opt, recorder.as_mut(), stop, deadline, emit)? {
                 End::Stopped => return Ok(()),

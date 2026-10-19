@@ -23,6 +23,9 @@ const CHALLENGE_SERVER: usize = 9;
 const CHALLENGE_NONCE: usize = 13;
 const CHALLENGE_AUTH: usize = 17;
 const CHALLENGE_LEN: usize = 21;
+/// Offset of our nonce echoed in a '9' refusal; the reason string follows it.
+const REJECT_NONCE: usize = 5;
+const REJECT_REASON: usize = 9;
 
 /// The server refused the connection ('9' reply); the reason is the server's text,
 /// often a `#GameUI_ServerReject…` localization token.
@@ -90,7 +93,7 @@ pub fn build_connect(nonce: u32, challenge: u32, name: &str, password: &str, bui
 }
 
 fn reject_reason(data: &[u8]) -> String {
-    let tail = data.get(9..).unwrap_or_default();
+    let tail = data.get(REJECT_REASON..).unwrap_or_default();
     let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
     String::from_utf8_lossy(&tail[..end]).into_owned()
 }
@@ -101,37 +104,46 @@ pub struct Challenge {
     pub auth_proto: u32,
 }
 
-/// Parses the 'A' reply to our getchallenge, which must echo our `nonce`.
-pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Challenge> {
+/// Parses the 'A' reply (or '9' refusal) to our getchallenge. Both echo our `nonce`; a
+/// reply that does not is someone else's or forged, and gives `None`.
+pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
     if data.len() < 5 || data[..4] != OOB_PREFIX {
         bail!("not a connectionless reply");
     }
+    let word = |o: usize| data.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     match data[4] {
-        b'9' => return Err(Rejected(reject_reason(data)).into()),
+        b'9' if word(REJECT_NONCE) == Some(nonce) => return Err(Rejected(reject_reason(data)).into()),
+        b'9' => return Ok(None),
         b'A' => {}
         c => bail!("unexpected reply {:?}", char::from(c)),
     }
     if data.len() < CHALLENGE_LEN {
         bail!("truncated challenge");
     }
-    let word = |o: usize| u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
+    let word = |o: usize| word(o).unwrap_or_default();
     if word(CHALLENGE_MAGIC) != MAGIC_VERSION {
         bail!("bad challenge magic {:#x}", word(CHALLENGE_MAGIC));
     }
     if word(CHALLENGE_NONCE) != nonce {
-        bail!("challenge reply for another client");
+        return Ok(None);
     }
-    Ok(Challenge { challenge: word(CHALLENGE_SERVER), auth_proto: word(CHALLENGE_AUTH) })
+    Ok(Some(Challenge { challenge: word(CHALLENGE_SERVER), auth_proto: word(CHALLENGE_AUTH) }))
 }
 
 pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, timeout: Duration) -> Result<Connection> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
-    sock.set_read_timeout(Some(timeout))?;
     let nonce = random_u32();
     sock.send_to(&build_getchallenge(nonce), server)?;
     let mut buf = vec![0u8; 65536];
-    let (n, from) = recv_from_port(&sock, server.port(), &mut buf).context("no challenge reply")?;
-    let ch = parse_challenge(&buf[..n], nonce)?;
+    let deadline = Instant::now() + timeout;
+    // Replies are taken from any address (see `recv_from_port`), so only the nonce tells
+    // the server's from a forgery: skip the ones without it rather than fail on them.
+    let (ch, from) = loop {
+        let (n, from) = recv_from_port(&sock, server.port(), &mut buf, deadline).context("no challenge reply")?;
+        if let Some(ch) = parse_challenge(&buf[..n], nonce)? {
+            break (ch, from);
+        }
+    };
     sock.connect(from)?;
     if ch.auth_proto == AUTH_STEAM {
         return Err(GamePort(server).into());
@@ -172,8 +184,20 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
 /// The next datagram from the server's port, on whichever address it answers from: a game
 /// server on our own host, bound to 0.0.0.0 behind Docker's NAT, answers a container from the
 /// bridge's gateway rather than the public address it was sent to.
-fn recv_from_port(sock: &UdpSocket, port: u16, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+///
+/// Times out at `deadline`, however many datagrams from other ports arrive before it.
+fn recv_from_port(
+    sock: &UdpSocket,
+    port: u16,
+    buf: &mut [u8],
+    deadline: Instant,
+) -> std::io::Result<(usize, SocketAddr)> {
     loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        sock.set_read_timeout(Some(left))?;
         let (n, from) = sock.recv_from(buf)?;
         if from.port() == port {
             return Ok((n, from));
@@ -190,7 +214,7 @@ fn random_u32() -> u32 {
 /// The server build (A2S_INFO `version`), following the challenge some servers require.
 pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
-    sock.set_read_timeout(Some(timeout))?;
+    let deadline = Instant::now() + timeout;
     let mut server = server;
     let mut req = OOB_PREFIX.to_vec();
     req.push(b'T');
@@ -202,7 +226,7 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
         msg.extend_from_slice(&extra);
         sock.send_to(&msg, server)?;
         let n;
-        (n, server) = recv_from_port(&sock, server.port(), &mut buf).context("no A2S_INFO reply")?;
+        (n, server) = recv_from_port(&sock, server.port(), &mut buf, deadline).context("no A2S_INFO reply")?;
         let data = &buf[..n];
         if n >= 9 && data[..4] == OOB_PREFIX && data[4] == b'A' {
             extra = data[5..9].to_vec();
@@ -255,12 +279,45 @@ mod tests {
         ok.extend_from_slice(&77u32.to_le_bytes());
         ok.extend_from_slice(&5u32.to_le_bytes());
         ok.extend_from_slice(&2u32.to_le_bytes());
-        assert_eq!(parse_challenge(&ok, 5).unwrap(), Challenge { challenge: 77, auth_proto: 2 });
-        assert!(parse_challenge(&ok, 6).is_err(), "reply echoing another nonce");
-        let mut rej = vec![0xff, 0xff, 0xff, 0xff, b'9', 0, 0, 0, 0];
+        assert_eq!(parse_challenge(&ok, 5).unwrap(), Some(Challenge { challenge: 77, auth_proto: 2 }));
+        assert_eq!(parse_challenge(&ok, 6).unwrap(), None, "reply echoing another nonce");
+        let mut rej = vec![0xff, 0xff, 0xff, 0xff, b'9'];
+        rej.extend_from_slice(&5u32.to_le_bytes());
         rej.extend_from_slice(b"Bad password\0");
         let err = parse_challenge(&rej, 5).unwrap_err();
         assert_eq!(err.downcast_ref::<Rejected>().map(|r| r.0.as_str()), Some("Bad password"));
+    }
+
+    #[test]
+    fn refusal_without_our_nonce_is_ignored() {
+        // Anyone can send from the server's port: a forged "Bad password" would end the watch.
+        let mut forged = vec![0xff, 0xff, 0xff, 0xff, b'9'];
+        forged.extend_from_slice(&6u32.to_le_bytes());
+        forged.extend_from_slice(b"Bad password\0");
+        assert_eq!(parse_challenge(&forged, 5).unwrap(), None);
+        assert_eq!(parse_challenge(&[0xff, 0xff, 0xff, 0xff, b'9', 5, 0], 5).unwrap(), None, "truncated");
+    }
+
+    #[test]
+    fn junk_from_other_ports_does_not_hold_off_the_timeout() {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let to = sock.local_addr().unwrap();
+        let spam = std::thread::spawn(move || {
+            let junk = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let until = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < until {
+                let _ = junk.send_to(b"junk", to);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let start = Instant::now();
+        let mut buf = [0u8; 64];
+        // Port 9 is not the spammer's, so nothing it sends is accepted.
+        let got = recv_from_port(&sock, 9, &mut buf, start + Duration::from_millis(200));
+        let kind = got.unwrap_err().kind();
+        assert!(matches!(kind, std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock), "{kind:?}");
+        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
+        spam.join().unwrap();
     }
 
     #[test]
