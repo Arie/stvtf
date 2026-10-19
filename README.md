@@ -177,8 +177,6 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
 - `src/decode`: [tf-demo-parser](https://crates.io/crates/tf-demo-parser) parses each message
   stream with the same-build send tables; `extract.rs` turns its game state into the JSON above.
 
-The network layer is a port of [stv-watch](https://github.com/dmitry-ra/stv-watch) (MIT), a
-SourceTV client for Half-Life 2: Deathmatch.
 
 ## Known limits
 
@@ -215,3 +213,12 @@ from a bot server (`tests/fixtures/*.cap`, made with `connect --record`) through
 and decoder, including a map change; `tests/payload.rs` runs the start of a real pl_upward
 match (`tests/fixtures/pl_upward.dem`). `cargo run --example cut_demo -- IN.dem OUT.dem N`
 cuts a demo after tick N, to make a fixture.
+
+## Credits
+
+- The network layer is a port of [stv-watch](https://github.com/dmitry-ra/stv-watch) by
+  dmitry-ra (MIT), a SourceTV client for Half-Life 2: Deathmatch.
+- Decoding is [tf-demo-parser](https://codeberg.org/demostf/parser) and
+  [bitbuffer](https://crates.io/crates/bitbuffer) by Robin Appelman of
+  [demos.tf](https://demos.tf) (MIT or Apache-2.0).
+- `tests/fixtures/pl_upward.dem` is cut from a serveme.tf match's STV demo on demos.tf.
