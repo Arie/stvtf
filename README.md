@@ -203,7 +203,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `voice_command` | `player`, `menu`, `item`: a voice menu command (`menu` 0 is `Z`, `item` 0 is `Medic!`) |
 | `server_text` | `text` (colour codes stripped): a server message, such as a hint or a vote result |
 | `game_over` | `reason` |
-| `chat` | `player` (null for console), `name`, `text` (colour codes stripped), `kind` |
+| `chat` | `player` (null for console), `name`, `text` (colour codes stripped), `kind`, `parts` (null, or the coloured spans of a line with TF2 colour codes: `{"c": "RRGGBB"/"team"/null, "t": text}`; `team` is the sender's team colour, null the default) |
 
 For "fired" markers, diff the projectile ids of consecutive snapshots.
 

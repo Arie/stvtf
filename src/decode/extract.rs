@@ -1676,6 +1676,48 @@ pub(crate) fn strip_colors(text: &str) -> String {
     out.trim_end_matches('\n').to_string()
 }
 
+/// The coloured spans of a chat line with TF2 colour codes, or None without any: `{"c": colour,
+/// "t": text}`, where the colour is `RRGGBB`, `team` (the sender's team colour) or null (the
+/// default). \x03 is the team colour, \x04 and \x05 Valve's green ones.
+pub(crate) fn color_parts(text: &str) -> Option<Vec<Value>> {
+    if !text.chars().any(|c| ('\u{01}'..='\u{08}').contains(&c)) {
+        return None;
+    }
+    let mut parts: Vec<Value> = Vec::new();
+    let (mut color, mut run) = (Value::Null, String::new());
+    let mut chars = text.trim_end_matches('\n').chars();
+    while let Some(c) = chars.next() {
+        let next = match c {
+            '\u{07}' | '\u{08}' => {
+                let hex: String = chars.by_ref().take(if c == '\u{07}' { 6 } else { 8 }).collect();
+                Some(
+                    hex.get(..6)
+                        .filter(|h| h.chars().all(|d| d.is_ascii_hexdigit()))
+                        .map_or(Value::Null, |h| json!(h.to_ascii_uppercase())),
+                )
+            }
+            '\u{03}' => Some(json!("team")),
+            '\u{04}' => Some(json!("40FF40")),
+            '\u{05}' => Some(json!("99FF99")),
+            '\u{01}' | '\u{02}' | '\u{06}' => Some(Value::Null),
+            _ => {
+                run.push(c);
+                None
+            }
+        };
+        if let Some(next) = next {
+            if !run.is_empty() {
+                parts.push(json!({"c": color, "t": std::mem::take(&mut run)}));
+            }
+            color = next;
+        }
+    }
+    if !run.is_empty() {
+        parts.push(json!({"c": color, "t": run}));
+    }
+    Some(parts)
+}
+
 // tf-demo-parser's `Building::class()` reports dispensers as sentries; go by the variant.
 fn building_kind_of(b: &Building) -> &'static str {
     match b {
@@ -2219,6 +2261,7 @@ impl Extractor {
                     "player": if client == 0 { None } else { self.user_of_entity(u32::from(client)) },
                     "name": Value::Null,
                     "text": strip_colors(&text),
+                    "parts": color_parts(&text),
                     "kind": "SayText",
                 }));
             }
@@ -2229,6 +2272,7 @@ impl Extractor {
                     "player": player,
                     "name": m.from.as_ref().map(ToString::to_string),
                     "text": strip_colors(m.text.as_ref()),
+                    "parts": color_parts(m.text.as_ref()),
                     "kind": chat_kind(m.kind),
                 }));
             }
@@ -2321,6 +2365,17 @@ mod tests {
         );
         assert_eq!(strip_colors("\u{8}FF0000FFred"), "red");
         assert_eq!(strip_colors("plain"), "plain");
+    }
+
+    #[test]
+    fn chat_colour_codes_become_spans() {
+        let parts = color_parts("\u{1}\u{1}[STV Stats] \u{7}99ccffBLU\u{1}'s medic \u{3}DROPPED!\n").unwrap();
+        assert_eq!(
+            Value::Array(parts),
+            json!([{"c": null, "t": "[STV Stats] "}, {"c": "99CCFF", "t": "BLU"}, {"c": null, "t": "'s medic "}, {"c": "team", "t": "DROPPED!"}])
+        );
+        assert!(color_parts("plain text").is_none());
+        assert_eq!(color_parts("\u{8}FF0000AAred").unwrap(), [json!({"c": "FF0000", "t": "red"})]);
     }
 
     #[test]
