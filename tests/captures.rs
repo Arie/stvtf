@@ -7,14 +7,14 @@
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
-use stvmap::Options;
-use stvmap::capture;
-use stvmap::decode::{self, Tables};
+use stvtf::Options;
+use stvtf::capture;
+use stvtf::decode::{self, Tables};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 fn tables() -> Tables {
-    Tables::from_demo_bytes(stvmap::builtin(stvmap::CURRENT_BUILD).unwrap().tables).unwrap()
+    Tables::from_demo_bytes(stvtf::builtin(stvtf::CURRENT_BUILD).unwrap().tables).unwrap()
 }
 
 /// Decodes a fixture once and shares the result between tests.

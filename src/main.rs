@@ -5,21 +5,21 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use stvmap::Options;
-use stvmap::capture;
-use stvmap::decode::{self, Tables};
-use stvmap::watch::{self, Watch};
+use stvtf::Options;
+use stvtf::capture;
+use stvtf::decode::{self, Tables};
+use stvtf::watch::{self, Watch};
 
 const USAGE: &str = "\
-stvmap: headless TF2 SourceTV spectator emitting top-down overview data as JSON lines
+stvtf: headless TF2 SourceTV spectator emitting top-down overview data as JSON lines
 
-  stvmap connect HOST:PORT [--password tv] [--hz 20] [--seconds N] [--record FILE.cap]
-                   [--name stvmap] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
-  stvmap replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
-  stvmap demo    FILE.dem [--hz 20]
+  stvtf connect HOST:PORT [--password tv] [--hz 20] [--seconds N] [--record FILE.cap]
+                  [--name stv.tf] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
+  stvtf replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
+  stvtf demo    FILE.dem [--hz 20]
 
 HOST:PORT is the SourceTV port (tv_port); given the game port, it tries game port + 5.
-The password can also come from the STVMAP_PASSWORD environment variable, which
+The password can also come from the STVTF_PASSWORD environment variable, which
 other local users cannot read the way they can read command-line arguments.
 Tables and CRC of the build reported by the server are built in for known builds;
 pass --tables (any demo recorded on that build) and --crc for others.";
@@ -130,7 +130,7 @@ fn main() -> Result<()> {
             let bytes = std::fs::read(&args.target).with_context(|| format!("reading {}", args.target))?;
             let records = capture::read(&bytes)?;
             let opt = Options { snapshot_hz: args.hz()?, ..Options::default() };
-            let build = args.get("build").unwrap_or(stvmap::CURRENT_BUILD);
+            let build = args.get("build").unwrap_or(stvtf::CURRENT_BUILD);
             capture::replay(&records, &args.tables(build)?, &opt, &mut emit)?;
         }
         _ => connect(&args, &mut emit)?,
@@ -143,7 +143,7 @@ fn main() -> Result<()> {
 fn connect(args: &Args, emit: &mut dyn FnMut(Value)) -> Result<()> {
     let password = match args.get("password") {
         Some(p) => p.to_string(),
-        None => std::env::var("STVMAP_PASSWORD").unwrap_or_default(),
+        None => std::env::var("STVTF_PASSWORD").unwrap_or_default(),
     };
     let mut w = Watch::new(&args.target, &password);
     if let Some(n) = args.get("name") {

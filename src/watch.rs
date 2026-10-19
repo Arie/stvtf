@@ -44,7 +44,7 @@ impl Watch {
         Watch {
             target: target.to_string(),
             password: password.to_string(),
-            name: "stvmap".to_string(),
+            name: "stv.tf".to_string(),
             snapshot_hz: 20.0,
             tables: None,
             crc: None,

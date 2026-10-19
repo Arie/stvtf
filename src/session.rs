@@ -46,7 +46,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            name: "stvmap".to_string(),
+            name: "stv.tf".to_string(),
             crc: 0,
             snapshot_hz: 20.0,
             silence: Duration::from_secs(15),

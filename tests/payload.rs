@@ -12,7 +12,7 @@ const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upwar
 static EVENTS: LazyLock<Vec<Value>> = LazyLock::new(|| {
     let bytes = std::fs::read(DEMO).unwrap();
     let mut out = Vec::new();
-    stvmap::decode::demo_file(&bytes, 20.0, &mut |v| out.push(v)).unwrap();
+    stvtf::decode::demo_file(&bytes, 20.0, &mut |v| out.push(v)).unwrap();
     out
 });
 

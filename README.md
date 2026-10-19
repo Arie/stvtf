@@ -1,22 +1,22 @@
-# stvmap
+# stvtf
 
-A headless SourceTV spectator for Team Fortress 2. It joins an STV port like any
-spectator and prints JSON lines for a top-down overview: snapshots (players,
-projectiles, buildings, objectives) and events (kills, damage, shots, ubers,
-captures, rounds, chat). No server plugin is needed, and since SourceTV is
+The SourceTV client behind [stv.tf](https://stv.tf): a headless spectator for Team
+Fortress 2. It joins an STV port like any spectator and prints JSON lines for a top-down
+overview: snapshots (players, projectiles, buildings, objectives) and events (kills, damage,
+shots, ubers, captures, rounds, chat). No server plugin is needed, and since SourceTV is
 delayed by `tv_delay`, nothing live leaves the server.
 
 ```
-stvmap connect HOST:PORT [--password tv] [--hz 20] [--seconds N] [--record FILE.cap]
-                 [--name stvmap] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
-stvmap replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
-stvmap demo    FILE.dem [--hz 20]
+stvtf connect HOST:PORT [--password tv] [--hz 20] [--seconds N] [--record FILE.cap]
+                [--name stv.tf] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
+stvtf replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
+stvtf demo    FILE.dem [--hz 20]
 ```
 
-For example, `STVMAP_PASSWORD=tv stvmap connect 1.2.3.4:27020 > match.jsonl`.
+For example, `STVTF_PASSWORD=tv stvtf connect 1.2.3.4:27020 > match.jsonl`.
 
 - `HOST:PORT` is the SourceTV port (`tv_port`). Given the game port, it tries game port + 5.
-- `--password` is the `tv_password`. Prefer `STVMAP_PASSWORD`: other local users can read
+- `--password` is the `tv_password`. Prefer `STVTF_PASSWORD`: other local users can read
   command-line arguments.
 - `--hz` caps the snapshot rate (default 20, 0 for none). Events are never rate limited.
 - `--record` saves the raw datagrams to a new file; `replay` decodes it offline. `demo` runs a
@@ -27,7 +27,7 @@ It reconnects with backoff when dropped, follows map changes, and exits when rec
 cannot help (wrong password, tables of another build). Ctrl-C, SIGTERM or closing its output
 disconnects cleanly, so SourceTV does not hold the slot for 300 s; a second Ctrl-C exits at once.
 
-The same loop is a library, `stvmap::watch`, which [stvmap-web](../stvmap-web) uses. It
+The same loop is a library, `stvtf::watch`, which [stvtf-web](../stvtf-web), the stv.tf server, uses. It
 returns a `WatchError` that tells a rejection (`Rejected { kind: Fatal::BadPassword, .. }`)
 apart from other failures.
 

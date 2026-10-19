@@ -260,13 +260,13 @@ mod tests {
 
     #[test]
     fn connect_packet_layout() {
-        let p = build_connect(1, 2, "stvmap", "tv", "11138802");
+        let p = build_connect(1, 2, "stv.tf", "tv", "11138802");
         assert_eq!(&p[..5], &[0xff, 0xff, 0xff, 0xff, b'k']);
         assert_eq!(i32::from_le_bytes(p[5..9].try_into().unwrap()), 24);
         assert_eq!(u32::from_le_bytes(p[9..13].try_into().unwrap()), 2);
         assert_eq!(u32::from_le_bytes(p[13..17].try_into().unwrap()), 2);
         let strings: Vec<&[u8]> = p[21..].split(|&b| b == 0).collect();
-        assert_eq!(strings[0], b"stvmap");
+        assert_eq!(strings[0], b"stv.tf");
         assert_eq!(strings[1], b"tv");
         assert_eq!(strings[2], b"11138802");
         assert_eq!(strings[3].len(), 32);

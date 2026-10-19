@@ -55,15 +55,15 @@ const MAX_PENDING_SPAWNS: usize = 256;
 /// Seconds per server tick until the server's own value (ServerInfo) arrives.
 pub(crate) const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
-/// `STVMAP_DEBUG`, read once: a server class, temp entity class, `ent:N` or `gameevents`.
-static DEBUG: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("STVMAP_DEBUG").ok());
+/// `STVTF_DEBUG`, read once: a server class, temp entity class, `ent:N` or `gameevents`.
+static DEBUG: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("STVTF_DEBUG").ok());
 
-/// Whether `STVMAP_DEBUG` asks for this topic.
+/// Whether `STVTF_DEBUG` asks for this topic.
 pub(crate) fn debug(topic: &str) -> bool {
     DEBUG.as_deref() == Some(topic)
 }
 
-/// The entity `STVMAP_DEBUG=ent:N` asks to trace.
+/// The entity `STVTF_DEBUG=ent:N` asks to trace.
 fn debug_entity() -> Option<u32> {
     DEBUG.as_deref()?.strip_prefix("ent:")?.parse().ok()
 }

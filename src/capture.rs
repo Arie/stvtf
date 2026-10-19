@@ -72,7 +72,7 @@ pub struct Record<'a> {
 
 /// Splits a capture into its records.
 pub fn read(bytes: &[u8]) -> Result<Vec<Record<'_>>> {
-    let Some(mut r) = bytes.strip_prefix(MAGIC) else { bail!("not a stvmap capture") };
+    let Some(mut r) = bytes.strip_prefix(MAGIC) else { bail!("not an stvtf capture") };
     let mut out = Vec::new();
     while let Some(header) = r.get(..RECORD_HEADER) {
         let t_us = u64::from_le_bytes(header[..8].try_into()?);
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn recorder_never_overwrites() {
-        let path = std::env::temp_dir().join(format!("stvmap-test-{}.cap", std::process::id()));
+        let path = std::env::temp_dir().join(format!("stvtf-test-{}.cap", std::process::id()));
         std::fs::write(&path, b"precious").unwrap();
         assert!(Recorder::create(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"precious");

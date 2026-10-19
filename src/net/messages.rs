@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn connected_reply_carries_name() {
-        let reply = connected_reply("stvmap");
+        let reply = connected_reply("stv.tf");
         let mut r = BitReader::new(reply.bytes());
         assert_eq!(r.read_bits(6).unwrap(), NET_SETCONVAR);
         let n = r.read_u8().unwrap();
@@ -174,7 +174,7 @@ mod tests {
             let k = r.read_string(64).unwrap();
             let v = r.read_string(64).unwrap();
             if k == "name" {
-                found = v == "stvmap";
+                found = v == "stv.tf";
             }
         }
         assert!(found);
