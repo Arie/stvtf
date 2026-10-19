@@ -202,3 +202,20 @@ fn buildings_are_recognised_by_what_they_are() {
     let seen: std::collections::HashSet<String> = kinds(&EVENTS).union(&kinds(&CTF)).cloned().collect();
     assert!(seen.contains("sentry") && seen.contains("dispenser"), "{seen:?}");
 }
+
+fn teamless_projectiles(events: &[Value]) -> usize {
+    events
+        .iter()
+        .filter(|e| e["type"] == "snapshot")
+        .flat_map(|s| s["projectiles"].as_array().into_iter().flatten())
+        .filter(|p| p["team"] == "none")
+        .count()
+}
+
+/// An explosion used to drop the nearest projectile within 150 units, often a live sticky beside
+/// the blast: it vanished, and came back without team or owner when it next moved.
+#[test]
+fn projectiles_keep_their_team_through_nearby_explosions() {
+    assert_eq!(teamless_projectiles(&EVENTS), 0);
+    assert_eq!(teamless_projectiles(&CTF), 0);
+}
