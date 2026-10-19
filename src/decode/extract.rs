@@ -113,6 +113,8 @@ const PROP_ROUND_STATE: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules
 const PROP_MAP_RESET_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flMapResetTime");
 const PROP_STATE_TRANSITION_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flStateTransitionTime");
 const PROP_WEAPON_OWNER: SendPropIdentifier = prop_id("DT_BaseCombatWeapon", "m_hOwner");
+const PROP_ACTIVE_WEAPON: SendPropIdentifier = prop_id("DT_BaseCombatCharacter", "m_hActiveWeapon");
+const PROP_CLIP: SendPropIdentifier = prop_id("DT_LocalWeaponData", "m_iClip1");
 const PROP_ITEM_DEFINITION: SendPropIdentifier = prop_id("DT_ScriptCreatedItem", "m_iItemDefinitionIndex");
 const PROP_MEDIGUN_RELEASING: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_bChargeRelease");
 const PROP_MEDIGUN_RESIST: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_nChargeResistType");
@@ -149,6 +151,8 @@ pub(crate) struct Extractor {
     conds: HashMap<u32, [u32; 6]>,
     mediguns: HashMap<u32, Medigun>,
     flamethrowers: HashMap<u32, Flamethrower>,
+    weapons: HashMap<u32, Weapon>,
+    active_weapons: HashMap<u32, u32>,
     class_names: Vec<String>,
     /// Seconds per tick from ServerInfo.
     tick_interval: Option<f32>,
@@ -324,6 +328,15 @@ struct Flamethrower {
     state: i64,
     crit: bool,
     hit: bool,
+}
+
+#[derive(Default, Clone)]
+struct Weapon {
+    item: i64,
+    /// -1 and below is TF2's "no clip".
+    clip: i64,
+    /// SourceTV sends a clipless weapon's -1 as 0, so a clip that never held a round reads as none.
+    loaded: bool,
 }
 
 #[derive(Default, Clone)]
@@ -823,6 +836,8 @@ impl Extractor {
         self.conds.remove(&idx);
         self.mediguns.remove(&idx);
         self.flamethrowers.remove(&idx);
+        self.weapons.remove(&idx);
+        self.active_weapons.remove(&idx);
         self.teams.remove(&idx);
         self.timers.remove(&idx);
         self.train_watchers.remove(&idx);
@@ -839,6 +854,11 @@ impl Extractor {
             .iter()
             .find(|p| p.info.as_ref().is_some_and(|i| u16::from(i.user_id) == user_id))
             .map(|p| u32::from(p.entity))
+    }
+
+    fn weapon_of(&self, player_ent: u32) -> Option<WeaponOut> {
+        let w = self.weapons.get(self.active_weapons.get(&player_ent)?)?;
+        Some(WeaponOut { item: w.item, clip: (w.clip > 0 || (w.clip == 0 && w.loaded)).then_some(w.clip) })
     }
 
     fn medigun_of(&self, player_ent: u32) -> Option<MedigunOut> {
@@ -1233,6 +1253,7 @@ impl Extractor {
                     conds: conds.map(cond_names).unwrap_or_default(),
                     ubered: conds.and_then(ubered),
                     medigun: (p.class == Class::Medic).then(|| self.medigun_of(ent)).flatten(),
+                    weapon: self.weapon_of(ent),
                     flames: (p.class == Class::Pyro && alive).then(|| self.flames_of(ent)).flatten(),
                 })
             })
@@ -1431,7 +1452,14 @@ struct PlayerOut<'a> {
     conds: Vec<&'static str>,
     ubered: Option<&'static str>,
     medigun: Option<MedigunOut>,
+    weapon: Option<WeaponOut>,
     flames: Option<FlamesOut>,
+}
+
+#[derive(Serialize)]
+struct WeaponOut {
+    item: i64,
+    clip: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -1670,6 +1698,7 @@ impl Extractor {
                 eprintln!("{}#{idx} {:?} = {:?}", class.name.as_str(), p.identifier.names(), p.value);
             }
         }
+        self.on_weapon(idx, e.props(state));
         let props = e.props(state);
         match class.name.as_str() {
             "CTFPlayer" => self.on_player(idx, props),
@@ -1684,6 +1713,31 @@ impl Extractor {
             "CTFObjectiveResource" => self.on_objective_resource(props),
             _ => {}
         }
+    }
+
+    /// Any weapon class carries these props, and players their active weapon handle.
+    fn on_weapon(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        for p in props {
+            match p.identifier {
+                PROP_ACTIVE_WEAPON => {
+                    match opt_handle(as_int(&p.value)) {
+                        Some(w) => self.active_weapons.insert(idx, w),
+                        None => self.active_weapons.remove(&idx),
+                    };
+                }
+                PROP_ITEM_DEFINITION => self.weapon(idx).item = as_int(&p.value),
+                PROP_CLIP => {
+                    let w = self.weapon(idx);
+                    w.clip = as_int(&p.value);
+                    w.loaded |= w.clip > 0;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn weapon(&mut self, idx: u32) -> &mut Weapon {
+        self.weapons.entry(idx).or_insert(Weapon { item: 0, clip: -1, loaded: false })
     }
 
     fn on_player(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
@@ -2064,6 +2118,8 @@ mod tests {
             PROP_MAP_RESET_TIME,
             PROP_STATE_TRANSITION_TIME,
             PROP_WEAPON_OWNER,
+            PROP_ACTIVE_WEAPON,
+            PROP_CLIP,
             PROP_ITEM_DEFINITION,
             PROP_MEDIGUN_RELEASING,
             PROP_MEDIGUN_RESIST,

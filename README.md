@@ -94,7 +94,8 @@ outside the playable area, so fit an overview image to per-map coordinates inste
     "team": "blue", "class": "medic", "alive": true, "hp": 150, "max_hp": 150,
     "pos": [985.9, 110.5, 161.3], "yaw": 132.4, "pitch": 8.1,
     "uber": 87, "ping": 31, "conds": ["HealthOverHealed"], "ubered": null,
-    "medigun": {"kind": "kritzkrieg", "releasing": false, "resist": null, "target": 4}
+    "medigun": {"kind": "kritzkrieg", "releasing": false, "resist": null, "target": 4},
+    "weapon": {"item": 35, "clip": null}
   }],
   "projectiles": [{"id": 378, "kind": "Sticky", "team": "blue", "pos": [-690.5, 638.5, -11.0], "yaw": 0.0, "owner": 11, "crit": false}],
   "buildings": [{
@@ -126,6 +127,9 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   `vaccinator_bullet`, `vaccinator_blast` or `vaccinator_fire`. It covers the medic and whoever they charge.
 - Medics carry `medigun`: `{"kind": "medigun"|"kritzkrieg"|"quickfix"|"vaccinator", "releasing": bool,
   "resist": "bullet"|"blast"|"fire" (vaccinator only), "target": player id being healed or null}`.
+- `weapon` is the weapon in hand: `{"item": item definition index, "clip": rounds loaded or null}`, or null
+  if none is known. SourceTV sends no reserve ammo, and a weapon without a clip reads `null`
+  (inferred: its clip never held a round).
 - Pyros carry `flames` while firing: `{"crit": bool, "hit": bool}` (`hit`: hurting someone), else null.
 - Projectile `kind` is `Rocket`, `Pipe`, `Sticky`, `LooseCannon`, `Flare`, `HealingArrow` (crossbow),
   `Arrow` (huntsman), `EnergyBall` (Cow Mangler), `EnergyRing` (Bison, Pomson), `Fireball`

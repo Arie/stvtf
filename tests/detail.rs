@@ -151,3 +151,17 @@ fn killed_cappers_match_the_kill_at_that_tick() {
         );
     }
 }
+
+#[test]
+fn soldiers_hold_weapons_with_clips() {
+    let live: Vec<&Value> = of_type("snapshot").into_iter().filter(|s| s["round"] == "running").collect();
+    let alive: Vec<&Value> =
+        live.iter().flat_map(|s| s["players"].as_array().unwrap()).filter(|p| p["alive"] == true).collect();
+    let armed = alive.iter().filter(|p| p["weapon"].is_object()).count();
+    assert!(armed * 10 > alive.len() * 9, "{armed} of {} armed", alive.len());
+    let has_clip = |class: &str, ok: &dyn Fn(&Value) -> bool| {
+        alive.iter().any(|p| p["class"] == class && p["weapon"]["clip"].as_i64().is_some_and(|c| ok(&Value::from(c))))
+    };
+    assert!(has_clip("soldier", &|c| (0..=4).contains(&c.as_i64().unwrap())));
+    assert!(alive.iter().any(|p| p["class"] == "medic" && p["weapon"].is_object() && p["weapon"]["clip"].is_null()));
+}
