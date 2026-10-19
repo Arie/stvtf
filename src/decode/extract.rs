@@ -1,6 +1,7 @@
 //! Turns parser state into the JSON the overview consumes: periodic snapshots
 //! plus discrete events (kills, damage, shots, explosions, ubers, rounds, chat...).
 
+use super::detail;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
@@ -1129,7 +1130,18 @@ impl Extractor {
             })),
             GameEvent::TeamPlayGameOver(g) => self.push(json!({"type": "game_over", "reason": g.reason.to_string()})),
             GameEvent::TfGameOver(g) => self.push(json!({"type": "game_over", "reason": g.reason.to_string()})),
-            _ => {}
+            _ => {
+                let class_of_user = |id: u16| {
+                    let state = self.state();
+                    let p = state.players.iter().find(|p| p.info.as_ref().is_some_and(|i| u16::from(i.user_id) == id));
+                    p.map(|p| p.class)
+                };
+                let user_of_entity = |ent: u32| self.user_of_entity(ent);
+                let look = detail::Lookup { user_of_entity: &user_of_entity, class_of_user: &class_of_user };
+                if let Some(v) = detail::game_event(event, &look) {
+                    self.push(v);
+                }
+            }
         }
     }
 

@@ -6,6 +6,7 @@
 //! message stream is then wrapped as a demo `Message` packet and handed to the
 //! same DemoHandler a demo file would use.
 
+mod detail;
 mod extract;
 
 use crate::net::messages::Signon;
