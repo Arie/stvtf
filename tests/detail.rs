@@ -136,3 +136,17 @@ fn points_count_players_standing_on_them() {
             .all(|o| o["on_point"]["red"].is_u64())
     }));
 }
+
+#[test]
+fn killed_cappers_match_the_kill_at_that_tick() {
+    let k = of_type("killed_capper");
+    assert!(!k.is_empty());
+    let kills = of_type("kill");
+    for e in k {
+        assert!(e["killer"].is_u64() && e["victim"].is_u64(), "{e}");
+        assert!(
+            kills.iter().any(|d| d["tick"] == e["tick"] && d["attacker"] == e["killer"] && d["victim"] == e["victim"]),
+            "no kill line for {e}"
+        );
+    }
+}
