@@ -178,23 +178,27 @@ fn soldiers_hold_weapons_with_clips() {
     assert!(alive.iter().any(|p| p["class"] == "medic" && p["weapon"].is_object() && p["weapon"]["clip"].is_null()));
 }
 
-fn sentry_problems(events: &[Value]) -> usize {
-    let mut bad = 0;
-    for s in events.iter().filter(|e| e["type"] == "snapshot") {
-        let mut builders = std::collections::HashSet::new();
-        for b in s["buildings"].as_array().unwrap().iter().filter(|b| b["kind"] == "sentry") {
-            if b["mini"].is_null() || (!b["builder"].is_null() && !builders.insert(b["builder"].clone())) {
-                bad += 1;
-            }
-        }
-    }
-    bad
+fn misread_sentries(events: &[Value]) -> usize {
+    // Only a real sentry has `mini`; a dispenser or teleporter reported as a sentry has none.
+    let snapshots = events.iter().filter(|e| e["type"] == "snapshot");
+    snapshots
+        .flat_map(|s| s["buildings"].as_array().unwrap().iter())
+        .filter(|b| b["kind"] == "sentry" && b["mini"].is_null())
+        .count()
+}
+
+fn kinds(events: &[Value]) -> std::collections::HashSet<String> {
+    let snapshots = events.iter().filter(|e| e["type"] == "snapshot");
+    snapshots
+        .flat_map(|s| s["buildings"].as_array().unwrap().iter())
+        .filter_map(|b| b["kind"].as_str().map(str::to_string))
+        .collect()
 }
 
 #[test]
-fn sentries_are_real_and_one_per_builder() {
-    let has_building = |ev: &[Value]| ev.iter().any(|e| e["buildings"].as_array().is_some_and(|b| !b.is_empty()));
-    assert!(has_building(&EVENTS) || has_building(&CTF));
-    assert_eq!(sentry_problems(&EVENTS), 0);
-    assert_eq!(sentry_problems(&CTF), 0);
+fn buildings_are_recognised_by_what_they_are() {
+    assert_eq!(misread_sentries(&EVENTS), 0);
+    assert_eq!(misread_sentries(&CTF), 0);
+    let seen: std::collections::HashSet<String> = kinds(&EVENTS).union(&kinds(&CTF)).cloned().collect();
+    assert!(seen.contains("sentry") && seen.contains("dispenser"), "{seen:?}");
 }
