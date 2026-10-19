@@ -128,8 +128,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 - Medics carry `medigun`: `{"kind": "medigun"|"kritzkrieg"|"quickfix"|"vaccinator", "releasing": bool,
   "resist": "bullet"|"blast"|"fire" (vaccinator only), "target": player id being healed or null}`.
 - `weapon` is the weapon in hand: `{"item": item definition index, "clip": rounds loaded or null}`, or null
-  if none is known. SourceTV sends no reserve ammo, and a weapon without a clip reads `null`
-  (inferred, because SourceTV sends a clipless weapon's clip as 0: a clip that is 0 and never held a round).
+  if none is known. SourceTV sends no reserve ammo, and `clip` is `null` for a weapon without a clip.
 - Pyros carry `flames` while firing: `{"crit": bool, "hit": bool}` (`hit`: hurting someone), else null.
 - Projectile `kind` is `Rocket`, `Pipe`, `Sticky`, `LooseCannon`, `Flare`, `HealingArrow` (crossbow),
   `Arrow` (huntsman), `EnergyBall` (Cow Mangler), `EnergyRing` (Bison, Pomson), `Fireball`

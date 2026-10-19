@@ -337,8 +337,6 @@ struct Weapon {
     item: i64,
     /// -1 and below is TF2's "no clip".
     clip: i64,
-    /// SourceTV sends a clipless weapon's -1 as 0, so a clip that never held a round reads as none.
-    loaded: bool,
 }
 
 #[derive(Default, Clone)]
@@ -860,7 +858,7 @@ impl Extractor {
 
     fn weapon_of(&self, player_ent: u32) -> Option<WeaponOut> {
         let w = self.weapons.get(self.active_weapons.get(&player_ent)?)?;
-        Some(WeaponOut { item: w.item, clip: (w.clip > 0 || (w.clip == 0 && w.loaded)).then_some(w.clip) })
+        Some(WeaponOut { item: w.item, clip: (w.clip >= 0).then_some(w.clip) })
     }
 
     fn medigun_of(&self, player_ent: u32) -> Option<MedigunOut> {
@@ -1733,8 +1731,8 @@ impl Extractor {
                 PROP_ITEM_DEFINITION => self.weapon(idx).item = v,
                 PROP_CLIP => {
                     let w = self.weapon(idx);
-                    w.clip = v;
-                    w.loaded |= w.clip > 0;
+                    // networked as value + 1 so -1 ("no clip") fits unsigned
+                    w.clip = v - 1;
                 }
                 _ => {}
             }
@@ -1754,7 +1752,7 @@ impl Extractor {
     }
 
     fn weapon(&mut self, idx: u32) -> &mut Weapon {
-        self.weapons.entry(idx).or_insert(Weapon { item: 0, clip: -1, loaded: false })
+        self.weapons.entry(idx).or_insert(Weapon { item: 0, clip: -1 })
     }
 
     fn on_player(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {

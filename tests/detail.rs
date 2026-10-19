@@ -163,5 +163,17 @@ fn soldiers_hold_weapons_with_clips() {
         alive.iter().any(|p| p["class"] == class && p["weapon"]["clip"].as_i64().is_some_and(|c| ok(&Value::from(c))))
     };
     assert!(has_clip("soldier", &|c| (0..=4).contains(&c.as_i64().unwrap())));
+    // m_iClip1 is networked +1 (so -1 fits unsigned): full clips are 4 (Original) and 8 (stickies).
+    let clips = |class: &str, item: i64| -> Vec<i64> {
+        alive
+            .iter()
+            .filter(|p| p["class"] == class && p["weapon"]["item"] == item)
+            .filter_map(|p| p["weapon"]["clip"].as_i64())
+            .collect()
+    };
+    let rockets = clips("soldier", 513);
+    assert!(!rockets.is_empty() && rockets.iter().all(|&c| c <= 4) && rockets.contains(&4), "{rockets:?}");
+    let stickies = clips("demoman", 207);
+    assert!(!stickies.is_empty() && stickies.iter().all(|&c| c <= 8) && stickies.contains(&8), "{stickies:?}");
     assert!(alive.iter().any(|p| p["class"] == "medic" && p["weapon"].is_object() && p["weapon"]["clip"].is_null()));
 }
