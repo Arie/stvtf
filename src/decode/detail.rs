@@ -151,10 +151,7 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Value> 
             "ready": (!t.name_change).then_some(t.ready_state != 0),
         })),
         GameEvent::TeamPlayBroadcastAudio(a) => {
-            let sound = a.sound.to_string();
-            sound
-                .starts_with("Announcer.")
-                .then(|| json!({"type": "announcer", "sound": sound, "team": team_num(a.team)}))
+            Some(json!({"type": "announcer", "sound": a.sound.to_string(), "team": team_num(a.team)}))
         }
         GameEvent::TeamPlayMapTimeRemaining(t) => Some(json!({"type": "time_remaining", "seconds": t.seconds})),
         GameEvent::TfMapTimeRemaining(t) => Some(json!({"type": "time_remaining", "seconds": t.seconds})),

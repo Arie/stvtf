@@ -105,7 +105,8 @@ fn match_flow_lines() {
     assert!(!t.is_empty());
     assert!(t.iter().any(|e| e["ready"].is_boolean()));
     let a = ctf_of_type("announcer");
-    assert!(a.iter().all(|e| e["sound"].as_str().unwrap().starts_with("Announcer.")), "{a:?}");
+    assert!(!a.is_empty());
+    assert!(a.iter().all(|e| !e["sound"].as_str().unwrap().is_empty() && e["team"].is_string()), "{a:?}");
     assert!(ctf_of_type("server_text").iter().all(|e| e["text"].is_string()));
 }
 

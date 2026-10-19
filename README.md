@@ -185,7 +185,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `vote_options` | `options`: the choices of a call vote that just started |
 | `vote_cast` | `player` (null if unknown), `option` (index into the last `vote_options`), `team` |
 | `tournament` | `player` (null for the whole match), `ready` (null for a name change): ready-up changes |
-| `announcer` | `sound` (raw name, e.g. `Announcer.RoundEnds5minutes`), `team` |
+| `announcer` | `sound` (raw name of a broadcast sound, e.g. `Announcer.RoundEnds5minutes`; not all are announcer lines), `team` |
 | `time_remaining` | `seconds`: the map time limit's remaining time |
 | `voice_command` | `player`, `menu`, `item`: a voice menu command (`menu` 0 is `Z`, `item` 0 is `Medic!`) |
 | `server_text` | `text` (colour codes stripped): a server message, such as a hint or a vote result |
