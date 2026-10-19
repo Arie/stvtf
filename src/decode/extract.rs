@@ -103,6 +103,10 @@ const PROP_WATCHER_PROGRESS: SendPropIdentifier = prop_id("DT_TeamTrainWatcher",
 const PROP_WATCHER_CAPPERS: SendPropIdentifier = prop_id("DT_TeamTrainWatcher", "m_nNumCappers");
 const PROP_WATCHER_SPEED: SendPropIdentifier = prop_id("DT_TeamTrainWatcher", "m_iTrainSpeedLevel");
 const PROP_WATCHER_GLOW: SendPropIdentifier = prop_id("DT_TeamTrainWatcher", "m_hGlowEnt");
+const PROP_OWNER_ENTITY: SendPropIdentifier = prop_id("DT_BaseEntity", "m_hOwnerEntity");
+const PROP_FLAG_STATUS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nFlagStatus");
+const PROP_FLAG_DISABLED: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_bDisabled");
+const PROP_FLAG_RESET_TIME: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_flResetTime");
 const PROP_ROUND_STATE: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_iRoundState");
 const PROP_MAP_RESET_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flMapResetTime");
 const PROP_STATE_TRANSITION_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flStateTransitionTime");
@@ -171,6 +175,8 @@ pub(crate) struct Extractor {
     /// World positions of prop entities: a payload cart can be a free physics prop.
     prop_origins: HashMap<u32, Vector>,
     sentries: HashMap<u32, Sentry>,
+    /// CTF flags and the bball ball (item_teamflag), by entity.
+    flags: BTreeMap<u32, Flag>,
     /// player_spawn arrives before the player's new position: held until the next entity update.
     pending_spawns: Vec<(u16, Value)>,
 }
@@ -214,6 +220,19 @@ impl Sentry {
     fn aim(&self) -> f32 {
         (self.yaw + (0.5 - self.pose[1]) * 360.0).rem_euclid(360.0)
     }
+}
+
+/// An intelligence briefcase, or a neutral flag such as the bball ball.
+#[derive(Default, Clone)]
+struct Flag {
+    team: u8,
+    pos: Vector,
+    /// 0 at home, 1 carried, 2 dropped.
+    status: i64,
+    disabled: bool,
+    carrier: Option<u32>,
+    /// Server time a dropped flag goes home.
+    reset_time: f32,
 }
 
 #[derive(Default, Clone)]
@@ -807,6 +826,7 @@ impl Extractor {
         self.prop_origins.remove(&idx);
         self.sentries.remove(&idx);
         self.medic_charge.remove(&idx);
+        self.flags.remove(&idx);
     }
 
     fn entity_of_user(&self, user_id: u16) -> Option<u32> {
@@ -1052,6 +1072,24 @@ impl Extractor {
                 "team": team_num(c.team),
                 "cappers": c.cappers.as_bytes().iter().map(|&e| self.user_of_entity(u32::from(e))).collect::<Vec<_>>(),
             })),
+            // `player` and `carrier` are entity indexes here, not user ids.
+            GameEvent::TeamPlayFlagEvent(f) => {
+                let event = match f.event_type {
+                    1 => "pickup",
+                    2 => "captured",
+                    3 => "defended",
+                    4 => "dropped",
+                    5 => "returned",
+                    _ => return,
+                };
+                self.push(json!({
+                    "type": "flag",
+                    "event": event,
+                    "player": self.user_of_entity(u32::from(f.player)),
+                    "carrier": (f.carrier != 0).then(|| self.user_of_entity(u32::from(f.carrier))).flatten(),
+                    "team": team_num(f.team),
+                }));
+            }
             GameEvent::MedicDeath(m) => self.push(json!({
                 "type": "medic_death",
                 "medic": m.user_id,
@@ -1278,6 +1316,24 @@ impl Extractor {
                 speed: w.speed,
             });
         }
+        let now = self.server_tick as f32 * interval;
+        for (&id, f) in self.flags.iter().filter(|(_, f)| !f.disabled) {
+            // A carried flag is attached to its carrier, its own origin relative to them.
+            let carrier = gs.players.iter().find(|p| f.status == 1 && Some(u32::from(p.entity)) == f.carrier);
+            objectives.push(ObjectiveOut::Flag {
+                kind: "flag",
+                id,
+                pos: xyz(carrier.map_or(f.pos, |p| p.position)),
+                team: team_num(f.team),
+                status: match f.status {
+                    1 => "carried",
+                    2 => "dropped",
+                    _ => "home",
+                },
+                carrier: carrier.and_then(|p| p.info.as_ref()).map(|i| u16::from(i.user_id)),
+                returns_in: (f.status == 2 && f.reset_time > now).then(|| round1(f.reset_time - now)),
+            });
+        }
         let score = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.score);
         let snapshot = SnapshotOut {
             kind: "snapshot",
@@ -1430,6 +1486,15 @@ enum ObjectiveOut {
         cappers: i64,
         speed: i64,
     },
+    Flag {
+        kind: &'static str,
+        id: u32,
+        pos: [f64; 3],
+        team: &'static str,
+        status: &'static str,
+        carrier: Option<u16>,
+        returns_in: Option<f64>,
+    },
 }
 
 #[derive(Serialize)]
@@ -1580,6 +1645,7 @@ impl Extractor {
             "CTeamRoundTimer" => self.on_round_timer(idx, props),
             "CObjectSentrygun" => self.on_sentry(idx, props),
             "CTeamTrainWatcher" => self.on_train_watcher(idx, props),
+            "CCaptureFlag" => self.on_flag(idx, props),
             "CTFGameRulesProxy" => self.on_game_rules(props),
             "CWeaponMedigun" => self.on_medigun(idx, props),
             "CTFFlameThrower" => self.on_flamethrower(idx, props),
@@ -1675,6 +1741,26 @@ impl Extractor {
                 PROP_WATCHER_CAPPERS => w.cappers = v,
                 PROP_WATCHER_SPEED => w.speed = v,
                 PROP_WATCHER_GLOW => w.glow = opt_handle(v),
+                _ => {}
+            }
+        }
+    }
+
+    fn on_flag(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
+        let f = self.flags.entry(idx).or_default();
+        for p in props {
+            let v = as_int(&p.value);
+            match p.identifier {
+                PROP_TEAM_NUM => f.team = team_byte(v),
+                PROP_ORIGIN => {
+                    if let SendPropValue::Vector(o) = p.value {
+                        f.pos = o;
+                    }
+                }
+                PROP_FLAG_STATUS => f.status = v,
+                PROP_FLAG_DISABLED => f.disabled = v != 0,
+                PROP_OWNER_ENTITY => f.carrier = opt_handle(v),
+                PROP_FLAG_RESET_TIME => f.reset_time = as_float(&p.value),
                 _ => {}
             }
         }

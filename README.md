@@ -105,7 +105,8 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   "objectives": [
     {"kind": "control_point", "index": 2, "pos": [-5632.0, 5248.0, 68.2], "owner": "none",
      "capping_team": "blue", "cap_progress": 0.49, "locked": false, "blocked": false},
-    {"kind": "cart", "id": 51, "pos": [100.0, 200.0, 0.0], "team": "blue", "progress": 0.72, "cappers": 2, "speed": 2}
+    {"kind": "cart", "id": 51, "pos": [100.0, 200.0, 0.0], "team": "blue", "progress": 0.72, "cappers": 2, "speed": 2},
+    {"kind": "flag", "id": 84, "pos": [1428.0, 896.0, -211.0], "team": "red", "status": "carried", "carrier": 6, "returns_in": null}
   ]
 }
 ```
@@ -133,6 +134,10 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   `aim` (turret direction), `target` (player id) and `attacking`.
 - Carts appear only on payload maps, with the pushing `team`, `progress` (0 → 1), `cappers` and
   `speed` (negative when rolling back).
+- Flags are CTF intelligence briefcases (`team` red or blue) and neutral ones such as the bball
+  ball (`team` none). `status` is `home`, `carried` (`pos` is then the carrier's) or `dropped`,
+  with `returns_in` seconds until it goes home. Maps with several flag spawns list only the
+  enabled ones.
 - `cap_progress` runs 0 → 1 while `capping_team` caps, else 0. The server sends it every few
   seconds; like the HUD, the tool extrapolates it in between. `cap_rate` is progress per second.
 
@@ -163,6 +168,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `round_start` | `full_reset` |
 | `round_active`, `setup_finished` | (none) |
 | `round_win` | `team`, `reason`, `round_time` |
+| `flag` | `event` (`pickup`, `captured`, `dropped`, `defended`, `returned`), `player`, `carrier` (the carrier a `defended` stopped), `team` (the flag's) |
 | `point_captured` | `point` (index into the control points), `name`, `team`, `cappers` (player ids) |
 | `game_over` | `reason` |
 | `chat` | `player` (null for console), `name`, `text` (colour codes stripped), `kind` |
@@ -214,7 +220,8 @@ opens weekly update pull requests.
 Unit tests cover the codec and protocol layers. `tests/captures.rs` replays SourceTV traffic
 from a bot server (`tests/fixtures/*.cap`, made with `connect --record`) through the session
 and decoder, including a map change; `tests/payload.rs` runs the start of a real pl_upward
-match (`tests/fixtures/pl_upward.dem`). `cargo run --example cut_demo -- IN.dem OUT.dem N`
+match (`tests/fixtures/pl_upward.dem`) and `tests/flags.rs` a bball match
+(`tests/fixtures/ctf_ballin_sky.dem`). `cargo run --example cut_demo -- IN.dem OUT.dem N`
 cuts a demo after tick N, to make a fixture.
 
 ## Credits
@@ -224,4 +231,5 @@ cuts a demo after tick N, to make a fixture.
 - Decoding is [tf-demo-parser](https://codeberg.org/demostf/parser) and
   [bitbuffer](https://crates.io/crates/bitbuffer) by Robin Appelman of
   [demos.tf](https://demos.tf) (MIT or Apache-2.0).
-- `tests/fixtures/pl_upward.dem` is cut from a serveme.tf match's STV demo on demos.tf.
+- `tests/fixtures/pl_upward.dem` is cut from a serveme.tf match's STV demo on demos.tf, and
+  `tests/fixtures/ctf_ballin_sky.dem` is a bball match's STV demo from demos.tf.
