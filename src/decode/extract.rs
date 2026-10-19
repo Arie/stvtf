@@ -152,6 +152,8 @@ pub(crate) struct Extractor {
     mediguns: HashMap<u32, Medigun>,
     flamethrowers: HashMap<u32, Flamethrower>,
     weapons: HashMap<u32, Weapon>,
+    /// Per server class id: whether its send table has an item definition index.
+    weapon_classes: Vec<Option<bool>>,
     active_weapons: HashMap<u32, u32>,
     class_names: Vec<String>,
     /// Seconds per tick from ServerInfo.
@@ -1698,7 +1700,14 @@ impl Extractor {
                 eprintln!("{}#{idx} {:?} = {:?}", class.name.as_str(), p.identifier.names(), p.value);
             }
         }
-        self.on_weapon(idx, e.props(state));
+        if self.is_weapon_class(usize::from(e.server_class), state) {
+            // The baseline only matters on Enter; later updates are deltas.
+            if e.update_type == UpdateType::Enter {
+                self.on_weapon(idx, e.props(state).map(|p| (p.identifier, as_int(&p.value))));
+            } else {
+                self.on_weapon(idx, e.props.iter().map(|p| (p.identifier, as_int(&p.value))));
+            }
+        }
         let props = e.props(state);
         match class.name.as_str() {
             "CTFPlayer" => self.on_player(idx, props),
@@ -1715,25 +1724,31 @@ impl Extractor {
         }
     }
 
-    /// Any weapon class carries these props, and players their active weapon handle.
-    fn on_weapon(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        for p in props {
-            match p.identifier {
-                PROP_ACTIVE_WEAPON => {
-                    match opt_handle(as_int(&p.value)) {
-                        Some(w) => self.active_weapons.insert(idx, w),
-                        None => self.active_weapons.remove(&idx),
-                    };
-                }
-                PROP_ITEM_DEFINITION => self.weapon(idx).item = as_int(&p.value),
+    /// Any weapon class carries these props.
+    fn on_weapon(&mut self, idx: u32, props: impl Iterator<Item = (SendPropIdentifier, i64)>) {
+        for (id, v) in props {
+            match id {
+                PROP_ITEM_DEFINITION => self.weapon(idx).item = v,
                 PROP_CLIP => {
                     let w = self.weapon(idx);
-                    w.clip = as_int(&p.value);
+                    w.clip = v;
                     w.loaded |= w.clip > 0;
                 }
                 _ => {}
             }
         }
+    }
+
+    fn is_weapon_class(&mut self, class: usize, state: &ParserState) -> bool {
+        if self.weapon_classes.len() <= class {
+            self.weapon_classes.resize(class + 1, None);
+        }
+        *self.weapon_classes[class].get_or_insert_with(|| {
+            state
+                .send_tables
+                .get(class)
+                .is_some_and(|t| t.flattened_props.iter().any(|d| d.identifier == PROP_ITEM_DEFINITION))
+        })
     }
 
     fn weapon(&mut self, idx: u32) -> &mut Weapon {
@@ -1746,6 +1761,11 @@ impl Extractor {
             if let Some(i) = PROP_CONDS.iter().position(|id| *id == p.identifier) {
                 // A bit field: the bits are wanted, not the number.
                 words[i] = as_int(&p.value) as u32;
+            } else if p.identifier == PROP_ACTIVE_WEAPON {
+                match opt_handle(as_int(&p.value)) {
+                    Some(w) => self.active_weapons.insert(idx, w),
+                    None => self.active_weapons.remove(&idx),
+                };
             }
         }
     }
