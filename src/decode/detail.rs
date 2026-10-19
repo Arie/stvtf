@@ -1,7 +1,9 @@
 //! Heals, blast jumps and pickups: game events turned into JSON lines.
 
+use super::extract::{strip_colors, team_num};
 use serde_json::{Value, json};
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
+use tf_demo_parser::demo::message::usermessage::UserMessage;
 use tf_demo_parser::demo::parser::analyser::Class;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
@@ -120,6 +122,75 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Value> 
                 None
             }
         }
+        GameEvent::TeamPlayCaptureBroken(b) => {
+            Some(json!({"type": "capture_broken", "point": b.cp, "name": b.cp_name.to_string()}))
+        }
+        // The ids are entity indexes; 0 means no assister.
+        GameEvent::KilledCappingPlayer(k) => Some(json!({
+            "type": "killed_capper",
+            "point": k.cp,
+            "killer": (look.user_of_entity)(u32::from(k.killer))?,
+            "victim": (look.user_of_entity)(u32::from(k.victim))?,
+            "assister": (k.assister != 0).then(|| (look.user_of_entity)(u32::from(k.assister))).flatten(),
+        })),
+        GameEvent::MedicDefended(m) => Some(json!({"type": "medic_defended", "player": m.user_id, "medic": m.medic})),
+        GameEvent::VoteOptions(v) => {
+            let all = [&v.option_1, &v.option_2, &v.option_3, &v.option_4, &v.option_5];
+            let options: Vec<String> = all.iter().take(usize::from(v.count)).map(ToString::to_string).collect();
+            Some(json!({"type": "vote_options", "options": options}))
+        }
+        GameEvent::VoteCast(v) => Some(json!({
+            "type": "vote_cast",
+            "player": (look.user_of_entity)(v.entity_id),
+            "option": v.vote_option,
+            "team": team_num(v.team),
+        })),
+        GameEvent::TournamentStateUpdate(t) => Some(json!({
+            "type": "tournament",
+            "player": (t.user_id != 0).then_some(t.user_id),
+            "ready": (!t.name_change).then_some(t.ready_state != 0),
+        })),
+        GameEvent::TeamPlayBroadcastAudio(a) => {
+            let sound = a.sound.to_string();
+            sound
+                .starts_with("Announcer.")
+                .then(|| json!({"type": "announcer", "sound": sound, "team": team_num(a.team)}))
+        }
+        GameEvent::TeamPlayMapTimeRemaining(t) => Some(json!({"type": "time_remaining", "seconds": t.seconds})),
+        GameEvent::TfMapTimeRemaining(t) => Some(json!({"type": "time_remaining", "seconds": t.seconds})),
         _ => None,
+    }
+}
+
+pub(crate) fn user_message(message: &UserMessage<'_>, look: &Lookup<'_>) -> Option<Value> {
+    match message {
+        UserMessage::VoiceSubtitle(v) => Some(json!({
+            "type": "voice_command",
+            "player": (look.user_of_entity)(u32::from(v.client))?,
+            "menu": v.menu,
+            "item": v.item,
+        })),
+        UserMessage::Text(t) => Some(json!({"type": "server_text", "text": strip_colors(t.text.as_ref())})),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tf_demo_parser::demo::message::usermessage::VoiceSubtitleMessage;
+
+    #[test]
+    fn voice_commands_name_the_player() {
+        let msg = UserMessage::VoiceSubtitle(VoiceSubtitleMessage { client: 5, menu: 0, item: 1 });
+        let user = |ent: u32| (ent == 5).then_some(12u16);
+        let class = |_| None;
+        let look = Lookup { user_of_entity: &user, class_of_user: &class };
+        assert_eq!(
+            user_message(&msg, &look),
+            Some(json!({"type": "voice_command", "player": 12, "menu": 0, "item": 1}))
+        );
+        let other = UserMessage::VoiceSubtitle(VoiceSubtitleMessage { client: 6, menu: 0, item: 1 });
+        assert_eq!(user_message(&other, &look), None);
     }
 }

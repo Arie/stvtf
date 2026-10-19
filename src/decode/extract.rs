@@ -649,7 +649,7 @@ fn team_name(t: Team) -> &'static str {
     }
 }
 
-fn team_num<N>(n: N) -> &'static str
+pub(crate) fn team_num<N>(n: N) -> &'static str
 where
     u8: TryFrom<N>,
 {
@@ -1309,6 +1309,7 @@ impl Extractor {
                 cap_rate: (f64::from(cp.cap_rate()) * 1000.0).round() / 1000.0,
                 locked: cp.locked,
                 blocked: cp.blocked,
+                on_point: OnPoint { red: cp.members[2], blue: cp.members[3] },
             })
             .collect();
         let carts: Vec<_> =
@@ -1488,6 +1489,12 @@ struct BuildingOut {
 }
 
 #[derive(Serialize)]
+struct OnPoint {
+    red: u8,
+    blue: u8,
+}
+
+#[derive(Serialize)]
 #[serde(untagged)]
 enum ObjectiveOut {
     ControlPoint {
@@ -1500,6 +1507,7 @@ enum ObjectiveOut {
         cap_rate: f64,
         locked: bool,
         blocked: bool,
+        on_point: OnPoint,
     },
     Cart {
         kind: &'static str,
@@ -1536,7 +1544,7 @@ struct TimerOut {
 }
 
 /// Removes TF2 chat colour codes: \x01-\x06 select a colour, \x07 takes RRGGBB, \x08 RRGGBBAA.
-fn strip_colors(text: &str) -> String {
+pub(crate) fn strip_colors(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
@@ -1928,7 +1936,14 @@ impl Extractor {
                     "kind": chat_kind(m.kind),
                 }));
             }
-            _ => {}
+            _ => {
+                let class_of_user = |_| None;
+                let user_of_entity = |ent: u32| self.user_of_entity(ent);
+                let look = detail::Lookup { user_of_entity: &user_of_entity, class_of_user: &class_of_user };
+                if let Some(v) = detail::user_message(message, &look) {
+                    self.push(v);
+                }
+            }
         }
     }
 }

@@ -9,9 +9,22 @@ const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upwar
 static EVENTS: LazyLock<Vec<Value>> = LazyLock::new(|| {
     let bytes = std::fs::read(DEMO).unwrap();
     let mut out = Vec::new();
+    stvtf::decode::demo_file(&bytes, 20.0, &mut |v| out.push(v)).unwrap();
+    out
+});
+
+const TURBINE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ctf_turbine.dem");
+
+static CTF: LazyLock<Vec<Value>> = LazyLock::new(|| {
+    let bytes = std::fs::read(TURBINE).unwrap();
+    let mut out = Vec::new();
     stvtf::decode::demo_file(&bytes, 0.0, &mut |v| out.push(v)).unwrap();
     out
 });
+
+fn ctf_of_type(ty: &str) -> Vec<&'static Value> {
+    CTF.iter().filter(|e| e["type"] == ty).collect()
+}
 
 fn of_type(ty: &str) -> Vec<&'static Value> {
     EVENTS.iter().filter(|e| e["type"] == ty).collect()
@@ -67,4 +80,59 @@ fn impacts_and_marks_have_positions() {
             assert!(v.is_finite() && v >= min[i].as_f64().unwrap() && v <= max[i].as_f64().unwrap(), "{e}");
         }
     }
+}
+
+#[test]
+fn votes_pick_from_the_options_sent() {
+    let options = ctf_of_type("vote_options");
+    assert!(!options.is_empty());
+    let n = options.iter().map(|o| o["options"].as_array().unwrap().len()).max().unwrap() as u64;
+    let casts = ctf_of_type("vote_cast");
+    assert!(!casts.is_empty());
+    assert!(casts.iter().all(|c| c["option"].as_u64().unwrap() < n && c["team"].is_string()), "{casts:?}");
+}
+
+#[test]
+fn medics_get_defended() {
+    let d = ctf_of_type("medic_defended");
+    assert!(!d.is_empty());
+    assert!(d.iter().all(|e| e["player"].is_u64() && e["medic"].is_u64()));
+}
+
+#[test]
+fn match_flow_lines() {
+    let t = ctf_of_type("tournament");
+    assert!(!t.is_empty());
+    assert!(t.iter().any(|e| e["ready"].is_boolean()));
+    let a = ctf_of_type("announcer");
+    assert!(a.iter().all(|e| e["sound"].as_str().unwrap().starts_with("Announcer.")), "{a:?}");
+    assert!(ctf_of_type("server_text").iter().all(|e| e["text"].is_string()));
+}
+
+#[test]
+fn broken_captures_name_the_point() {
+    let b = of_type("capture_broken");
+    assert!(!b.is_empty());
+    assert!(b.iter().all(|e| e["point"].is_u64() && e["name"].is_string()));
+}
+
+#[test]
+fn points_count_players_standing_on_them() {
+    let on_point = |s: &&Value| {
+        s["objectives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["kind"] == "control_point" && o["on_point"]["blue"].as_u64().unwrap_or(0) > 0)
+    };
+    let snaps = of_type("snapshot");
+    assert!(snaps.iter().filter(|s| s["round"] == "running").any(on_point));
+    assert!(snaps.iter().all(|s| {
+        s["objectives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o["kind"] == "control_point")
+            .all(|o| o["on_point"]["red"].is_u64())
+    }));
 }

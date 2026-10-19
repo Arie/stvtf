@@ -104,7 +104,8 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   }],
   "objectives": [
     {"kind": "control_point", "index": 2, "pos": [-5632.0, 5248.0, 68.2], "owner": "none",
-     "capping_team": "blue", "cap_progress": 0.49, "locked": false, "blocked": false},
+     "capping_team": "blue", "cap_progress": 0.49, "locked": false, "blocked": false,
+     "on_point": {"red": 0, "blue": 2}},
     {"kind": "cart", "id": 51, "pos": [100.0, 200.0, 0.0], "team": "blue", "progress": 0.72, "cappers": 2, "speed": 2},
     {"kind": "flag", "id": 84, "pos": [1428.0, 896.0, -211.0], "team": "red", "status": "carried", "carrier": 6, "returns_in": null}
   ]
@@ -142,6 +143,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   enabled ones.
 - `cap_progress` runs 0 → 1 while `capping_team` caps, else 0. The server sends it every few
   seconds; like the HUD, the tool extrapolates it in between. `cap_rate` is progress per second.
+  `on_point` counts the players of each team standing on the point.
 
 ### Events
 
@@ -177,6 +179,16 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `blast_jump` | `player`, `kind` (`rocket`, `sticky`), `phase` (`start`, `land`) |
 | `pickup` | `player`, `item` (`health`, `ammo`), `size` (`small`, `medium`, `full`, null when unknown) |
 | `point_captured` | `point` (index into the control points), `name`, `team`, `cappers` (player ids) |
+| `capture_broken` | `point`, `name`: a capture was stopped before it finished |
+| `killed_capper` | `point`, `killer`, `victim`, `assister` (null if none): a player capping was killed |
+| `medic_defended` | `player`, `medic`: a player protected a medic |
+| `vote_options` | `options`: the choices of a call vote that just started |
+| `vote_cast` | `player` (null if unknown), `option` (index into the last `vote_options`), `team` |
+| `tournament` | `player` (null for the whole match), `ready` (null for a name change): ready-up changes |
+| `announcer` | `sound` (raw name, e.g. `Announcer.RoundEnds5minutes`), `team` |
+| `time_remaining` | `seconds`: the map time limit's remaining time |
+| `voice_command` | `player`, `menu`, `item`: a voice menu command (`menu` 0 is `Z`, `item` 0 is `Medic!`) |
+| `server_text` | `text` (colour codes stripped): a server message, such as a hint or a vote result |
 | `game_over` | `reason` |
 | `chat` | `player` (null for console), `name`, `text` (colour codes stripped), `kind` |
 
@@ -229,7 +241,8 @@ Unit tests cover the codec and protocol layers. `tests/captures.rs` replays Sour
 from a bot server (`tests/fixtures/*.cap`, made with `connect --record`) through the session
 and decoder, including a map change; `tests/payload.rs` runs the start of a real pl_upward
 match (`tests/fixtures/pl_upward.dem`) and `tests/flags.rs` a bball match
-(`tests/fixtures/ctf_ballin_sky.dem`). `cargo run --example cut_demo -- IN.dem OUT.dem N`
+(`tests/fixtures/ctf_ballin_sky.dem`). `tests/detail.rs` also decodes a ctf_turbine match
+(`tests/fixtures/ctf_turbine.dem`) for votes and medic defences. `cargo run --example cut_demo -- IN.dem OUT.dem N`
 cuts a demo after tick N, to make a fixture.
 
 ## Credits
@@ -240,4 +253,5 @@ cuts a demo after tick N, to make a fixture.
   [bitbuffer](https://crates.io/crates/bitbuffer) by Robin Appelman of
   [demos.tf](https://demos.tf) (MIT or Apache-2.0).
 - `tests/fixtures/pl_upward.dem` is cut from a serveme.tf match's STV demo on demos.tf, and
-  `tests/fixtures/ctf_ballin_sky.dem` is a bball match's STV demo from demos.tf.
+  `tests/fixtures/ctf_ballin_sky.dem` is a bball match's STV demo and
+  `tests/fixtures/ctf_turbine.dem` a ctf_turbine match's (demos.tf 1287498), both from demos.tf.
