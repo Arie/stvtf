@@ -1703,6 +1703,8 @@ impl Extractor {
         if self.is_weapon_class(usize::from(e.server_class), state) {
             // The baseline only matters on Enter; later updates are deltas.
             if e.update_type == UpdateType::Enter {
+                // A reused slot may have had no Delete.
+                self.weapons.remove(&idx);
                 self.on_weapon(idx, e.props(state).map(|p| (p.identifier, as_int(&p.value))));
             } else {
                 self.on_weapon(idx, e.props.iter().map(|p| (p.identifier, as_int(&p.value))));
