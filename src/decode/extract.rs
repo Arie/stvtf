@@ -108,6 +108,8 @@ const PROP_FLAG_STATUS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nFlagS
 const PROP_FLAG_DISABLED: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_bDisabled");
 const PROP_FLAG_RESET_TIME: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_flResetTime");
 const PROP_ROUND_STATE: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_iRoundState");
+const PROP_RED_KOTH_TIMER: SendPropIdentifier = prop_id("DT_TFGameRules", "m_hRedKothTimer");
+const PROP_BLUE_KOTH_TIMER: SendPropIdentifier = prop_id("DT_TFGameRules", "m_hBlueKothTimer");
 const PROP_MAP_RESET_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flMapResetTime");
 const PROP_STATE_TRANSITION_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flStateTransitionTime");
 const PROP_WEAPON_OWNER: SendPropIdentifier = prop_id("DT_BaseCombatWeapon", "m_hOwner");
@@ -158,6 +160,8 @@ pub(crate) struct Extractor {
     tick_interval: Option<f32>,
     teams: BTreeMap<u32, TeamScore>,
     timers: BTreeMap<u32, RoundTimer>,
+    /// King of the hill: each team's own timer, which runs while that team holds the point.
+    koth_timers: [Option<u32>; 2],
     round_state: RoundState,
     /// Server time the match started (m_flMapResetTime) and the current round went live.
     match_start: f32,
@@ -1380,10 +1384,17 @@ impl Extractor {
                 .then(|| ScoreOut { red: captures(Team::Red), blue: captures(Team::Blue) }),
             timers: self
                 .timers
-                .values()
-                .filter(|t| t.show && !t.disabled)
-                .map(|t| TimerOut {
-                    team: team_num(t.team),
+                .iter()
+                // On king of the hill the HUD shows only the teams' timers; others are left from earlier rounds.
+                .filter(|(idx, t)| {
+                    t.show && !t.disabled && (self.koth_timers == [None; 2] || self.koth_timers.contains(&Some(**idx)))
+                })
+                .map(|(idx, t)| TimerOut {
+                    team: match self.koth_timers.iter().position(|k| *k == Some(*idx)) {
+                        Some(0) => "red",
+                        Some(_) => "blue",
+                        None => team_num(t.team),
+                    },
                     remaining: round1(t.remaining_at(self.server_tick, interval)),
                     paused: t.paused,
                     setup: t.setup,
@@ -1925,6 +1936,8 @@ impl Extractor {
         for p in props {
             match p.identifier {
                 PROP_ROUND_STATE => self.round_state = RoundState::from_raw(as_int(&p.value)),
+                PROP_RED_KOTH_TIMER => self.koth_timers[0] = opt_handle(as_int(&p.value)),
+                PROP_BLUE_KOTH_TIMER => self.koth_timers[1] = opt_handle(as_int(&p.value)),
                 PROP_MAP_RESET_TIME => self.match_start = as_float(&p.value),
                 PROP_STATE_TRANSITION_TIME => self.state_transition = as_float(&p.value),
                 _ => {}
@@ -2281,6 +2294,30 @@ mod cond_tests {
         assert_eq!(medigun_kind(35), "kritzkrieg");
         assert_eq!(medigun_kind(411), "quickfix");
         assert_eq!(medigun_kind(998), "vaccinator");
+    }
+}
+
+#[cfg(test)]
+mod koth_tests {
+    use super::*;
+
+    #[test]
+    fn koth_shows_each_teams_timer_and_not_old_ones() {
+        let mut x = Extractor::default();
+        let shown = RoundTimer { show: true, remaining: 180.0, paused: true, ..Default::default() };
+        for idx in [5, 6, 7] {
+            x.timers.insert(idx, shown.clone());
+        }
+        x.koth_timers = [Some(6), Some(5)];
+        let teams: Vec<String> = x.snapshot()["timers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["team"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(teams, ["blue", "red"]);
+        x.koth_timers = [None; 2];
+        assert_eq!(x.snapshot()["timers"].as_array().unwrap().len(), 3);
     }
 }
 
