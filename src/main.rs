@@ -18,7 +18,7 @@ stvmap: headless TF2 SourceTV spectator emitting top-down overview data as JSON 
   stvmap replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
   stvmap demo    FILE.dem [--hz 20]
 
-HOST:PORT is the SourceTV port (tv_port), not the game port.
+HOST:PORT is the SourceTV port (tv_port); given the game port, it tries game port + 5.
 The password can also come from the STVMAP_PASSWORD environment variable, which
 other local users cannot read the way they can read command-line arguments.
 Tables and CRC of the build reported by the server are built in for known builds;
