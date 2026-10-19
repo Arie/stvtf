@@ -5,7 +5,7 @@ use super::detail;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::LazyLock;
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
@@ -39,15 +39,8 @@ const DEATH_FEIGN: u16 = 0x20;
 /// player_death customkill values.
 const CUSTOM_KILL_HEADSHOT: u16 = 1;
 const CUSTOM_KILL_BACKSTAB: u16 = 2;
-/// TF_WEAPON_ROCKETLAUNCHER: its explosions are rockets, every other weapon's grenades.
-const WEAPON_ROCKET_LAUNCHER: i64 = 22;
-/// How far from an explosion a rocket SourceTV still has may be to be the one that went off. One
-/// hidden by mistake is still flying, and shows again at its next update.
-const ROCKET_EXPLOSION_RADIUS: f32 = 150.0;
-/// The same for grenades, kept tight: a sticky lying still is not updated, so one hidden by mistake
-/// stays hidden until it is detonated. A grenade that went off is within a few units of the blast;
-/// live stickies beside one start at about 20.
-const GRENADE_EXPLOSION_RADIUS: f32 = 16.0;
+/// Recent frames kept to resolve deltas against.
+const MAX_FRAMES: usize = 128;
 /// CObjectSentrygun m_iState while shooting at a target.
 const SENTRY_STATE_ATTACKING: i64 = 2;
 /// User message id of SayText (console `say` and server notices).
@@ -61,7 +54,7 @@ const MAX_PENDING_SPAWNS: usize = 256;
 /// Seconds per server tick until the server's own value (ServerInfo) arrives.
 pub(crate) const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
-/// `STVTF_DEBUG`, read once: a server class, temp entity class, `ent:N`, `gameevents` or `explosions`.
+/// `STVTF_DEBUG`, read once: a server class, temp entity class, `ent:N` or `gameevents`.
 static DEBUG: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("STVTF_DEBUG").ok());
 
 /// Whether `STVTF_DEBUG` asks for this topic.
@@ -82,8 +75,6 @@ const fn prop_id(table: &str, name: &str) -> SendPropIdentifier {
 
 const PROP_TEAM_NUM: SendPropIdentifier = prop_id("DT_BaseEntity", "m_iTeamNum");
 const PROP_ORIGIN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_vecOrigin");
-const PROP_ROCKET_ORIGIN: SendPropIdentifier = prop_id("DT_TFBaseRocket", "m_vecOrigin");
-const PROP_GRENADE_ORIGIN: SendPropIdentifier = prop_id("DT_TFWeaponBaseGrenadeProj", "m_vecOrigin");
 const PROP_ROTATION: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
 /// The condition words of a player: m_nPlayerCond, _condition_bits, m_nPlayerCondEx..Ex4.
 const PROP_CONDS: [SendPropIdentifier; 6] = [
@@ -194,9 +185,8 @@ pub(crate) struct Extractor {
     flags: BTreeMap<u32, Flag>,
     /// player_spawn arrives before the player's new position: held until the next entity update.
     pending_spawns: Vec<(u16, Value)>,
-    /// Projectiles an explosion went off at, hidden rather than dropped: one that moves again was
-    /// not the one that exploded, and comes back with its team and owner.
-    exploded: HashSet<u32>,
+    /// The entities in each recent frame, by server tick, to find the ones a delta drops silently.
+    frames: VecDeque<(u32, HashSet<u32>)>,
     /// Players who disconnected: the server keeps their slot, and so their entity and info, for
     /// a while after. A user id is not reused while the server runs.
     left: HashSet<u16>,
@@ -768,49 +758,6 @@ impl Extractor {
         projectile_kind(pr.ty, self.class_names.get(usize::from(pr.class)).map_or("", String::as_str))
     }
 
-    /// SourceTV usually deletes an exploding projectile in the explosion's tick, but can keep
-    /// a rocket around, unchanging, for seconds; a game client hides it at the explosion, so do
-    /// the same with a matching projectile right at the blast: rockets for rocket launchers,
-    /// grenades otherwise.
-    fn exploded(&mut self, props: &[SendProp]) {
-        let [x, y, z] = PROP_EXPLOSION_ORIGIN.map(|id| prop_f(props, id));
-        let origin = Vector { x, y, z };
-        let weapon = prop_i(props, PROP_EXPLOSION_WEAPON);
-        let rocket = weapon == WEAPON_ROCKET_LAUNCHER;
-        let distance = |p: &Projectile| {
-            let d = p.position - origin;
-            (d.x * d.x + d.y * d.y + d.z * d.z).sqrt()
-        };
-        let nearest = self
-            .gs
-            .state
-            .projectiles
-            .values()
-            .filter(|p| (p.ty == ProjectileType::Rocket) == rocket && !self.exploded.contains(&u32::from(p.id)))
-            .map(|p| (u32::from(p.id), distance(p)))
-            .filter(|(_, d)| *d < if rocket { ROCKET_EXPLOSION_RADIUS } else { GRENADE_EXPLOSION_RADIUS })
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if debug("explosions") {
-            let near: Vec<String> = self
-                .gs
-                .state
-                .projectiles
-                .values()
-                .filter(|p| distance(p) < 400.0)
-                .map(|p| format!("{}:{:?}:{:.0}", u32::from(p.id), p.ty, distance(p)))
-                .collect();
-            eprintln!(
-                "explosion tick {} weapon {weapon} at {x:.0},{y:.0},{z:.0} hides {:?} near {}",
-                self.server_tick,
-                nearest.map(|(id, _)| id),
-                near.join(" ")
-            );
-        }
-        if let Some((id, _)) = nearest {
-            self.exploded.insert(id);
-        }
-    }
-
     /// While running, the last state transition is when the round went live; a win or
     /// stalemate stops its clock and the next pre-round clears it.
     fn track_round_time(&mut self) {
@@ -878,7 +825,6 @@ impl Extractor {
         self.sentries.remove(&idx);
         self.medic_charge.remove(&idx);
         self.flags.remove(&idx);
-        self.exploded.remove(&idx);
     }
 
     fn entity_of_user(&self, user_id: u16) -> Option<u32> {
@@ -1300,7 +1246,6 @@ impl Extractor {
         let projectiles = gs
             .projectiles
             .values()
-            .filter(|pr| !self.exploded.contains(&u32::from(pr.id)))
             .map(|pr| ProjectileOut {
                 id: u32::from(pr.id),
                 kind: self.projectile_kind(pr),
@@ -1652,6 +1597,52 @@ fn building_kind(object: u16) -> &'static str {
 
 /// Per-class entity handlers. Each reads the props of one entity update.
 impl Extractor {
+    /// A delta names only what changed since its base frame, so an entity that came and went in
+    /// between (a rocket fired and exploded since then) is in neither, and no delete for it is
+    /// ever sent. SourceTV relays often send deltas from a frame a few ticks back; demo files
+    /// from the previous tick, where every delete arrives. Like the game client, this frame's
+    /// entities are the base frame's plus those that entered, less those that left: projectiles
+    /// and buildings outside it are gone. Without the base frame (just connected), nothing is dropped.
+    fn track_frame(&mut self, pe: &PacketEntitiesMessage) {
+        let base = match pe.delta {
+            None => Some(HashSet::new()),
+            Some(t) => self.frames.iter().rev().find(|(tick, _)| *tick == u32::from(t)).map(|(_, f)| f.clone()),
+        };
+        let Some(mut frame) = base else { return };
+        for e in &pe.entities {
+            let id = u32::from(e.entity_index);
+            match e.update_type {
+                UpdateType::Enter | UpdateType::Preserve => frame.insert(id),
+                UpdateType::Leave | UpdateType::Delete => frame.remove(&id),
+            };
+        }
+        for id in &pe.removed_entities {
+            frame.remove(&u32::from(*id));
+        }
+        let gone: Vec<EntityId> = self
+            .gs
+            .state
+            .projectiles
+            .keys()
+            .chain(self.gs.state.buildings.keys())
+            .filter(|id| !frame.contains(&u32::from(**id)))
+            .copied()
+            .collect();
+        for id in gone {
+            self.gs.state.projectile_destroy(id);
+            self.gs.state.remove_building(id);
+            self.forget_entity(u32::from(id));
+        }
+        // A later delta never comes from a frame older than this one's base.
+        if let Some(t) = pe.delta {
+            self.frames.retain(|(tick, _)| *tick >= u32::from(t));
+        }
+        self.frames.push_back((self.server_tick, frame));
+        if self.frames.len() > MAX_FRAMES {
+            self.frames.pop_front();
+        }
+    }
+
     fn packet_entities(&mut self, pe: &PacketEntitiesMessage, state: &ParserState) {
         if let Some(ent) = debug_entity() {
             for e in pe.entities.iter().filter(|e| u32::from(e.entity_index) == ent) {
@@ -1683,6 +1674,7 @@ impl Extractor {
         for e in &pe.entities {
             self.entity(e, state);
         }
+        self.track_frame(pe);
         for p in &self.gs.state.players {
             if p.state == PlayerState::Alive {
                 self.last_alive
@@ -1706,13 +1698,7 @@ impl Extractor {
         // tf-demo-parser keeps projectiles frozen where they were.
         if e.update_type == UpdateType::Leave {
             self.gs.state.projectiles.remove(&e.entity_index);
-            self.exploded.remove(&idx);
             return;
-        }
-        if e.update_type == UpdateType::Enter
-            || e.props.iter().any(|p| p.identifier == PROP_ROCKET_ORIGIN || p.identifier == PROP_GRENADE_ORIGIN)
-        {
-            self.exploded.remove(&idx);
         }
         // Every entity class has its own `moveparent` prop, so this one goes by name.
         if let Some(parent) =
@@ -1734,7 +1720,6 @@ impl Extractor {
         // a new projectile is built again from it, so it keeps its team and owner.
         if self.gs.state.projectiles.get(&e.entity_index).is_some_and(|p| p.class != e.server_class) {
             self.gs.state.projectiles.remove(&e.entity_index);
-            self.exploded.remove(&idx);
             if class.is_some_and(|c| {
                 c.name.starts_with("CTFProjectile_") || c.name.as_str() == "CTFGrenadePipebombProjectile"
             }) {
@@ -2011,9 +1996,6 @@ impl Extractor {
             }
             if let Some(class) = state.server_classes.get(usize::from(class_id)) {
                 self.temp_entity(class.name.as_str(), &props);
-                if class.name.as_str() == "CTETFExplosion" {
-                    self.exploded(&props);
-                }
             }
             prev = Some((class_id, props));
         }
@@ -2303,76 +2285,82 @@ mod cond_tests {
 }
 
 #[cfg(test)]
-mod explosion_tests {
+mod frame_tests {
     use super::*;
-    use tf_demo_parser::demo::message::packetentities::EntityId;
+    use tf_demo_parser::demo::data::ServerTick;
+    use tf_demo_parser::demo::message::packetentities::{BaselineIndex, EntityId};
     use tf_demo_parser::demo::packet::datatable::{ClassId, ServerClassName};
-    use tf_demo_parser::demo::sendprop::SendPropIdentifier;
 
-    fn projectile(id: u32, class: &str, ty: ProjectileType, pos: [f32; 3]) -> Projectile {
-        let mut p = Projectile::new(EntityId::from(id), ClassId::from(1u16), &ServerClassName::from(class));
-        p.ty = ty;
-        p.position = Vector { x: pos[0], y: pos[1], z: pos[2] };
-        p
-    }
-
-    fn explosion(weapon: i64, at: [f32; 3]) -> Vec<SendProp> {
-        let prop = |name: &str, value| SendProp {
-            index: 0,
-            identifier: SendPropIdentifier::new("DT_TETFExplosion", name),
-            value,
-        };
-        vec![
-            prop("m_vecOrigin[0]", SendPropValue::Float(at[0])),
-            prop("m_vecOrigin[1]", SendPropValue::Float(at[1])),
-            prop("m_vecOrigin[2]", SendPropValue::Float(at[2])),
-            prop("m_iWeaponID", SendPropValue::Integer(weapon)),
-        ]
-    }
-
-    fn extractor() -> Extractor {
-        let mut x = Extractor::default();
-        for p in [
-            projectile(10, "CTFProjectile_Rocket", ProjectileType::Rocket, [100.0, 0.0, 0.0]),
-            projectile(11, "CTFGrenadePipebombProjectile", ProjectileType::Sticky, [40.0, 0.0, 0.0]),
-            projectile(12, "CTFProjectile_Rocket", ProjectileType::Rocket, [900.0, 0.0, 0.0]),
-        ] {
-            x.gs.state.projectiles.insert(p.id, p);
+    fn update(id: u32, update_type: UpdateType) -> PacketEntity {
+        PacketEntity {
+            server_class: ClassId::from(1u16),
+            entity_index: EntityId::from(id),
+            props: Vec::new(),
+            in_pvs: true,
+            update_type,
+            serial_number: 0,
+            delay: None,
+            delta: None,
+            baseline_index: BaselineIndex::First,
         }
-        x
+    }
+
+    fn frame(x: &mut Extractor, tick: u32, delta: Option<u32>, entities: Vec<PacketEntity>) {
+        x.server_tick = tick;
+        for e in &entities {
+            if e.update_type == UpdateType::Enter {
+                let id = e.entity_index;
+                x.gs.state.projectiles.entry(id).or_insert_with(|| {
+                    Projectile::new(id, ClassId::from(1u16), &ServerClassName::from("CTFProjectile_Rocket"))
+                });
+            }
+        }
+        let pe = PacketEntitiesMessage {
+            entities,
+            removed_entities: Vec::new(),
+            max_entries: 0,
+            delta: delta.map(ServerTick::from),
+            base_line: BaselineIndex::First,
+            updated_base_line: false,
+        };
+        x.track_frame(&pe);
     }
 
     fn shown(x: &Extractor) -> Vec<u32> {
-        x.gs.state.projectiles.keys().map(|k| u32::from(*k)).filter(|id| !x.exploded.contains(id)).collect()
+        let mut ids: Vec<u32> = x.gs.state.projectiles.keys().map(|k| u32::from(*k)).collect();
+        ids.sort_unstable();
+        ids
     }
 
     #[test]
-    fn rocket_explosion_removes_the_rocket_not_the_closer_sticky() {
-        assert!(explosion(22, [0.0; 3]).iter().all(|p| p.identifier.names().is_some()), "prop names resolve");
-        let mut x = extractor();
-        x.exploded(&explosion(22, [95.0, 0.0, 0.0]));
-        assert_eq!(shown(&x), [11, 12]);
+    fn a_projectile_that_came_and_went_since_the_base_frame_is_gone() {
+        let mut x = Extractor::default();
+        frame(&mut x, 100, None, vec![update(10, UpdateType::Enter)]);
+        frame(&mut x, 101, Some(100), vec![update(11, UpdateType::Enter)]);
+        frame(&mut x, 102, Some(100), vec![update(11, UpdateType::Enter)]);
+        assert_eq!(shown(&x), [10, 11]);
+        // Fired after frame 100 and exploded: no longer in the deltas from 100, and never deleted.
+        frame(&mut x, 103, Some(100), vec![]);
+        assert_eq!(shown(&x), [10]);
     }
 
     #[test]
-    fn grenade_explosion_removes_the_sticky() {
-        let mut x = extractor();
-        x.exploded(&explosion(35, [45.0, 0.0, 0.0]));
-        assert_eq!(shown(&x), [10, 12]);
+    fn deletes_and_deltas_from_the_previous_frame() {
+        let mut x = Extractor::default();
+        frame(&mut x, 100, None, vec![update(10, UpdateType::Enter), update(11, UpdateType::Enter)]);
+        frame(&mut x, 101, Some(100), vec![update(10, UpdateType::Preserve)]);
+        frame(&mut x, 102, Some(101), vec![update(11, UpdateType::Delete)]);
+        assert_eq!(shown(&x), [10]);
+        frame(&mut x, 103, Some(102), vec![]);
+        assert_eq!(shown(&x), [10]);
     }
 
     #[test]
-    fn a_blast_beside_a_sticky_leaves_it() {
-        let mut x = extractor();
-        x.exploded(&explosion(35, [70.0, 0.0, 0.0]));
-        assert_eq!(shown(&x), [10, 11, 12]);
-    }
-
-    #[test]
-    fn far_explosions_remove_nothing() {
-        let mut x = extractor();
-        x.exploded(&explosion(22, [500.0, 0.0, 0.0]));
-        assert_eq!(shown(&x), [10, 11, 12]);
+    fn without_the_base_frame_nothing_is_dropped() {
+        let mut x = Extractor::default();
+        frame(&mut x, 101, Some(100), vec![update(10, UpdateType::Enter)]);
+        frame(&mut x, 102, Some(100), vec![]);
+        assert_eq!(shown(&x), [10]);
     }
 }
 
