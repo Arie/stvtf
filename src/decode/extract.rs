@@ -1175,7 +1175,11 @@ impl Extractor {
                     "weapon_id": prop_i(props, PROP_EXPLOSION_WEAPON),
                 }));
             }
-            _ => {}
+            _ => {
+                if let Some(v) = detail::temp_entity(class, props) {
+                    self.push(v);
+                }
+            }
         }
     }
 

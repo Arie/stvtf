@@ -151,6 +151,8 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `damage` | `victim`, `attacker`, `amount`, `health` (left), `crit`, `minicrit`, `weapon_id` |
 | `shot` | `player`, `origin`, `pitch`, `yaw`, `weapon_id`: one per hitscan shot (bullets, shotgun, sniper, minigun) from TE_FireBullets |
 | `explosion` | `origin`, `weapon_id`: rockets, pipes, stickies, … |
+| `impact` | `kind` (`blood`, `sparks`, `ricochet`), `pos`: where a bullet hit |
+| `mark` | `pos`: a decal (bullet hole, scorch) left on the world |
 | `sentry_shot` | `sentry` (building id), `builder`, `target`, `shells`: a sentry fired (its shell count dropped) |
 | `spawn` | `player`, `team`, `class`, `pos` (where they spawned: the event waits for the player's new position, which arrives after it) |
 | `uber` | `medic`, `target`, `medigun` (kind, as above) |
@@ -202,7 +204,7 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
   map change. Past 1 GiB (`Options::max_decoder_bytes`) the tool reconnects to start afresh.
 - SourceTV keeps an exploded projectile around for up to seconds. Like a game client, the tool
   hides it: the nearest rocket or grenade within 150 units of each `explosion`.
-- Temp entities (`explosion`, `shot`) fill omitted properties from the previous one of the same
+- Temp entities (`explosion`, `shot`, `impact`, `mark`) fill omitted properties from the previous one of the same
   class, as the engine does.
 - `shot` covers hitscan only; melee swings have no event.
 

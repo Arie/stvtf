@@ -50,3 +50,21 @@ fn pickups_are_health_or_ammo() {
     assert!(p.iter().filter(|e| e["item"] == "ammo").count() > 20);
     assert!(p.iter().filter(|e| e["item"] == "health").count() > 10);
 }
+
+#[test]
+fn impacts_and_marks_have_positions() {
+    let impacts = of_type("impact");
+    let marks = of_type("mark");
+    assert!(impacts.iter().filter(|e| e["kind"] == "blood").count() > 200);
+    assert!(impacts.iter().any(|e| e["kind"] == "sparks"));
+    assert!(impacts.iter().any(|e| e["kind"] == "ricochet"));
+    assert!(marks.len() > 100, "{} marks", marks.len());
+    let world = of_type("world")[0];
+    let (min, max) = (&world["min"], &world["max"]);
+    for e in impacts.iter().chain(&marks) {
+        for i in 0..3 {
+            let v = e["pos"][i].as_f64().unwrap_or_else(|| panic!("{e}"));
+            assert!(v.is_finite() && v >= min[i].as_f64().unwrap() && v <= max[i].as_f64().unwrap(), "{e}");
+        }
+    }
+}

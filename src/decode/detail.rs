@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::parser::analyser::Class;
+use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
 /// Lookups the extractor owns: entity index to user id, and a user's current class.
 pub(crate) struct Lookup<'a> {
@@ -23,6 +24,63 @@ fn jump(player: u16, kind: &str, phase: &str) -> Option<Value> {
 
 fn pickup(player: u16, item: &str, size: Option<&str>) -> Option<Value> {
     Some(json!({"type": "pickup", "player": player, "item": item, "size": size}))
+}
+
+const fn origin_parts(table: &str) -> [SendPropIdentifier; 3] {
+    [
+        SendPropIdentifier::new(table, "m_vecOrigin[0]"),
+        SendPropIdentifier::new(table, "m_vecOrigin[1]"),
+        SendPropIdentifier::new(table, "m_vecOrigin[2]"),
+    ]
+}
+
+const BLOOD_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TETFBlood");
+const SPARKS_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TEParticleSystem");
+const RICOCHET_POS: SendPropIdentifier = SendPropIdentifier::new("DT_TEMetalSparks", "m_vecPos");
+const WORLD_DECAL_ORIGIN: SendPropIdentifier = SendPropIdentifier::new("DT_TEWorldDecal", "m_vecOrigin");
+const DECAL_ORIGIN: SendPropIdentifier = SendPropIdentifier::new("DT_TEDecal", "m_vecOrigin");
+
+fn value(props: &[SendProp], id: SendPropIdentifier) -> Option<&SendPropValue> {
+    props.iter().find(|p| p.identifier == id).map(|p| &p.value)
+}
+
+fn vector(props: &[SendProp], id: SendPropIdentifier) -> Option<[f32; 3]> {
+    match value(props, id)? {
+        SendPropValue::Vector(v) => Some([v.x, v.y, v.z]),
+        _ => None,
+    }
+}
+
+fn parts(props: &[SendProp], ids: [SendPropIdentifier; 3]) -> Option<[f32; 3]> {
+    let mut out = [0.0; 3];
+    for (o, id) in out.iter_mut().zip(ids) {
+        *o = match value(props, id)? {
+            SendPropValue::Float(f) => *f,
+            _ => return None,
+        };
+    }
+    Some(out)
+}
+
+fn round1(f: f32) -> f64 {
+    (f64::from(f) * 10.0).round() / 10.0
+}
+
+fn impact(kind: &str, pos: Option<[f32; 3]>) -> Option<Value> {
+    Some(json!({"type": "impact", "kind": kind, "pos": pos?.map(round1)}))
+}
+
+/// Where bullets landed and what they left behind. `props` already has omitted values filled in.
+pub(crate) fn temp_entity(class: &str, props: &[SendProp]) -> Option<Value> {
+    match class {
+        "CTETFBlood" => impact("blood", parts(props, BLOOD_ORIGIN)),
+        "CTESparks" => impact("sparks", parts(props, SPARKS_ORIGIN)),
+        "CTEMetalSparks" => impact("sparks", vector(props, RICOCHET_POS)),
+        "CTEArmorRicochet" => impact("ricochet", vector(props, RICOCHET_POS)),
+        "CTEWorldDecal" => Some(json!({"type": "mark", "pos": vector(props, WORLD_DECAL_ORIGIN)?.map(round1)})),
+        "CTEDecal" => Some(json!({"type": "mark", "pos": vector(props, DECAL_ORIGIN)?.map(round1)})),
+        _ => None,
+    }
 }
 
 pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Value> {
