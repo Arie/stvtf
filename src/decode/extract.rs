@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::data::game_state::{
-    Building, BuildingClass, GameState, PlayerCondition, PlayerState, Projectile, ProjectileType,
+    Building, GameState, PlayerCondition, PlayerState, Projectile, ProjectileType,
 };
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::header::Header;
@@ -1282,7 +1282,7 @@ impl Extractor {
             .map(|b| {
                 let mut out = BuildingOut {
                     id: u32::from(b.entity_id()),
-                    kind: building_class(&b.class()),
+                    kind: building_kind_of(b),
                     team: team_name(b.team()),
                     level: b.level(),
                     hp: b.health(),
@@ -1590,11 +1590,12 @@ pub(crate) fn strip_colors(text: &str) -> String {
     out.trim_end_matches('\n').to_string()
 }
 
-fn building_class(c: &BuildingClass) -> &'static str {
-    match c {
-        BuildingClass::Sentry => "sentry",
-        BuildingClass::Dispenser => "dispenser",
-        BuildingClass::Teleporter => "teleporter",
+// tf-demo-parser's `Building::class()` reports dispensers as sentries; go by the variant.
+fn building_kind_of(b: &Building) -> &'static str {
+    match b {
+        Building::Sentry(_) => "sentry",
+        Building::Dispenser(_) => "dispenser",
+        Building::Teleporter(_) => "teleporter",
         _ => "unknown",
     }
 }

@@ -177,3 +177,24 @@ fn soldiers_hold_weapons_with_clips() {
     assert!(!stickies.is_empty() && stickies.iter().all(|&c| c <= 8) && stickies.contains(&8), "{stickies:?}");
     assert!(alive.iter().any(|p| p["class"] == "medic" && p["weapon"].is_object() && p["weapon"]["clip"].is_null()));
 }
+
+fn sentry_problems(events: &[Value]) -> usize {
+    let mut bad = 0;
+    for s in events.iter().filter(|e| e["type"] == "snapshot") {
+        let mut builders = std::collections::HashSet::new();
+        for b in s["buildings"].as_array().unwrap().iter().filter(|b| b["kind"] == "sentry") {
+            if b["mini"].is_null() || (!b["builder"].is_null() && !builders.insert(b["builder"].clone())) {
+                bad += 1;
+            }
+        }
+    }
+    bad
+}
+
+#[test]
+fn sentries_are_real_and_one_per_builder() {
+    let has_building = |ev: &[Value]| ev.iter().any(|e| e["buildings"].as_array().is_some_and(|b| !b.is_empty()));
+    assert!(has_building(&EVENTS) || has_building(&CTF));
+    assert_eq!(sentry_problems(&EVENTS), 0);
+    assert_eq!(sentry_problems(&CTF), 0);
+}
