@@ -128,8 +128,15 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 - Medics carry `medigun`: `{"kind": "medigun"|"kritzkrieg"|"quickfix"|"vaccinator", "releasing": bool,
   "resist": "bullet"|"blast"|"fire" (vaccinator only), "target": player id being healed or null}`.
 - `weapon` is the weapon in hand: `{"item": item definition index, "clip": rounds loaded or null}`, or null
-  if none is known. SourceTV sends no reserve ammo, and `clip` is `null` for a weapon without a clip.
+  if none is known. `clip` is `null` for a weapon without a clip.
 - Pyros carry `flames` while firing: `{"crit": bool, "hit": bool}` (`hit`: hurting someone), else null.
+- Dead players carry `respawn`: seconds until they respawn, once the server has set it.
+- `score` is the player's scoreboard line: `{"points", "kills", "deaths", "assists", "damage", "healing",
+  "dominations", "streak"}`. Points, kills and deaths are the server's match totals; `damage` (dealt to
+  others), `healing` (given) and `assists` are counted from the events since the match started, as logs.tf
+  does, or since connecting. `dominations` and `streak` (current killstreak) are as they stand.
+- An engineer carrying a building has `carrying`: `sentry`, `dispenser` or `teleporter`. The building
+  is not in `buildings` while it is carried.
 - Projectile `kind` is `Rocket`, `Pipe`, `Sticky`, `LooseCannon`, `Flare`, `HealingArrow` (crossbow),
   `Arrow` (huntsman), `EnergyBall` (Cow Mangler), `EnergyRing` (Bison, Pomson), `Fireball`
   (Dragon's Fury), `Cleaver`, `Jarate`, `MadMilk`, `GasPasser`, `ShortCircuitOrb` or `Unknown`;
@@ -171,6 +178,9 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `stalemate`, `overtime` | (none) |
 | `build` | `player`, `object` (`sentry`/`dispenser`/`teleporter`/`sapper`), `id` |
 | `building_destroyed` | `owner`, `attacker`, `object`, `id`, `weapon`, `was_building` |
+| `building_upgrade` | `player`, `object`, `id`: a building went up a level |
+| `building_repair` | `id`, `amount`: a building was repaired |
+| `time_added` | `team` (the timer's: `red`/`blue` on king of the hill, else usually `none`), `seconds`: time added to a round timer |
 | `team_change` | `player`, `team`, `old_team`, `disconnect` |
 | `class_change` | `player`, `class` |
 | `player_leave` | `player`, `name`, `reason` |

@@ -108,6 +108,8 @@ const PROP_FLAG_STATUS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nFlagS
 const PROP_FLAG_DISABLED: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_bDisabled");
 const PROP_FLAG_RESET_TIME: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_flResetTime");
 const PROP_ROUND_STATE: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_iRoundState");
+const PROP_CARRYING: SendPropIdentifier = prop_id("DT_TFPlayerShared", "m_bCarryingObject");
+const PROP_CARRIED: SendPropIdentifier = prop_id("DT_TFPlayerShared", "m_hCarriedObject");
 const PROP_RED_KOTH_TIMER: SendPropIdentifier = prop_id("DT_TFGameRules", "m_hRedKothTimer");
 const PROP_BLUE_KOTH_TIMER: SendPropIdentifier = prop_id("DT_TFGameRules", "m_hBlueKothTimer");
 const PROP_MAP_RESET_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flMapResetTime");
@@ -194,6 +196,28 @@ pub(crate) struct Extractor {
     /// Players who disconnected: the server keeps their slot, and so their entity and info, for
     /// a while after. A user id is not reused while the server runs.
     left: HashSet<u16>,
+    /// Scoreboard lines from the player resource, by player entity.
+    stats: HashMap<u32, Stats>,
+    /// Engineers carrying a building: player entity -> the building's entity.
+    carried: HashMap<u32, u32>,
+    /// What each building entity is: a carried building is not sent while it is carried.
+    building_kinds: HashMap<u32, &'static str>,
+}
+
+/// A player's line on the scoreboard. Points, kills and deaths are the server's match totals;
+/// damage, healing and assists are counted from events, as logs.tf does.
+#[derive(Default, Clone)]
+struct Stats {
+    points: i64,
+    kills: i64,
+    deaths: i64,
+    assists: i64,
+    damage: i64,
+    healing: i64,
+    dominations: i64,
+    streak: i64,
+    respawn_at: f32,
+    carrying: bool,
 }
 
 /// A team entity's team number and score.
@@ -974,6 +998,7 @@ impl Extractor {
     }
 
     fn game_event(&mut self, event: &GameEvent) {
+        self.count_score(event);
         match event {
             GameEvent::PlayerDeath(d) => {
                 // Building kills (sentries) report the building as inflictor; attacker stays the engineer.
@@ -1057,6 +1082,26 @@ impl Extractor {
                 "object": building_kind(b.object),
                 "id": b.index,
             })),
+            GameEvent::PlayerUpgradedObject(u) => self.push(json!({
+                "type": "building_upgrade",
+                "player": u.user_id,
+                "object": building_kind(u.object),
+                "id": u.index,
+            })),
+            GameEvent::BuildingHealed(b) => self.push(json!({
+                "type": "building_repair",
+                "id": b.building,
+                "amount": b.amount,
+            })),
+            GameEvent::TeamPlayTimerTimeAdded(t) => {
+                let idx = u32::from(t.timer);
+                let team = match self.koth_timers.iter().position(|k| *k == Some(idx)) {
+                    Some(0) => "red",
+                    Some(_) => "blue",
+                    None => self.timers.get(&idx).map_or("none", |t| team_num(t.team)),
+                };
+                self.push(json!({"type": "time_added", "team": team, "seconds": t.seconds_added}));
+            }
             GameEvent::ObjectDestroyed(o) => self.push(json!({
                 "type": "building_destroyed",
                 "owner": o.user_id,
@@ -1244,6 +1289,28 @@ impl Extractor {
                     medigun: (p.class == Class::Medic).then(|| self.medigun_of(ent)).flatten(),
                     weapon: self.weapon_of(ent),
                     flames: (p.class == Class::Pyro && alive).then(|| self.flames_of(ent)).flatten(),
+                    respawn: self
+                        .stats
+                        .get(&ent)
+                        .filter(|_| !alive)
+                        .map(|st| st.respawn_at - self.server_tick as f32 * interval)
+                        .map(round1)
+                        .filter(|left| *left > 0.0),
+                    score: self.stats.get(&ent).map(|st| PlayerScoreOut {
+                        points: st.points,
+                        kills: st.kills,
+                        deaths: st.deaths,
+                        assists: st.assists,
+                        damage: st.damage,
+                        healing: st.healing,
+                        dominations: st.dominations,
+                        streak: st.streak,
+                    }),
+                    carrying: self
+                        .carried
+                        .get(&ent)
+                        .filter(|_| alive && self.stats.get(&ent).is_some_and(|st| st.carrying))
+                        .and_then(|b| self.building_kinds.get(b).copied()),
                 })
             })
             .collect();
@@ -1265,9 +1332,11 @@ impl Extractor {
                 crit: pr.critical,
             })
             .collect();
+        let carried: HashSet<u32> = self.carried.values().copied().collect();
         let buildings = gs
             .buildings
             .values()
+            .filter(|b| !carried.contains(&u32::from(b.entity_id())))
             .map(|b| {
                 let mut out = BuildingOut {
                     id: u32::from(b.entity_id()),
@@ -1450,6 +1519,27 @@ struct PlayerOut<'a> {
     medigun: Option<MedigunOut>,
     weapon: Option<WeaponOut>,
     flames: Option<FlamesOut>,
+    /// Seconds until a dead player respawns, when the server has set it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    respawn: Option<f64>,
+    /// The scoreboard line (unchanged ones repeat, which compresses better than leaving them out).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    score: Option<PlayerScoreOut>,
+    /// An engineer carrying a building: its kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    carrying: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct PlayerScoreOut {
+    points: i64,
+    kills: i64,
+    deaths: i64,
+    assists: i64,
+    damage: i64,
+    healing: i64,
+    dominations: i64,
+    streak: i64,
 }
 
 #[derive(Serialize)]
@@ -1770,9 +1860,19 @@ impl Extractor {
         let props = e.props(state);
         match class.name.as_str() {
             "CTFPlayer" => self.on_player(idx, props),
+            "CTFPlayerResource" => self.on_player_resource(props),
             "CTFTeam" => self.on_team(idx, props),
             "CTeamRoundTimer" => self.on_round_timer(idx, props),
-            "CObjectSentrygun" => self.on_sentry(idx, props),
+            "CObjectSentrygun" => {
+                self.building_kinds.insert(idx, "sentry");
+                self.on_sentry(idx, props);
+            }
+            "CObjectDispenser" => {
+                self.building_kinds.insert(idx, "dispenser");
+            }
+            "CObjectTeleporter" => {
+                self.building_kinds.insert(idx, "teleporter");
+            }
             "CTeamTrainWatcher" => self.on_train_watcher(idx, props),
             "CCaptureFlag" => self.on_flag(idx, props),
             "CTFGameRulesProxy" => self.on_game_rules(props),
@@ -1825,6 +1925,70 @@ impl Extractor {
                     Some(w) => self.active_weapons.insert(idx, w),
                     None => self.active_weapons.remove(&idx),
                 };
+            } else if p.identifier == PROP_CARRYING {
+                self.stats.entry(idx).or_default().carrying = as_int(&p.value) != 0;
+            } else if p.identifier == PROP_CARRIED {
+                match opt_handle(as_int(&p.value)) {
+                    Some(b) => self.carried.insert(idx, b),
+                    None => self.carried.remove(&idx),
+                };
+            }
+        }
+    }
+
+    /// The scoreboard's counted columns, like logs.tf: damage dealt to others, healing given and
+    /// assists, from the events since the match started (or since connecting).
+    fn count_score(&mut self, event: &GameEvent) {
+        let (user, add): (u16, fn(&mut Stats, i64)) = match event {
+            GameEvent::PlayerHurt(h) if h.attacker != 0 && h.attacker != h.user_id => {
+                (h.attacker, |s, n| s.damage += n)
+            }
+            GameEvent::PlayerHealed(h) if h.healer != 0 && h.healer != h.patient => (h.healer, |s, n| s.healing += n),
+            GameEvent::PlayerDeath(d)
+                if d.death_flags & DEATH_FEIGN == 0 && d.assister != u16::MAX && d.assister != 0 =>
+            {
+                (d.assister, |s, _| s.assists += 1)
+            }
+            _ => return,
+        };
+        let amount = match event {
+            GameEvent::PlayerHurt(h) => i64::from(h.damage_amount),
+            GameEvent::PlayerHealed(h) => i64::from(h.amount),
+            _ => 1,
+        };
+        if let Some(ent) = self.entity_of_user(user) {
+            add(self.stats.entry(ent).or_default(), amount);
+        }
+    }
+
+    /// Arrays indexed by player entity, one table per value.
+    fn on_player_resource(&mut self, props: impl Iterator<Item = SendProp>) {
+        let mut restarted = HashSet::new();
+        for p in props {
+            let Some((table, name)) = p.identifier.names() else { continue };
+            let Ok(ent) = name.as_str().parse::<u32>() else { continue };
+            let v = as_int(&p.value);
+            let st = self.stats.entry(ent).or_default();
+            // The match totals going down is the match restarting (after the warm-up, say).
+            let total = |old: i64, restarted: &mut HashSet<u32>| {
+                if v < old {
+                    restarted.insert(ent);
+                }
+                v
+            };
+            match table.as_str() {
+                "m_iTotalScore" => st.points = total(st.points, &mut restarted),
+                "m_iScore" => st.kills = total(st.kills, &mut restarted),
+                "m_iDeaths" => st.deaths = total(st.deaths, &mut restarted),
+                "m_iActiveDominations" => st.dominations = v,
+                "m_iStreaks" => st.streak = v,
+                "m_flNextRespawnTime" => st.respawn_at = as_float(&p.value),
+                _ => {}
+            }
+        }
+        for ent in restarted {
+            if let Some(st) = self.stats.get_mut(&ent) {
+                (st.damage, st.healing, st.assists) = (0, 0, 0);
             }
         }
     }

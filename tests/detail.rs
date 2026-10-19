@@ -236,3 +236,108 @@ fn players_who_leave_are_gone_from_the_next_snapshot() {
         }
     }
 }
+
+#[test]
+fn time_added_names_a_team_and_seconds() {
+    let added = of_type("time_added");
+    assert!(!added.is_empty());
+    assert!(added.iter().all(|e| e["seconds"].as_u64().unwrap() > 0 && e["team"].is_string()));
+}
+
+#[test]
+fn building_upgrades_and_repairs() {
+    assert!(of_type("building_upgrade").iter().all(|e| e["id"].is_u64() && e["object"].is_string()));
+    assert!(!of_type("building_upgrade").is_empty());
+    assert!(of_type("building_repair").iter().all(|e| e["amount"].as_u64().unwrap() > 0));
+}
+
+/// While carried, a building is not sent: it shows on its engineer, not on the map.
+#[test]
+fn engineers_carry_buildings() {
+    let mut carried = 0;
+    for s in of_type("snapshot") {
+        for p in s["players"].as_array().unwrap() {
+            if let Some(kind) = p["carrying"].as_str() {
+                carried += 1;
+                assert!(["sentry", "dispenser", "teleporter"].contains(&kind));
+                assert!(p["alive"].as_bool().unwrap());
+            }
+        }
+    }
+    assert!(carried > 0);
+}
+
+#[test]
+fn dead_players_count_down_to_respawn() {
+    let mut last: HashMap<u64, f64> = HashMap::new();
+    let (mut seen, mut down, mut steps) = (0, 0, 0);
+    for s in of_type("snapshot") {
+        for p in s["players"].as_array().unwrap() {
+            let id = p["id"].as_u64().unwrap();
+            match p["respawn"].as_f64() {
+                Some(t) => {
+                    assert!(!p["alive"].as_bool().unwrap() && t > 0.0);
+                    // The server can move a respawn wave later; nearly every step still counts down.
+                    if let Some(prev) = last.insert(id, t) {
+                        steps += 1;
+                        down += usize::from(t <= prev + 0.05);
+                    }
+                    seen += 1;
+                }
+                None => {
+                    last.remove(&id);
+                }
+            }
+        }
+    }
+    assert!(seen > 100);
+    assert!(down * 100 >= steps * 98, "{down} of {steps} steps count down");
+}
+
+#[test]
+fn players_carry_a_scoreboard_line() {
+    let last = of_type("snapshot").into_iter().last().unwrap();
+    let lines: Vec<&Value> = last["players"].as_array().unwrap().iter().filter_map(|p| p.get("score")).collect();
+    assert!(lines.len() >= 12);
+    for l in lines {
+        for k in ["points", "kills", "deaths", "assists", "damage", "healing", "dominations", "streak"] {
+            assert!(l[k].as_i64().unwrap() >= 0, "{k}");
+        }
+    }
+    assert!(
+        of_type("snapshot").iter().any(|s| s["players"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["score"]["damage"].as_i64() > Some(0)))
+    );
+}
+
+/// Damage on the scoreboard is the damage events since the match (re)started, as logs.tf counts it.
+#[test]
+fn scoreboard_damage_adds_up_the_damage_events() {
+    let mut points: HashMap<u64, i64> = HashMap::new();
+    let mut dealt: HashMap<u64, i64> = HashMap::new();
+    let mut last = None;
+    for e in EVENTS.iter() {
+        match e["type"].as_str() {
+            Some("snapshot") => {
+                for p in e["players"].as_array().unwrap() {
+                    let (id, pts) = (p["id"].as_u64().unwrap(), p["score"]["points"].as_i64().unwrap_or(0));
+                    if points.insert(id, pts).is_some_and(|old| pts < old) {
+                        dealt.clear();
+                    }
+                }
+                last = Some(e);
+            }
+            Some("damage") if e["attacker"].is_u64() && e["attacker"] != e["victim"] => {
+                *dealt.entry(e["attacker"].as_u64().unwrap()).or_default() += e["amount"].as_i64().unwrap();
+            }
+            _ => {}
+        }
+    }
+    for p in last.unwrap()["players"].as_array().unwrap() {
+        let id = p["id"].as_u64().unwrap();
+        assert_eq!(p["score"]["damage"].as_i64().unwrap(), dealt.get(&id).copied().unwrap_or(0), "{}", p["name"]);
+    }
+}
