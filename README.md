@@ -214,7 +214,8 @@ cargo test --release                              # tests
 cargo deny check                                  # advisories and licenses (cargo install cargo-deny)
 ```
 
-`git config core.hooksPath .githooks` runs fmt and clippy before each commit. Dependabot
+`ln -s ../../.githooks/pre-commit .git/hooks/pre-commit` runs fmt and clippy before each commit
+(not `core.hooksPath`, which would replace any global git hooks). Dependabot
 opens weekly update pull requests.
 
 Unit tests cover the codec and protocol layers. `tests/captures.rs` replays SourceTV traffic

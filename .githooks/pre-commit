@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs the fast CI checks before each commit. Enable once per clone with:
-#   git config core.hooksPath .githooks
+#   ln -s ../../.githooks/pre-commit .git/hooks/pre-commit
 # Skip in an emergency with `git commit --no-verify`.
 set -e
 cargo fmt --all --check || { echo "pre-commit: run 'cargo fmt' to fix formatting"; exit 1; }
