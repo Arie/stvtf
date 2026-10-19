@@ -126,13 +126,13 @@ pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Challenge> {
 
 pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, timeout: Duration) -> Result<Connection> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
-    sock.connect(server)?;
     sock.set_read_timeout(Some(timeout))?;
     let nonce = random_u32();
-    sock.send(&build_getchallenge(nonce))?;
+    sock.send_to(&build_getchallenge(nonce), server)?;
     let mut buf = vec![0u8; 65536];
-    let n = sock.recv(&mut buf).context("no challenge reply")?;
+    let (n, from) = recv_from_port(&sock, server.port(), &mut buf).context("no challenge reply")?;
     let ch = parse_challenge(&buf[..n], nonce)?;
+    sock.connect(from)?;
     if ch.auth_proto == AUTH_STEAM {
         return Err(GamePort(server).into());
     }
@@ -169,6 +169,18 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     bail!("no accept within {timeout:?}")
 }
 
+/// The next datagram from the server's port, on whichever address it answers from: a game
+/// server on our own host, bound to 0.0.0.0 behind Docker's NAT, answers a container from the
+/// bridge's gateway rather than the public address it was sent to.
+fn recv_from_port(sock: &UdpSocket, port: u16, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+    loop {
+        let (n, from) = sock.recv_from(buf)?;
+        if from.port() == port {
+            return Ok((n, from));
+        }
+    }
+}
+
 /// An unpredictable nonce, so a spoofer cannot forge the challenge reply. `RandomState`
 /// is keyed from the OS random source; no extra dependency needed.
 fn random_u32() -> u32 {
@@ -178,8 +190,8 @@ fn random_u32() -> u32 {
 /// The server build (A2S_INFO `version`), following the challenge some servers require.
 pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
-    sock.connect(server)?;
     sock.set_read_timeout(Some(timeout))?;
+    let mut server = server;
     let mut req = OOB_PREFIX.to_vec();
     req.push(b'T');
     req.extend_from_slice(b"Source Engine Query\0");
@@ -188,8 +200,9 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
     for _ in 0..3 {
         let mut msg = req.clone();
         msg.extend_from_slice(&extra);
-        sock.send(&msg)?;
-        let n = sock.recv(&mut buf).context("no A2S_INFO reply")?;
+        sock.send_to(&msg, server)?;
+        let n;
+        (n, server) = recv_from_port(&sock, server.port(), &mut buf).context("no A2S_INFO reply")?;
         let data = &buf[..n];
         if n >= 9 && data[..4] == OOB_PREFIX && data[4] == b'A' {
             extra = data[5..9].to_vec();
