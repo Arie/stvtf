@@ -197,6 +197,9 @@ pub(crate) struct Extractor {
     /// Projectiles an explosion went off at, hidden rather than dropped: one that moves again was
     /// not the one that exploded, and comes back with its team and owner.
     exploded: HashSet<u32>,
+    /// Players who disconnected: the server keeps their slot, and so their entity and info, for
+    /// a while after. A user id is not reused while the server runs.
+    left: HashSet<u16>,
 }
 
 /// A team entity's team number and score.
@@ -1089,12 +1092,15 @@ impl Extractor {
                 "player": c.user_id,
                 "class": class_num(c.class),
             })),
-            GameEvent::PlayerDisconnect(d) => self.push(json!({
-                "type": "player_leave",
-                "player": d.user_id,
-                "name": d.name.to_string(),
-                "reason": d.reason.to_string(),
-            })),
+            GameEvent::PlayerDisconnect(d) => {
+                self.left.insert(d.user_id);
+                self.push(json!({
+                    "type": "player_leave",
+                    "player": d.user_id,
+                    "name": d.name.to_string(),
+                    "reason": d.reason.to_string(),
+                }));
+            }
             GameEvent::PlayerBuiltObject(b) => self.push(json!({
                 "type": "build",
                 "player": b.user_id,
@@ -1252,6 +1258,9 @@ impl Extractor {
             .iter()
             .filter_map(|p| {
                 let info = p.info.as_ref()?;
+                if self.left.contains(&u16::from(info.user_id)) {
+                    return None;
+                }
                 // The SourceTV bot itself is a BOT on no playing team.
                 if info.steam_id == "BOT" && !matches!(p.team, Team::Red | Team::Blue) && p.class == Class::Other {
                     return None;

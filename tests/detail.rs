@@ -219,3 +219,20 @@ fn projectiles_keep_their_team_through_nearby_explosions() {
     assert_eq!(teamless_projectiles(&EVENTS), 0);
     assert_eq!(teamless_projectiles(&CTF), 0);
 }
+
+/// The server keeps a leaver's slot for a while; they used to stay on the map and HUD until then.
+#[test]
+fn players_who_leave_are_gone_from_the_next_snapshot() {
+    let leaves: Vec<(u64, u64)> = ctf_of_type("player_leave")
+        .iter()
+        .map(|e| (e["player"].as_u64().unwrap(), e["tick"].as_u64().unwrap()))
+        .collect();
+    assert!(!leaves.is_empty());
+    for s in ctf_of_type("snapshot") {
+        for p in s["players"].as_array().unwrap() {
+            let after =
+                leaves.iter().any(|(id, tick)| p["id"].as_u64() == Some(*id) && s["tick"].as_u64().unwrap() > *tick);
+            assert!(!after, "{} at tick {}", p["name"], s["tick"]);
+        }
+    }
+}
