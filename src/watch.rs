@@ -122,6 +122,8 @@ pub fn tables(build: &str, demo: Option<&Path>) -> Result<Tables> {
 /// Sets `stop` on the first Ctrl-C so the session can say goodbye (otherwise STV
 /// holds the slot for 300 s); a second Ctrl-C exits at once.
 ///
+/// SIGTERM (`docker stop`, a deploy) counts as Ctrl-C too.
+///
 /// The process can have only one Ctrl-C handler, so this fails if one is already set.
 pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
     ctrlc::set_handler(move || {

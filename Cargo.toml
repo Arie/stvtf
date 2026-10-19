@@ -15,7 +15,7 @@ crc32fast = "1"
 md5 = "0.7"
 typed-arena = "2"
 anyhow = "1"
-ctrlc = "3"
+ctrlc = { version = "3", features = ["termination"] }
 serde = { version = "1", features = ["derive"] }
 
 [profile.release]
