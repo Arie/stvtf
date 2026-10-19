@@ -134,6 +134,8 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   `aim` (turret direction), `target` (player id) and `attacking`.
 - Carts appear only on payload maps, with the pushing `team`, `progress` (0 → 1), `cappers` and
   `speed` (negative when rolling back).
+- On maps with flags, `captures` (`{"red": n, "blue": n}`) counts the flags each team captured
+  this round, which is what TF2's CTF HUD shows; `score` stays the rounds won.
 - Flags are CTF intelligence briefcases (`team` red or blue) and neutral ones such as the bball
   ball (`team` none). `status` is `home`, `carried` (`pos` is then the carrier's) or `dropped`,
   with `returns_in` seconds until it goes home. Maps with several flag spawns list only the

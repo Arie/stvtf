@@ -88,6 +88,7 @@ const PROP_CONDS: [SendPropIdentifier; 6] = [
 ];
 const PROP_TEAM_TEAM_NUM: SendPropIdentifier = prop_id("DT_Team", "m_iTeamNum");
 const PROP_TEAM_SCORE: SendPropIdentifier = prop_id("DT_Team", "m_iScore");
+const PROP_FLAG_CAPTURES: SendPropIdentifier = prop_id("DT_TFTeam", "m_nFlagCaptures");
 const PROP_TIMER_END_TIME: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_flTimerEndTime");
 const PROP_TIMER_REMAINING: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_flTimeRemaining");
 const PROP_TIMER_PAUSED: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bTimerPaused");
@@ -186,6 +187,8 @@ pub(crate) struct Extractor {
 struct TeamScore {
     team: u8,
     score: i64,
+    /// Flags captured this round, the score of a CTF round.
+    captures: i64,
 }
 
 /// Where a player was and where they looked.
@@ -1335,6 +1338,7 @@ impl Extractor {
             });
         }
         let score = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.score);
+        let captures = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.captures);
         let snapshot = SnapshotOut {
             kind: "snapshot",
             tick: self.server_tick,
@@ -1349,6 +1353,8 @@ impl Extractor {
             match_time: (self.match_start > 0.0)
                 .then(|| round1((self.server_tick as f32 * interval - self.match_start).max(0.0))),
             score: ScoreOut { red: score(Team::Red), blue: score(Team::Blue) },
+            captures: (!self.flags.is_empty())
+                .then(|| ScoreOut { red: captures(Team::Red), blue: captures(Team::Blue) }),
             timers: self
                 .timers
                 .values()
@@ -1384,6 +1390,8 @@ struct SnapshotOut<'a> {
     win_limit: Option<i64>,
     match_time: Option<f64>,
     score: ScoreOut,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    captures: Option<ScoreOut>,
     timers: Vec<TimerOut>,
 }
 
@@ -1670,6 +1678,7 @@ impl Extractor {
             match p.identifier {
                 PROP_TEAM_NUM | PROP_TEAM_TEAM_NUM => t.team = team_byte(as_int(&p.value)),
                 PROP_TEAM_SCORE => t.score = as_int(&p.value),
+                PROP_FLAG_CAPTURES => t.captures = as_int(&p.value),
                 _ => {}
             }
         }
