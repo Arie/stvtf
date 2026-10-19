@@ -46,6 +46,7 @@ fn every_blast_jump_starts_before_it_lands() {
 #[test]
 fn pickups_are_health_or_ammo() {
     let p = of_type("pickup");
-    assert!(p.iter().filter(|e| e["item"] == "ammo").count() > 100);
-    assert!(p.iter().any(|e| e["item"] == "health"));
+    assert!(p.iter().all(|e| e["player"].is_u64()), "every pickup names its player");
+    assert!(p.iter().filter(|e| e["item"] == "ammo").count() > 20);
+    assert!(p.iter().filter(|e| e["item"] == "health").count() > 10);
 }

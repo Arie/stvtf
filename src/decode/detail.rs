@@ -2,7 +2,6 @@
 
 use serde_json::{Value, json};
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
-use tf_demo_parser::demo::gamevent::GameEventValue;
 use tf_demo_parser::demo::parser::analyser::Class;
 
 /// Lookups the extractor owns: entity index to user id, and a user's current class.
@@ -22,15 +21,8 @@ fn jump(player: u16, kind: &str, phase: &str) -> Option<Value> {
     Some(json!({"type": "blast_jump", "player": player, "kind": kind, "phase": phase}))
 }
 
-fn pickup(player: Option<u16>, item: &str, size: Option<&str>) -> Option<Value> {
+fn pickup(player: u16, item: &str, size: Option<&str>) -> Option<Value> {
     Some(json!({"type": "pickup", "player": player, "item": item, "size": size}))
-}
-
-fn long(v: &GameEventValue) -> Option<u32> {
-    match v {
-        GameEventValue::Long(n) => Some(*n),
-        _ => None,
-    }
 }
 
 pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Value> {
@@ -63,23 +55,13 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Value> 
             let size = ["small", "medium", "large", "full"].into_iter().find(|s| item.ends_with(s));
             let size = size.map(|s| if s == "large" { "full" } else { s });
             if item.starts_with("medkit") {
-                pickup(Some(i.user_id), "health", size)
+                pickup(i.user_id, "health", size)
             } else if item.starts_with("ammopack") || item == "tf_ammo_pack" {
-                pickup(Some(i.user_id), "ammo", size)
+                pickup(i.user_id, "ammo", size)
             } else {
                 None
             }
         }
-        GameEvent::Unknown(raw) => match raw.event_type.as_str() {
-            // ammo_index, amount, total: no player in the event.
-            "ammo_pickup" => pickup(None, "ammo", None),
-            // amount, total, entindex
-            "take_health" => {
-                let ent = long(raw.values.get(2)?)?;
-                pickup((look.user_of_entity)(ent), "health", None)
-            }
-            _ => None,
-        },
         _ => None,
     }
 }
