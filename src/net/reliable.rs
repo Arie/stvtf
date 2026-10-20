@@ -208,9 +208,9 @@ mod tests {
         let payload: Vec<u8> = (0..total).map(|i| (i % 251) as u8).collect();
         let mut r = Reassembler::default();
         let first = multi_fragment(1, 0, 1, total, &payload[..256]);
-        assert!(r.feed(&first, 0).unwrap().completed.is_empty());
+        assert!(r.feed(&first, 0).unwrap().completed.is_empty(), "incomplete after the first fragment");
         let last = multi_fragment(1, 2, 1, total, &payload[512..]);
-        assert!(r.feed(&last, 0).unwrap().completed.is_empty());
+        assert!(r.feed(&last, 0).unwrap().completed.is_empty(), "incomplete without the middle fragment");
         let resent_last = multi_fragment(1, 2, 1, total, &payload[512..]);
         assert!(r.feed(&resent_last, 0).unwrap().completed.is_empty(), "a resend must not complete with a hole");
         let middle = multi_fragment(1, 1, 1, total, &payload[256..512]);
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn empty_single_block_delivers_nothing() {
         let region = Reassembler::default().feed(&single_block(0, b""), 0).unwrap();
-        assert!(region.completed.is_empty());
+        assert!(region.completed.is_empty(), "{:?}", region.completed);
     }
 
     #[test]

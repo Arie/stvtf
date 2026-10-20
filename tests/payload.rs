@@ -75,7 +75,7 @@ fn first_point_is_captured_by_the_cart() {
     assert_eq!(caps.len(), 1);
     assert_eq!(caps[0]["point"], 0);
     assert_eq!(caps[0]["team"], "blue");
-    assert!(!caps[0]["cappers"].as_array().unwrap().is_empty());
+    assert!(!caps[0]["cappers"].as_array().unwrap().is_empty(), "a capture without cappers");
     let tick = caps[0]["tick"].as_u64().unwrap();
     let before = snapshots().filter(|s| s["tick"].as_u64().unwrap() <= tick).last().unwrap();
     let point = before["objectives"].as_array().unwrap().iter().find(|o| o["index"] == 0).unwrap();

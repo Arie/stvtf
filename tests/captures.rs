@@ -88,7 +88,7 @@ fn snapshots_track_all_bots_moving() {
         for p in players {
             assert!(["red", "blue"].contains(&p["team"].as_str().unwrap()));
             assert_ne!(p["class"], "unknown");
-            assert!(!p["name"].as_str().unwrap().is_empty());
+            assert!(!p["name"].as_str().unwrap().is_empty(), "a player without a name");
             let id = p["id"].as_u64().unwrap();
             if p["pos"].is_null() {
                 assert_eq!(p["alive"], false, "only players who died before we connected lack a position");
@@ -147,7 +147,7 @@ fn events_reference_known_players() {
         .flat_map(|s| s["players"].as_array().unwrap().iter().map(|p| p["id"].as_u64().unwrap()))
         .collect();
     let kills = of_type(ev, "kill");
-    assert!(!kills.is_empty());
+    assert!(!kills.is_empty(), "no kills");
     for k in &kills {
         assert!(ids.contains(&k["victim"].as_u64().unwrap()));
         assert!(k["victim_pos"].is_array());
@@ -162,7 +162,7 @@ fn events_reference_known_players() {
     }
     let projectiles: Vec<&Value> =
         of_type(ev, "snapshot").iter().flat_map(|s| s["projectiles"].as_array().unwrap()).collect();
-    assert!(!projectiles.is_empty());
+    assert!(!projectiles.is_empty(), "no projectiles");
     assert!(projectiles.iter().all(|p| p["owner"].as_u64().is_some_and(|o| ids.contains(&o))));
 }
 

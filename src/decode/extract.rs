@@ -2670,7 +2670,7 @@ mod medic_tests {
         let mut x = with_medic(90, false);
         assert!(step(&mut x, 95, false).is_empty(), "the first sighting only records the state");
         assert_eq!(step(&mut x, 100, false), ["uber_ready kritzkrieg"]);
-        assert!(step(&mut x, 100, false).is_empty());
+        assert!(step(&mut x, 100, false).is_empty(), "ready only once");
         assert!(step(&mut x, 98, true).is_empty(), "deploying is the game's own uber event");
         assert_eq!(step(&mut x, 0, false), ["uber_ended kritzkrieg"]);
     }

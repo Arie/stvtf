@@ -54,7 +54,7 @@ fn a_dropped_ball_counts_down_to_going_home() {
         .filter(|f| f["status"] == "dropped")
         .map(|f| f["returns_in"].as_f64().unwrap())
         .collect();
-    assert!(!dropped.is_empty());
+    assert!(!dropped.is_empty(), "the ball was never dropped");
     // The map's return time is 60 s; the reset time is set a tick ahead of the snapshot's clock.
     assert!(dropped.iter().all(|&t| t > 0.0 && t <= 60.2), "{dropped:?}");
 }

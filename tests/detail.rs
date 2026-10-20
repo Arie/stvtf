@@ -42,7 +42,7 @@ fn heals_name_patient_and_amount() {
 #[test]
 fn every_blast_jump_starts_before_it_lands() {
     let jumps = of_type("blast_jump");
-    assert!(!jumps.is_empty());
+    assert!(!jumps.is_empty(), "no blast jumps");
     assert!(jumps.iter().any(|j| j["phase"] == "land"));
     let mut last: HashMap<(u64, String), String> = HashMap::new();
     for j in jumps {
@@ -85,27 +85,27 @@ fn impacts_and_marks_have_positions() {
 #[test]
 fn votes_pick_from_the_options_sent() {
     let options = ctf_of_type("vote_options");
-    assert!(!options.is_empty());
+    assert!(!options.is_empty(), "no vote options");
     let n = options.iter().map(|o| o["options"].as_array().unwrap().len()).max().unwrap() as u64;
     let casts = ctf_of_type("vote_cast");
-    assert!(!casts.is_empty());
+    assert!(!casts.is_empty(), "no votes cast");
     assert!(casts.iter().all(|c| c["option"].as_u64().unwrap() < n && c["team"].is_string()), "{casts:?}");
 }
 
 #[test]
 fn medics_get_defended() {
     let d = ctf_of_type("medic_defended");
-    assert!(!d.is_empty());
+    assert!(!d.is_empty(), "no medic_defended");
     assert!(d.iter().all(|e| e["player"].is_u64() && e["medic"].is_u64()));
 }
 
 #[test]
 fn match_flow_lines() {
     let t = ctf_of_type("tournament");
-    assert!(!t.is_empty());
+    assert!(!t.is_empty(), "no tournament lines");
     assert!(t.iter().any(|e| e["ready"].is_boolean()));
     let a = ctf_of_type("announcer");
-    assert!(!a.is_empty());
+    assert!(!a.is_empty(), "no announcer lines");
     assert!(a.iter().all(|e| !e["sound"].as_str().unwrap().is_empty() && e["team"].is_string()), "{a:?}");
     assert!(ctf_of_type("server_text").iter().all(|e| e["text"].is_string()));
 }
@@ -113,7 +113,7 @@ fn match_flow_lines() {
 #[test]
 fn broken_captures_name_the_point() {
     let b = of_type("capture_broken");
-    assert!(!b.is_empty());
+    assert!(!b.is_empty(), "no capture_broken");
     assert!(b.iter().all(|e| e["point"].is_u64() && e["name"].is_string()));
 }
 
@@ -141,7 +141,7 @@ fn points_count_players_standing_on_them() {
 #[test]
 fn killed_cappers_match_the_kill_at_that_tick() {
     let k = of_type("killed_capper");
-    assert!(!k.is_empty());
+    assert!(!k.is_empty(), "no killed_capper");
     let kills = of_type("kill");
     for e in k {
         assert!(e["killer"].is_u64() && e["victim"].is_u64(), "{e}");
@@ -227,7 +227,7 @@ fn players_who_leave_are_gone_from_the_next_snapshot() {
         .iter()
         .map(|e| (e["player"].as_u64().unwrap(), e["tick"].as_u64().unwrap()))
         .collect();
-    assert!(!leaves.is_empty());
+    assert!(!leaves.is_empty(), "nobody left");
     for s in ctf_of_type("snapshot") {
         for p in s["players"].as_array().unwrap() {
             let after =
@@ -240,14 +240,14 @@ fn players_who_leave_are_gone_from_the_next_snapshot() {
 #[test]
 fn time_added_names_a_team_and_seconds() {
     let added = of_type("time_added");
-    assert!(!added.is_empty());
+    assert!(!added.is_empty(), "no time added");
     assert!(added.iter().all(|e| e["seconds"].as_u64().unwrap() > 0 && e["team"].is_string()));
 }
 
 #[test]
 fn building_upgrades_and_repairs() {
     assert!(of_type("building_upgrade").iter().all(|e| e["id"].is_u64() && e["object"].is_string()));
-    assert!(!of_type("building_upgrade").is_empty());
+    assert!(!of_type("building_upgrade").is_empty(), "no building upgrades");
     assert!(of_type("building_repair").iter().all(|e| e["amount"].as_u64().unwrap() > 0));
 }
 
