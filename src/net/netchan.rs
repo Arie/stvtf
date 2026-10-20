@@ -1,6 +1,6 @@
 //! Netchannel packet header, checksum and outbound packet construction (protocol 24).
 //!
-//! Header: i32 sequence | i32 sequence_ack | u8 flags | u16 checksum | u8 reliable_state
+//! Header: i32 sequence | i32 `sequence_ack` | u8 flags | u16 checksum | u8 `reliable_state`
 //! | [u8 choked if CHOKED] | [u32 challenge if CHALLENGE]. The checksum covers
 //! everything after itself.
 

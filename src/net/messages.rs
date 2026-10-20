@@ -60,7 +60,7 @@ fn write_signonstate(w: &mut BitWriter, state: Signon, spawncount: i32) {
     w.write_i32(spawncount);
 }
 
-/// net_SetConVar(userinfo) followed by net_SignonState(CONNECTED, -1).
+/// `net_SetConVar(userinfo)` followed by `net_SignonState(CONNECTED`, -1).
 pub fn connected_reply(name: &str) -> BitBuf {
     let mut w = BitWriter::new();
     w.write_bits(NET_SETCONVAR, TYPE_BITS);
@@ -73,7 +73,7 @@ pub fn connected_reply(name: &str) -> BitBuf {
     w.finish()
 }
 
-/// clc_ClientInfo (with the build's SendTable CRC) followed by net_SignonState(NEW).
+/// `clc_ClientInfo` (with the build's `SendTable` CRC) followed by `net_SignonState(NEW)`.
 pub fn client_info(spawncount: i32, sendtable_crc: u32, replay_bit: bool) -> BitBuf {
     let mut w = BitWriter::new();
     w.write_bits(CLC_CLIENTINFO, TYPE_BITS);

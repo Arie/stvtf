@@ -1,7 +1,7 @@
-//! Integration tests over real SourceTV traffic recorded from a serveme.tf test
-//! reservation (TF2 build 11138802, cp_badlands, bots) with `connect --record`.
+//! Integration tests over real `SourceTV` traffic recorded from a serveme.tf test
+//! reservation (TF2 build 11138802, `cp_badlands`, bots) with `connect --record`.
 //! `bots_map_change.cap` is one connection that followed a `changelevel`: during the
-//! tv_delay window the server restarted signon in place four times, then streamed on.
+//! `tv_delay` window the server restarted signon in place four times, then streamed on.
 //! `bots_engineers.cap` has engineer bots building (sentries, teleporters) under attack.
 
 use serde_json::Value;

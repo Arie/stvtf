@@ -37,8 +37,8 @@ fn a_carried_ball_is_where_its_carrier_is() {
     let mut carried = 0;
     for s in EVENTS.iter().filter(|e| e["type"] == "snapshot") {
         for f in flags(s).into_iter().filter(|f| f["status"] == "carried") {
-            let carrier = s["players"].as_array().unwrap().iter().find(|p| p["id"] == f["carrier"]).expect("a carrier");
-            assert_eq!(f["pos"], carrier["pos"]);
+            let holder = s["players"].as_array().unwrap().iter().find(|p| p["id"] == f["carrier"]).expect("a carrier");
+            assert_eq!(f["pos"], holder["pos"]);
             carried += 1;
         }
     }

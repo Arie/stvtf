@@ -2,11 +2,11 @@
 //!
 //! Region layout after the header when RELIABLE is set:
 //!   ubit(3) subchannel, then per stream (0 = messages, 1 = files):
-//!     bit data-follows; if set: bit multi; if multi: ubit(18) start_fragment | ubit(3) num_fragments
-//!     if start_fragment == 0:
+//!     bit data-follows; if set: bit multi; if multi: ubit(18) `start_fragment` | ubit(3) `num_fragments`
+//!     if `start_fragment` == 0:
 //!       single: bit compressed [-> ubit(26) size], varint32 nbytes
-//!       multi:  bit is_file [-> ubit(32) id, string name], bit compressed [-> ubit(26)], ubit(26) nbytes
-//!     num_fragments * 256 bytes (the last fragment trimmed)
+//!       multi:  bit `is_file` [-> ubit(32) id, string name], bit compressed [-> ubit(26)], ubit(26) nbytes
+//!     `num_fragments` * 256 bytes (the last fragment trimmed)
 
 use super::bits::BitReader;
 use super::compress;

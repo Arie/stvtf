@@ -1,10 +1,10 @@
 //! Feeds network message streams into tf-demo-parser.
 //!
-//! A SourceTV client gets no send tables over the wire (the server expects the
-//! client to build them from its own game DLL, checked by the SendTable CRC), so
+//! A `SourceTV` client gets no send tables over the wire (the server expects the
+//! client to build them from its own game DLL, checked by the `SendTable` CRC), so
 //! the tables come from any demo recorded on the same server build. Each network
 //! message stream is then wrapped as a demo `Message` packet and handed to the
-//! same DemoHandler a demo file would use.
+//! same `DemoHandler` a demo file would use.
 
 mod detail;
 mod extract;
@@ -20,7 +20,7 @@ use tf_demo_parser::demo::message::generated::SignOnState;
 use tf_demo_parser::demo::message::{Message, MessageType};
 use tf_demo_parser::demo::packet::Packet;
 use tf_demo_parser::demo::packet::datatable::DataTablePacket;
-use tf_demo_parser::demo::packet::message::MessagePacket;
+use tf_demo_parser::demo::packet::message::{MessagePacket, MessagePacketMeta};
 use tf_demo_parser::demo::parser::DemoHandler;
 use tf_demo_parser::demo::parser::RawPacketStream;
 use typed_arena::Arena;
@@ -150,7 +150,7 @@ impl<'a> Decoder<'a> {
                 if state.should_parse_message(t) && t != MessageType::Empty {
                     Message::from_type(t, &mut stream, state).map(Some)
                 } else {
-                    Message::skip_type(t, &mut stream, state).map(|_| None)
+                    Message::skip_type(t, &mut stream, state).map(|()| None)
                 }
             });
             match parsed {
@@ -176,7 +176,8 @@ impl<'a> Decoder<'a> {
             }
         }
         let tick = self.extractor().server_tick;
-        let packet = Packet::Message(MessagePacket { tick: DemoTick::from(tick), messages, meta: Default::default() });
+        let packet =
+            Packet::Message(MessagePacket { tick: DemoTick::from(tick), messages, meta: MessagePacketMeta::default() });
         if self.handler.handle_packet(packet).is_err() {
             self.parse_errors += 1;
         }

@@ -1,6 +1,6 @@
-//! A headless SourceTV spectator for Team Fortress 2.
+//! A headless `SourceTV` spectator for Team Fortress 2.
 //!
-//! [`watch::watch`] connects to a SourceTV port and passes every event and snapshot
+//! [`watch::watch`] connects to a `SourceTV` port and passes every event and snapshot
 //! (the JSON described in the README) to a callback, reconnecting as needed.
 //! [`capture`] replays recorded traffic and [`decode::demo_file`] runs a `.dem`
 //! through the same extractor.
@@ -27,7 +27,7 @@ pub struct Build {
     pub tables: &'static [u8],
 }
 
-/// Compiled-in data for known TF2 server builds (A2S_INFO `version`).
+/// Compiled-in data for known TF2 server builds (`A2S_INFO` `version`).
 pub fn builtin(build: &str) -> Option<Build> {
     match build {
         CURRENT_BUILD => Some(Build { crc: 0x5FCD_4733, tables: include_bytes!("../assets/tables_11138802.dem") }),

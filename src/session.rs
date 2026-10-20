@@ -1,8 +1,8 @@
-//! One SourceTV session: climb the signon ladder to FULL, keep acking, decode.
+//! One `SourceTV` session: climb the signon ladder to FULL, keep acking, decode.
 //!
 //! The server pushes each signon state; we echo `net_SignonState(state, spawncount)`
 //! for every state from CONNECTED up, quoting the spawncount of the latest
-//! svc_ServerInfo. NEW is answered with clc_ClientInfo carrying the SendTable CRC.
+//! `svc_ServerInfo`. NEW is answered with `clc_ClientInfo` carrying the `SendTable` CRC.
 //! FULL is not pushed: the client promotes itself once world data flows.
 //!
 //! A map change re-runs signon on the same connection; the session keeps its
@@ -32,7 +32,7 @@ use typed_arena::Arena;
 pub struct Options {
     /// Spectator name shown on the server.
     pub name: String,
-    /// The server build's SendTable CRC.
+    /// The server build's `SendTable` CRC.
     pub crc: u32,
     /// Snapshot rate cap; 0 disables snapshots.
     pub snapshot_hz: f32,

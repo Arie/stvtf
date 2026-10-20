@@ -20,12 +20,12 @@ fn heal(patient: Option<u16>, healer: Option<u16>, amount: i64, source: &str) ->
     Some(json!({"type": "heal", "patient": patient?, "healer": healer, "amount": amount, "source": source}))
 }
 
-fn jump(player: u16, kind: &str, phase: &str) -> Option<Value> {
-    Some(json!({"type": "blast_jump", "player": player, "kind": kind, "phase": phase}))
+fn jump(player: u16, kind: &str, phase: &str) -> Value {
+    json!({"type": "blast_jump", "player": player, "kind": kind, "phase": phase})
 }
 
-fn pickup(player: u16, item: &str, size: Option<&str>) -> Option<Value> {
-    Some(json!({"type": "pickup", "player": player, "item": item, "size": size}))
+fn pickup(player: u16, item: &str, size: Option<&str>) -> Value {
+    json!({"type": "pickup", "player": player, "item": item, "size": size})
 }
 
 const fn origin_parts(table: &str) -> [SendPropIdentifier; 3] {
@@ -106,18 +106,18 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Value> 
         GameEvent::PlayerHealOnHit(h) => {
             heal((look.user_of_entity)(u32::from(h.ent_index)), None, i64::from(h.amount), "on_hit")
         }
-        GameEvent::RocketJump(j) => jump(j.user_id, "rocket", "start"),
-        GameEvent::RocketJumpLanded(j) => jump(j.user_id, "rocket", "land"),
-        GameEvent::StickyJump(j) => jump(j.user_id, "sticky", "start"),
-        GameEvent::StickyJumpLanded(j) => jump(j.user_id, "sticky", "land"),
+        GameEvent::RocketJump(j) => Some(jump(j.user_id, "rocket", "start")),
+        GameEvent::RocketJumpLanded(j) => Some(jump(j.user_id, "rocket", "land")),
+        GameEvent::StickyJump(j) => Some(jump(j.user_id, "sticky", "start")),
+        GameEvent::StickyJumpLanded(j) => Some(jump(j.user_id, "sticky", "land")),
         GameEvent::ItemPickup(i) => {
             let item = i.item.to_string();
             let size = ["small", "medium", "large", "full"].into_iter().find(|s| item.ends_with(s));
             let size = size.map(|s| if s == "large" { "full" } else { s });
             if item.starts_with("medkit") {
-                pickup(i.user_id, "health", size)
+                Some(pickup(i.user_id, "health", size))
             } else if item.starts_with("ammopack") || item == "tf_ammo_pack" {
-                pickup(i.user_id, "ammo", size)
+                Some(pickup(i.user_id, "ammo", size))
             } else {
                 None
             }

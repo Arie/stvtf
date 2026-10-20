@@ -1,4 +1,4 @@
-//! Watching one SourceTV server: connect, follow the match, reconnect with backoff.
+//! Watching one `SourceTV` server: connect, follow the match, reconnect with backoff.
 
 use crate::capture::Recorder;
 use crate::decode::Tables;
@@ -18,7 +18,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 /// What to watch and how. `Debug` is implemented by hand to keep the password out of logs.
 pub struct Watch {
-    /// The SourceTV HOST:PORT.
+    /// The `SourceTV` HOST:PORT.
     pub target: String,
     /// The server's `tv_password`.
     pub password: String,
@@ -28,9 +28,9 @@ pub struct Watch {
     pub snapshot_hz: f32,
     /// A demo of the server's build, for builds whose tables are not compiled in.
     pub tables: Option<PathBuf>,
-    /// The build's SendTable CRC, for builds not compiled in.
+    /// The build's `SendTable` CRC, for builds not compiled in.
     pub crc: Option<u32>,
-    /// The server build; asked from the server (A2S_INFO) when not set.
+    /// The server build; asked from the server (`A2S_INFO`) when not set.
     pub build: Option<String>,
     /// Stop after this long.
     pub duration: Option<Duration>,

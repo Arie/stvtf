@@ -30,28 +30,28 @@ use tf_demo_parser::demo::parser::handler::BorrowMessageHandler;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
 
-/// TF2 sets DMG_ACID on critical hits.
+/// TF2 sets `DMG_ACID` on critical hits.
 const DMG_CRIT: u32 = 1 << 20;
-/// player_death death_flags.
+/// `player_death` `death_flags`.
 const DEATH_DOMINATION: u16 = 0x1;
 const DEATH_REVENGE: u16 = 0x4;
 const DEATH_FEIGN: u16 = 0x20;
-/// player_death customkill values.
+/// `player_death` customkill values.
 const CUSTOM_KILL_HEADSHOT: u16 = 1;
 const CUSTOM_KILL_BACKSTAB: u16 = 2;
 /// Recent frames kept to resolve deltas against.
 const MAX_FRAMES: usize = 128;
-/// CObjectSentrygun m_iState while shooting at a target.
+/// `CObjectSentrygun` `m_iState` while shooting at a target.
 const SENTRY_STATE_ATTACKING: i64 = 2;
-/// User message id of SayText (console `say` and server notices).
+/// User message id of `SayText` (console `say` and server notices).
 const USER_MESSAGE_SAY_TEXT: u8 = 3;
-/// Unattended cap progress decays over mp_capdeteriorate_time (default 90 s).
+/// Unattended cap progress decays over `mp_capdeteriorate_time` (default 90 s).
 const CAP_DECAY_SECONDS: f32 = 90.0;
 /// The handle value of "no entity".
 const INVALID_EHANDLE: i64 = 0x1f_ffff;
-/// player_spawn events waiting for a position; more than this means entity updates stopped.
+/// `player_spawn` events waiting for a position; more than this means entity updates stopped.
 const MAX_PENDING_SPAWNS: usize = 256;
-/// Seconds per server tick until the server's own value (ServerInfo) arrives.
+/// Seconds per server tick until the server's own value (`ServerInfo`) arrives.
 pub(crate) const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
 /// `STVTF_DEBUG`, read once: a server class, temp entity class, `ent:N` or `gameevents`.
@@ -76,7 +76,7 @@ const fn prop_id(table: &str, name: &str) -> SendPropIdentifier {
 const PROP_TEAM_NUM: SendPropIdentifier = prop_id("DT_BaseEntity", "m_iTeamNum");
 const PROP_ORIGIN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_vecOrigin");
 const PROP_ROTATION: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
-/// The condition words of a player: m_nPlayerCond, _condition_bits, m_nPlayerCondEx..Ex4.
+/// The condition words of a player: `m_nPlayerCond`, _`condition_bits`, `m_nPlayerCondEx..Ex4`.
 const PROP_CONDS: [SendPropIdentifier; 6] = [
     prop_id("DT_TFPlayerShared", "m_nPlayerCond"),
     prop_id("DT_TFPlayerConditionListExclusive", "_condition_bits"),
@@ -124,7 +124,7 @@ const PROP_MEDIGUN_TARGET: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_h
 const PROP_FLAMETHROWER_STATE: SendPropIdentifier = prop_id("DT_WeaponFlameThrower", "m_iWeaponState");
 const PROP_FLAMETHROWER_CRIT: SendPropIdentifier = prop_id("DT_WeaponFlameThrower", "m_bCritFire");
 const PROP_FLAMETHROWER_HIT: SendPropIdentifier = prop_id("DT_WeaponFlameThrower", "m_bHitTarget");
-/// m_iWeaponState: idle, starting to fire, firing, airblast.
+/// `m_iWeaponState`: idle, starting to fire, firing, airblast.
 const FLAMETHROWER_AIRBLAST: i64 = 3;
 const PROP_BULLETS_PLAYER: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_iPlayer");
 const PROP_BULLETS_ORIGIN: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecOrigin");
@@ -142,13 +142,13 @@ const PROP_EXPLOSION_WEAPON: SendPropIdentifier = prop_id("DT_TETFExplosion", "m
 #[derive(Default)]
 pub(crate) struct Extractor {
     gs: GameStateAnalyser,
-    /// Latest server tick seen in a net_Tick.
+    /// Latest server tick seen in a `net_Tick`.
     pub(crate) server_tick: u32,
     events: RefCell<Vec<Value>>,
     world_sent: Cell<bool>,
     control_points: Vec<ControlPoint>,
     num_control_points: usize,
-    /// Condition words per player entity: m_nPlayerCond, _condition_bits, m_nPlayerCondEx..Ex4.
+    /// Condition words per player entity: `m_nPlayerCond`, _`condition_bits`, `m_nPlayerCondEx..Ex4`.
     /// (tf-demo-parser 0.6.4's own `conditions()` decodes these wrongly.)
     conds: HashMap<u32, [u32; 6]>,
     mediguns: HashMap<u32, Medigun>,
@@ -158,14 +158,14 @@ pub(crate) struct Extractor {
     weapon_classes: Vec<Option<bool>>,
     active_weapons: HashMap<u32, u32>,
     class_names: Vec<String>,
-    /// Seconds per tick from ServerInfo.
+    /// Seconds per tick from `ServerInfo`.
     tick_interval: Option<f32>,
     teams: BTreeMap<u32, TeamScore>,
     timers: BTreeMap<u32, RoundTimer>,
     /// King of the hill: each team's own timer, which runs while that team holds the point.
     koth_timers: [Option<u32>; 2],
     round_state: RoundState,
-    /// Server time the match started (m_flMapResetTime) and the current round went live.
+    /// Server time the match started (`m_flMapResetTime`) and the current round went live.
     match_start: f32,
     round_live_since: Option<f32>,
     /// When the live round ended (win, stalemate): its time stops there.
@@ -174,22 +174,22 @@ pub(crate) struct Extractor {
     /// Where each player entity last was while alive: a dead player's own position is
     /// their spectator camera, which follows teammates.
     last_alive: HashMap<u32, Pose>,
-    /// mp_timelimit (minutes) and mp_winlimit, replicated to clients as convars.
+    /// `mp_timelimit` (minutes) and `mp_winlimit`, replicated to clients as convars.
     time_limit: Option<f32>,
     win_limit: Option<i64>,
     /// Per medic entity, to report changes.
     medic_charge: HashMap<u32, Charge>,
-    /// Payload: tf-demo-parser takes every func_tracktrain for a cart, but only a payload
-    /// map has a team_train_watcher (KotH and other maps use trains for lifts and props).
+    /// Payload: tf-demo-parser takes every `func_tracktrain` for a cart, but only a payload
+    /// map has a `team_train_watcher` (`KotH` and other maps use trains for lifts and props).
     train_watchers: BTreeMap<u32, TrainWatcher>,
     /// Entity -> the entity it is attached to (`moveparent`), to find a watcher's cart.
     parents: HashMap<u32, u32>,
     /// World positions of prop entities: a payload cart can be a free physics prop.
     prop_origins: HashMap<u32, Vector>,
     sentries: HashMap<u32, Sentry>,
-    /// CTF flags and the bball ball (item_teamflag), by entity.
+    /// CTF flags and the bball ball (`item_teamflag`), by entity.
     flags: BTreeMap<u32, Flag>,
-    /// player_spawn arrives before the player's new position: held until the next entity update.
+    /// `player_spawn` arrives before the player's new position: held until the next entity update.
     pending_spawns: Vec<(u16, Value)>,
     /// The entities in each recent frame, by server tick, to find the ones a delta drops silently.
     frames: VecDeque<(u32, HashSet<u32>)>,
@@ -279,14 +279,16 @@ struct Flag {
 #[derive(Default, Clone)]
 struct TrainWatcher {
     team: u8,
-    /// The cart model (m_hGlowEnt), which is attached to the cart's func_tracktrain.
+    /// The cart model (`m_hGlowEnt`), which is attached to the cart's `func_tracktrain`.
     glow: Option<u32>,
     progress: f32,
     cappers: i64,
     speed: i64,
 }
 
+// Mirrors the timer entity's netprops.
 #[derive(Default, Clone)]
+#[expect(clippy::struct_excessive_bools)]
 struct RoundTimer {
     team: u8,
     end_time: f32,
@@ -304,7 +306,7 @@ impl RoundTimer {
     }
 }
 
-/// CTFGameRulesProxy m_iRoundState (gamerules_roundstate_t).
+/// `CTFGameRulesProxy` `m_iRoundState` (`gamerules_roundstate_t`).
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 enum RoundState {
     #[default]
@@ -421,7 +423,7 @@ fn resist_name(r: i64) -> &'static str {
     }
 }
 
-/// Output names of the TF2 player conditions (ETFCond), by number; "" for unused numbers.
+/// Output names of the TF2 player conditions (`ETFCond`), by number; "" for unused numbers.
 /// The names follow tf-demo-parser's `PlayerCondition`, but are spelled out here so the
 /// output does not change with that crate's Debug formatting.
 #[rustfmt::skip]
@@ -592,7 +594,9 @@ fn chat_kind(kind: ChatMessageKind) -> &'static str {
 
 /// The medigun charge effect a player is under, from their conditions.
 fn ubered(words: &[u32; 6]) -> Option<&'static str> {
-    use PlayerCondition::*;
+    use PlayerCondition::{
+        CritBoosted, Invulnerable, MedigunUberBlastResist, MedigunUberBulletResist, MedigunUberFireResist, MegaHeal,
+    };
     let on = |c| has_cond(words, c);
     // InvulnerableWearingOff only marks the fade-out next to Invulnerable; servers have been
     // seen leaving it set on a medic for good, so it is not an über on its own.
@@ -619,7 +623,7 @@ struct ControlPoint {
     owner: u8,
     capping_team: u8,
     /// Progress 0..1 of the capping team as of `progress_tick`. The server sends it
-    /// (as m_flLazyCapPerc, counting down) only now and then; in between it is advanced
+    /// (as `m_flLazyCapPerc`, counting down) only now and then; in between it is advanced
     /// at `cap_rate`, rolled forward whenever an input of the rate changes.
     progress: f32,
     progress_tick: u32,
@@ -669,7 +673,7 @@ fn handle_entity(handle: i64) -> u32 {
 }
 
 /// The entity of a building's builder. tf-demo-parser stores the builder's entity
-/// handle (m_hBuilder) in a `UserId`, so despite its type it is not a user id.
+/// handle (`m_hBuilder`) in a `UserId`, so despite its type it is not a user id.
 fn builder_entity(builder: UserId) -> u32 {
     handle_entity(i64::from(u16::from(builder)))
 }
@@ -798,7 +802,7 @@ impl Extractor {
         }
     }
 
-    /// Seconds left of mp_timelimit, which counts from the start of the match.
+    /// Seconds left of `mp_timelimit`, which counts from the start of the match.
     fn time_left(&self) -> Option<f32> {
         let limit = self.time_limit?;
         (self.match_start > 0.0)
@@ -915,7 +919,7 @@ impl Extractor {
             .map(|i| u16::from(i.user_id))
     }
 
-    /// One prop of CTFObjectiveResource. Its per point arrays come as elements named
+    /// One prop of `CTFObjectiveResource`. Its per point arrays come as elements named
     /// after the array with the index as name, so they go by name rather than identifier.
     fn objective_prop(&mut self, p: &SendProp) {
         let Some((table, name)) = p.identifier.names() else { return };
@@ -997,6 +1001,7 @@ impl Extractor {
         if id == 0 { Value::Null } else { json!(id) }
     }
 
+    #[expect(clippy::too_many_lines)]
     fn game_event(&mut self, event: &GameEvent) {
         self.count_score(event);
         match event {
@@ -1245,6 +1250,7 @@ impl Extractor {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn snapshot(&self) -> Value {
         let gs = self.state();
         let interval = self.interval();
@@ -1418,18 +1424,18 @@ impl Extractor {
         let now = self.server_tick as f32 * interval;
         for (&id, f) in self.flags.iter().filter(|(_, f)| !f.disabled) {
             // A carried flag is attached to its carrier, its own origin relative to them.
-            let carrier = gs.players.iter().find(|p| f.status == 1 && Some(u32::from(p.entity)) == f.carrier);
+            let holder = gs.players.iter().find(|p| f.status == 1 && Some(u32::from(p.entity)) == f.carrier);
             objectives.push(ObjectiveOut::Flag {
                 kind: "flag",
                 id,
-                pos: xyz(carrier.map_or(f.pos, |p| p.position)),
+                pos: xyz(holder.map_or(f.pos, |p| p.position)),
                 team: team_num(f.team),
                 status: match f.status {
                     1 => "carried",
                     2 => "dropped",
                     _ => "home",
                 },
-                carrier: carrier.and_then(|p| p.info.as_ref()).map(|i| u16::from(i.user_id)),
+                carrier: holder.and_then(|p| p.info.as_ref()).map(|i| u16::from(i.user_id)),
                 returns_in: (f.status == 2 && f.reset_time > now).then(|| round1(f.reset_time - now)),
             });
         }
@@ -1596,7 +1602,9 @@ struct BuildingOut {
     /// Sentries whose turret has been seen.
     #[serde(skip_serializing_if = "Option::is_none")]
     aim: Option<f64>,
+    /// Absent when unknown, null when the sentry has no target.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[expect(clippy::option_option)]
     target: Option<Option<u16>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     attacking: Option<bool>,
@@ -1742,7 +1750,7 @@ fn building_kind(object: u16) -> &'static str {
 impl Extractor {
     /// A delta names only what changed since its base frame, so an entity that came and went in
     /// between (a rocket fired and exploded since then) is in neither, and no delete for it is
-    /// ever sent. SourceTV relays often send deltas from a frame a few ticks back; demo files
+    /// ever sent. `SourceTV` relays often send deltas from a frame a few ticks back; demo files
     /// from the previous tick, where every delete arrives. Like the game client, this frame's
     /// entities are the base frame's plus those that entered, less those that left: projectiles
     /// and buildings outside it are gone. Without the base frame (just connected), nothing is dropped.
@@ -2635,7 +2643,7 @@ mod medic_tests {
         p.state = PlayerState::Alive;
         p.charge = charge;
         p.info = Some(UserInfo {
-            classes: Default::default(),
+            classes: tf_demo_parser::demo::parser::analyser::ClassList::default(),
             name: "medic".into(),
             user_id: 7u16.into(),
             steam_id: "BOT".into(),

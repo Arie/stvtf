@@ -1,4 +1,4 @@
-//! LSB-first bit reader and writer, matching Valve's bf_read / bf_write.
+//! LSB-first bit reader and writer, matching Valve's `bf_read` / `bf_write`.
 
 use anyhow::{Result, bail};
 
@@ -110,7 +110,7 @@ impl<'a> BitReader<'a> {
         if n.checked_mul(8).is_none_or(|bits| bits > self.bits_left()) {
             bail!("read_bytes({n}) past end");
         }
-        if self.pos & 7 == 0 {
+        if self.pos.is_multiple_of(8) {
             let start = self.pos >> 3;
             self.pos += n * 8;
             return Ok(self.data[start..start + n].to_vec());

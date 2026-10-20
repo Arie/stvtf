@@ -1,8 +1,8 @@
-//! Connectionless handshake and the A2S_INFO query used to learn the server build.
+//! Connectionless handshake and the `A2S_INFO` query used to learn the server build.
 //!
 //!   C->S 'q' getchallenge -> S->C 'A' challenge -> C->S 'k' connect -> S->C 'B' accepted
 //!
-//! Auth is the anonymous HASHEDCDKEY path, which SourceTV accepts without Steam.
+//! Auth is the anonymous HASHEDCDKEY path, which `SourceTV` accepts without Steam.
 
 use super::{messages, netchan};
 use anyhow::{Context, Result, anyhow, bail};
@@ -40,7 +40,7 @@ impl fmt::Display for Rejected {
 
 impl std::error::Error for Rejected {}
 
-/// The address answered as a game server, not SourceTV.
+/// The address answered as a game server, not `SourceTV`.
 #[derive(Debug)]
 pub struct GamePort(pub SocketAddr);
 
@@ -211,7 +211,7 @@ fn random_u32() -> u32 {
     RandomState::new().hash_one(Instant::now()) as u32
 }
 
-/// The server build (A2S_INFO `version`), following the challenge some servers require.
+/// The server build (`A2S_INFO` `version`), following the challenge some servers require.
 pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     let deadline = Instant::now() + timeout;
