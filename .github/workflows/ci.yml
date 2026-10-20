@@ -61,20 +61,6 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
-  msrv:
-    name: MSRV (rust-version in Cargo.toml)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      # Version given as an input, not as the action ref (`@1.88`): Dependabot
-      # would "upgrade" such a ref to a newer Rust release.
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
-      # `+1.88` overrides rust-toolchain.toml; keep in sync with `rust-version`.
-      - run: cargo +1.88 check --all-targets --locked
-
   deny:
     name: Dependencies (cargo-deny)
     runs-on: ubuntu-latest

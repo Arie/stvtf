@@ -2,7 +2,6 @@
 name = "stvtf"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
 description = "Headless SourceTV spectator for TF2 that emits top-down overview data as JSON lines"
 license = "MIT"
 

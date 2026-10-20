@@ -236,8 +236,7 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
 ## Development
 
 Install Rust with [rustup](https://rustup.rs); `rust-toolchain.toml` picks stable with
-`rustfmt` and `clippy`. The minimum Rust version is 1.88 (`rust-version` in `Cargo.toml`).
-CI (`.github/workflows/ci.yml`) runs:
+`rustfmt` and `clippy`; older Rust versions aren't supported. CI (`.github/workflows/ci.yml`) runs:
 
 ```
 cargo fmt                                         # format (settings in rustfmt.toml)
