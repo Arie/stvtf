@@ -12,7 +12,18 @@ use super::bits::BitReader;
 use super::compress;
 use anyhow::{Result, bail};
 
+/// The netchannel's reliable subchannels, numbered in 3 bits.
+pub const SUBCHANNEL_BITS: usize = 3;
+pub const SUBCHANNELS: u8 = 1 << SUBCHANNEL_BITS;
 const FRAGMENT_SIZE: usize = 256;
+/// A multi-fragment block: the number of its first fragment and how many it carries.
+const START_FRAGMENT_BITS: usize = 18;
+const FRAGMENT_COUNT_BITS: usize = 3;
+/// A file transfer's id and file name (`MAX_OSPATH`), skipped.
+const TRANSFER_ID_BITS: usize = 32;
+const MAX_FILE_NAME: usize = 260;
+/// A transfer's sizes (`MAX_FILE_SIZE_BITS`).
+const SIZE_BITS: usize = 26;
 const MAX_TRANSFER: usize = 4 << 20;
 /// Index of the message stream in `Reassembler::streams` (1 is the file stream).
 const STREAM_MESSAGES: usize = 0;
@@ -54,13 +65,13 @@ pub struct Region {
 }
 
 pub fn latch_subchannel(data: &[u8], body_offset: usize) -> Option<u8> {
-    BitReader::at(data, body_offset * 8).read_bits(3).ok().map(|v| v as u8)
+    BitReader::at(data, body_offset * 8).read_bits(SUBCHANNEL_BITS).ok().map(|v| v as u8)
 }
 
 impl Reassembler {
     pub fn feed(&mut self, data: &[u8], body_offset: usize) -> Result<Region> {
         let mut br = BitReader::at(data, body_offset * 8);
-        let subchannel = br.read_bits(3)? as u8;
+        let subchannel = br.read_bits(SUBCHANNEL_BITS)? as u8;
         let mut completed = Vec::new();
         for (idx, st) in self.streams.iter_mut().enumerate() {
             if !br.read_bit()? {
@@ -78,22 +89,25 @@ impl Reassembler {
 
 fn read_block(br: &mut BitReader<'_>, st: &mut Transfer) -> Result<Option<Vec<u8>>> {
     let multi = br.read_bit()?;
-    let (start_frag, mut num_frags) =
-        if multi { (br.read_bits(18)? as usize, br.read_bits(3)? as usize) } else { (0, 0) };
+    let (start_frag, mut num_frags) = if multi {
+        (br.read_bits(START_FRAGMENT_BITS)? as usize, br.read_bits(FRAGMENT_COUNT_BITS)? as usize)
+    } else {
+        (0, 0)
+    };
     if start_frag == 0 {
         *st = Transfer::default();
         if multi {
             if br.read_bit()? {
-                br.read_bits(32)?;
-                br.read_string(260)?;
+                br.read_bits(TRANSFER_ID_BITS)?;
+                br.read_string(MAX_FILE_NAME)?;
             }
             if br.read_bit()? {
-                st.uncompressed = Some(br.read_bits(26)? as usize);
+                st.uncompressed = Some(br.read_bits(SIZE_BITS)? as usize);
             }
-            st.nbytes = br.read_bits(26)? as usize;
+            st.nbytes = br.read_bits(SIZE_BITS)? as usize;
         } else {
             if br.read_bit()? {
-                st.uncompressed = Some(br.read_bits(26)? as usize);
+                st.uncompressed = Some(br.read_bits(SIZE_BITS)? as usize);
             }
             st.nbytes = br.read_varint32()? as usize;
             num_frags = st.nbytes.div_ceil(FRAGMENT_SIZE);

@@ -83,7 +83,7 @@ impl Args {
     }
 
     fn hz(&self) -> Result<f32> {
-        let Some(hz) = self.get("hz") else { return Ok(20.0) };
+        let Some(hz) = self.get("hz") else { return Ok(stvtf::DEFAULT_SNAPSHOT_HZ) };
         let hz: f32 = hz.parse().with_context(|| format!("--hz {hz}: not a number"))?;
         if !hz.is_finite() || hz < 0.0 {
             bail!("--hz must be 0 or more");

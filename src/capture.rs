@@ -14,6 +14,7 @@ use std::path::Path;
 use std::time::Instant;
 
 const MAGIC: &[u8; 8] = b"STVMAPC1";
+/// A record's header: receive time (u64 microseconds), kind (u8), data length (u32).
 const RECORD_HEADER: usize = 13;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

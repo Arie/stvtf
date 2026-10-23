@@ -7,7 +7,9 @@ pub const NET_TICK: u32 = 3;
 pub const NET_SETCONVAR: u32 = 5;
 pub const NET_SIGNONSTATE: u32 = 6;
 pub const CLC_CLIENTINFO: u32 = 8;
-const TYPE_BITS: usize = 6;
+/// Bits of a net message's type.
+pub const TYPE_BITS: usize = 6;
+const FRAME_TIME_BITS: usize = 16;
 
 /// Signon states (`SIGNONSTATE_*` in the engine). Ordered, so `>=` compares progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -95,15 +97,16 @@ pub fn tick(tick: i32) -> BitBuf {
     let mut w = BitWriter::new();
     w.write_bits(NET_TICK, TYPE_BITS);
     w.write_i32(tick);
-    w.write_bits(0, 16);
-    w.write_bits(0, 16);
+    // Host frame time and its deviation, which the server only shows in its net graph.
+    w.write_bits(0, FRAME_TIME_BITS);
+    w.write_bits(0, FRAME_TIME_BITS);
     w.finish()
 }
 
 /// One message stream wrapped as a single-block reliable region.
 pub fn reliable_region(body: &BitBuf, subchannel: u8) -> BitBuf {
     let mut w = BitWriter::new();
-    w.write_bits(u32::from(subchannel), 3);
+    w.write_bits(u32::from(subchannel), super::reliable::SUBCHANNEL_BITS);
     w.write_bit(true);
     w.write_bit(false);
     w.write_bit(false);

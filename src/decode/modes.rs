@@ -2,7 +2,7 @@
 //! robots and cores, the robot and player destruction logics' points, and Mann vs. Machine's tank
 //! and wave.
 
-use super::extract::{as_float, as_int, opt_handle, team_byte, team_num, xyz};
+use super::extract::{as_float, as_int, opt_handle, round3, team_byte, team_num, xyz};
 use crate::output::{Mvm, MvmClass, Objective, PlayerId, Points};
 use std::collections::BTreeMap;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
@@ -313,7 +313,7 @@ impl Modes {
         let tanks = self.tanks.iter().map(|(&id, t)| Objective::Tank {
             id,
             pos: xyz(t.at.pos),
-            health: (f64::from(t.health.clamp(0.0, 1.0)) * 1000.0).round() / 1000.0,
+            health: round3(t.health.clamp(0.0, 1.0)),
         });
         balls.chain(goals).chain(robots).chain(cores).chain(revives).chain(money).chain(tanks).collect()
     }

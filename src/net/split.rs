@@ -33,6 +33,7 @@ impl SplitReassembler {
             self.dropped += 1;
             return None;
         }
+        // After the split marker: i32 group, u8 parts, u8 this part's number, u16 part size.
         let gid = i32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         let (count, number) = (data[8], data[9]);
         let split_size = u16::from_le_bytes([data[10], data[11]]);

@@ -4,7 +4,7 @@
 //!
 //! Auth is the anonymous HASHEDCDKEY path, which `SourceTV` accepts without Steam.
 
-use super::{messages, netchan};
+use super::{MAX_DATAGRAM, messages, netchan};
 use anyhow::{Context, Result, anyhow, bail};
 use std::fmt;
 use std::hash::{BuildHasher, RandomState};
@@ -16,6 +16,26 @@ const AUTH_HASHEDCDKEY: u32 = 2;
 const AUTH_STEAM: u32 = 3;
 const MAGIC_VERSION: u32 = 0x5A4F_4933;
 const OOB_PREFIX: [u8; 4] = [0xff; 4];
+/// A connectionless packet's kind, right after the prefix.
+const OOB_KIND: usize = OOB_PREFIX.len();
+/// Connectionless packet kinds.
+const C2S_GETCHALLENGE: u8 = b'q';
+const C2S_CONNECT: u8 = b'k';
+const S2C_CHALLENGE: u8 = b'A';
+const S2C_CONNECTION: u8 = b'B';
+const S2C_CONNREJECT: u8 = b'9';
+const A2S_INFO: u8 = b'T';
+const S2A_INFO: u8 = b'I';
+/// Room for an `A2S_INFO` reply.
+const A2S_REPLY: usize = 4096;
+/// An `A2S_INFO` reply: the protocol version follows the kind, then name, map, folder and game.
+const A2S_STRINGS: usize = OOB_KIND + 2;
+/// After those strings: app id (u16), players, max players, bots, server type, environment,
+/// visibility, VAC (a byte each), then the version string.
+const A2S_FIXED: usize = 9;
+/// An `A2S_INFO` that needs a challenge gets an 'A' with it (4 bytes) first; resend with it.
+const A2S_CHALLENGE: std::ops::Range<usize> = OOB_KIND + 1..OOB_KIND + 5;
+const A2S_TRIES: usize = 3;
 
 /// Offsets in the 'A' challenge reply: magic, server challenge, our nonce echoed, auth protocol.
 const CHALLENGE_MAGIC: usize = 5;
@@ -73,14 +93,14 @@ fn cstr(v: &mut Vec<u8>, s: &str) {
 }
 
 pub fn build_getchallenge(nonce: u32) -> Vec<u8> {
-    let mut v = oob(b'q');
+    let mut v = oob(C2S_GETCHALLENGE);
     v.extend_from_slice(&nonce.to_le_bytes());
     cstr(&mut v, "0000000000");
     v
 }
 
 pub fn build_connect(nonce: u32, challenge: u32, name: &str, password: &str, build: &str) -> Vec<u8> {
-    let mut v = oob(b'k');
+    let mut v = oob(C2S_CONNECT);
     v.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
     v.extend_from_slice(&AUTH_HASHEDCDKEY.to_le_bytes());
     v.extend_from_slice(&challenge.to_le_bytes());
@@ -107,14 +127,14 @@ pub struct Challenge {
 /// Parses the 'A' reply (or '9' refusal) to our getchallenge. Both echo our `nonce`; a
 /// reply that does not is someone else's or forged, and gives `None`.
 pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
-    if data.len() < 5 || data[..4] != OOB_PREFIX {
+    if data.len() <= OOB_KIND || data[..OOB_KIND] != OOB_PREFIX {
         bail!("not a connectionless reply");
     }
     let word = |o: usize| data.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-    match data[4] {
-        b'9' if word(REJECT_NONCE) == Some(nonce) => return Err(Rejected(reject_reason(data)).into()),
-        b'9' => return Ok(None),
-        b'A' => {}
+    match data[OOB_KIND] {
+        S2C_CONNREJECT if word(REJECT_NONCE) == Some(nonce) => return Err(Rejected(reject_reason(data)).into()),
+        S2C_CONNREJECT => return Ok(None),
+        S2C_CHALLENGE => {}
         c => bail!("unexpected reply {:?}", char::from(c)),
     }
     if data.len() < CHALLENGE_LEN {
@@ -134,7 +154,7 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     let nonce = random_u32();
     sock.send_to(&build_getchallenge(nonce), server)?;
-    let mut buf = vec![0u8; 65536];
+    let mut buf = vec![0u8; MAX_DATAGRAM];
     let deadline = Instant::now() + timeout;
     // Replies are taken from any address (see `recv_from_port`), so only the nonce tells
     // the server's from a forgery: skip the ones without it rather than fail on them.
@@ -162,14 +182,15 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
         sock.set_read_timeout(Some(left))?;
         let Ok(n) = sock.recv(&mut buf) else { break };
         let data = &buf[..n];
-        if netchan::classify(data) == netchan::Kind::Oob && n > 4 {
-            match data[4] {
-                b'B' => return Ok(Connection { sock, challenge: ch.challenge, pending: None }),
-                b'9' => return Err(Rejected(reject_reason(data)).into()),
+        if netchan::classify(data) == netchan::Kind::Oob && n > OOB_KIND {
+            match data[OOB_KIND] {
+                S2C_CONNECTION => return Ok(Connection { sock, challenge: ch.challenge, pending: None }),
+                S2C_CONNREJECT => return Err(Rejected(reject_reason(data)).into()),
                 _ => continue,
             }
         }
-        if n >= 4 {
+        // Too short for a netchan header otherwise.
+        if n >= netchan::SEQUENCE_LEN {
             return Ok(Connection { sock, challenge: ch.challenge, pending: Some(data.to_vec()) });
         }
     }
@@ -217,19 +238,19 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
     let deadline = Instant::now() + timeout;
     let mut server = server;
     let mut req = OOB_PREFIX.to_vec();
-    req.push(b'T');
+    req.push(A2S_INFO);
     req.extend_from_slice(b"Source Engine Query\0");
-    let mut buf = vec![0u8; 4096];
+    let mut buf = vec![0u8; A2S_REPLY];
     let mut extra: Vec<u8> = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..A2S_TRIES {
         let mut msg = req.clone();
         msg.extend_from_slice(&extra);
         sock.send_to(&msg, server)?;
         let n;
         (n, server) = recv_from_port(&sock, server.port(), &mut buf, deadline).context("no A2S_INFO reply")?;
         let data = &buf[..n];
-        if n >= 9 && data[..4] == OOB_PREFIX && data[4] == b'A' {
-            extra = data[5..9].to_vec();
+        if n >= A2S_CHALLENGE.end && data[..OOB_KIND] == OOB_PREFIX && data[OOB_KIND] == S2C_CHALLENGE {
+            extra = data[A2S_CHALLENGE].to_vec();
             continue;
         }
         return parse_a2s_version(data);
@@ -238,18 +259,17 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
 }
 
 fn parse_a2s_version(data: &[u8]) -> Result<String> {
-    if data.len() < 6 || data[..4] != OOB_PREFIX || data[4] != b'I' {
+    if data.len() < A2S_STRINGS || data[..OOB_KIND] != OOB_PREFIX || data[OOB_KIND] != S2A_INFO {
         bail!("not an A2S_INFO reply");
     }
-    let mut pos = 6;
+    let mut pos = A2S_STRINGS;
     // Skip name, map, folder and game.
     for _ in 0..4 {
         let rest = data.get(pos..).ok_or_else(|| anyhow!("truncated"))?;
         let end = rest.iter().position(|&b| b == 0).ok_or_else(|| anyhow!("unterminated string"))?;
         pos += end + 1;
     }
-    // app id (u16), players, max players, bots, server type, environment, visibility, VAC.
-    let Some(tail) = data.get(pos + 9..) else { bail!("truncated A2S_INFO") };
+    let Some(tail) = data.get(pos + A2S_FIXED..) else { bail!("truncated A2S_INFO") };
     let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
     Ok(String::from_utf8_lossy(&tail[..end]).into_owned())
 }

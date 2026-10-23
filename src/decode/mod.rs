@@ -10,7 +10,7 @@ mod detail;
 mod extract;
 mod modes;
 
-use crate::net::messages::Signon;
+use crate::net::messages::{Signon, TYPE_BITS};
 use crate::output::Line;
 use anyhow::{Context, Result, bail};
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
@@ -124,7 +124,7 @@ impl<'a> Decoder<'a> {
 
     fn feed_inner(&mut self, data: &[u8], nbits: usize) -> Lifecycle {
         let mut life = Lifecycle::default();
-        if nbits < 6 {
+        if nbits < TYPE_BITS {
             return life;
         }
         let nbytes = nbits.div_ceil(8);
@@ -134,9 +134,9 @@ impl<'a> Decoder<'a> {
         let Ok(mut stream) = outer.read_bits(nbits) else { return life };
         let state = self.handler.get_parser_state();
         let mut messages = Vec::new();
-        while stream.bits_left() > 6 {
+        while stream.bits_left() > TYPE_BITS {
             let start = stream.pos();
-            let id: u8 = match stream.read_sized(6) {
+            let id: u8 = match stream.read_sized(TYPE_BITS) {
                 Ok(id) => id,
                 Err(_) => break,
             };

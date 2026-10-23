@@ -1,3 +1,6 @@
+/// Room for any UDP datagram.
+pub const MAX_DATAGRAM: usize = 65536;
+
 pub mod bits;
 pub mod compress;
 pub mod handshake;

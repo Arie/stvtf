@@ -57,6 +57,38 @@ const INVALID_EHANDLE: i64 = 0x1f_ffff;
 const MAX_PENDING_SPAWNS: usize = 256;
 /// Seconds per server tick until the server's own value (`ServerInfo`) arrives.
 pub(crate) const DEFAULT_TICK_INTERVAL: f32 = 0.015;
+/// TF2's team numbers (0 unassigned, 1 spectator).
+const TEAM_RED: u8 = 2;
+const TEAM_BLUE: u8 = 3;
+/// `CTFObjectiveResource` has room for this many control points, and its per team arrays for
+/// this many teams: element `team * MAX_CONTROL_POINTS + point` (`TEAM_ARRAY`).
+const MAX_CONTROL_POINTS: usize = 8;
+const MAX_TEAMS: usize = 4;
+/// A player's condition words: `m_nPlayerCond` and `_condition_bits` (both conditions 0-31),
+/// then `m_nPlayerCondEx..Ex4`, 32 conditions each.
+const COND_WORDS: usize = 6;
+const COND_BITS: usize = 32;
+/// Condition numbers: 0-31 and the four `Ex` words.
+const COND_NUMBERS: u8 = 32 * 5;
+/// A medigun's charge when full, in percent.
+const FULL_CHARGE: u8 = 100;
+/// `Weapon::clip` of a weapon without a clip.
+const NO_CLIP: i64 = -1;
+const SECONDS_PER_MINUTE: f32 = 60.0;
+/// The sentry's yaw pose parameter: 0 to 1 over a full turn, the placed direction at its middle.
+const POSE_MIDDLE: f32 = 0.5;
+const FULL_TURN: f32 = 360.0;
+/// TF2 chat colour codes: the default colour, the sender's team colour, Valve's two greens, then
+/// a colour given as `RRGGBB` or as `RRGGBBAA` (alpha ignored).
+const CHAT_DEFAULT: [char; 3] = ['\u{01}', '\u{02}', '\u{06}'];
+const CHAT_TEAM: char = '\u{03}';
+const CHAT_GREEN: char = '\u{04}';
+const CHAT_LIGHT_GREEN: char = '\u{05}';
+const CHAT_RGB: char = '\u{07}';
+const CHAT_RGBA: char = '\u{08}';
+const CHAT_CODES: std::ops::RangeInclusive<char> = '\u{01}'..='\u{08}';
+const RGB_DIGITS: usize = 6;
+const RGBA_DIGITS: usize = 8;
 
 /// `STVTF_DEBUG`, read once: a server class, temp entity class, `ent:N` or `gameevents`.
 static DEBUG: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("STVTF_DEBUG").ok());
@@ -158,7 +190,7 @@ pub(crate) struct Extractor {
     num_control_points: usize,
     /// Condition words per player entity: `m_nPlayerCond`, _`condition_bits`, `m_nPlayerCondEx..Ex4`.
     /// (tf-demo-parser 0.6.4's own `conditions()` decodes these wrongly.)
-    conds: HashMap<u32, [u32; 6]>,
+    conds: HashMap<u32, [u32; COND_WORDS]>,
     mediguns: HashMap<u32, Medigun>,
     flamethrowers: HashMap<u32, Flamethrower>,
     weapons: HashMap<u32, Weapon>,
@@ -270,7 +302,7 @@ impl Sentry {
     /// World yaw of the turret: the yaw pose parameter covers a full turn, centred on the
     /// direction the sentry was placed in (checked against its targets while firing).
     fn aim(&self) -> f32 {
-        (self.yaw + (0.5 - self.pose[1]) * 360.0).rem_euclid(360.0)
+        (self.yaw + (POSE_MIDDLE - self.pose[1]) * FULL_TURN).rem_euclid(FULL_TURN)
     }
 }
 
@@ -405,19 +437,19 @@ fn resist(r: i64) -> Resist {
 }
 
 /// Whether condition number `n` is set.
-fn has_cond_bit(words: &[u32; 6], n: usize) -> bool {
-    let word = if n < 32 { words[0] | words[1] } else { words.get(n / 32 + 1).copied().unwrap_or(0) };
-    word >> (n % 32) & 1 == 1
+fn has_cond_bit(words: &[u32; COND_WORDS], n: usize) -> bool {
+    let word = if n < COND_BITS { words[0] | words[1] } else { words.get(n / COND_BITS + 1).copied().unwrap_or(0) };
+    word >> (n % COND_BITS) & 1 == 1
 }
 
-fn has_cond(words: &[u32; 6], c: PlayerCondition) -> bool {
+fn has_cond(words: &[u32; COND_WORDS], c: PlayerCondition) -> bool {
     has_cond_bit(words, c as usize)
 }
 
 /// The conditions set in a player's condition words (160 numbers: 0-31 twice, then four more
 /// words), in number order.
-fn conditions(words: &[u32; 6]) -> Vec<Condition> {
-    (0..32 * 5).filter(|&n| has_cond_bit(words, usize::from(n))).filter_map(Condition::from_number).collect()
+fn conditions(words: &[u32; COND_WORDS]) -> Vec<Condition> {
+    (0..COND_NUMBERS).filter(|&n| has_cond_bit(words, usize::from(n))).filter_map(Condition::from_number).collect()
 }
 
 fn chat_kind(kind: ChatMessageKind) -> ChatKind {
@@ -433,7 +465,7 @@ fn chat_kind(kind: ChatMessageKind) -> ChatKind {
 }
 
 /// The medigun charge effect a player is under, from their conditions.
-fn ubered(words: &[u32; 6]) -> Option<Ubered> {
+fn ubered(words: &[u32; COND_WORDS]) -> Option<Ubered> {
     use PlayerCondition::{
         CritBoosted, Invulnerable, MedigunUberBlastResist, MedigunUberBulletResist, MedigunUberFireResist, MegaHeal,
     };
@@ -471,8 +503,8 @@ struct ControlPoint {
     blocked: bool,
     team_in_zone: u8,
     /// Per team: seconds to cap alone, and team members on the point.
-    cap_time: [f32; 4],
-    members: [u8; 4],
+    cap_time: [f32; MAX_TEAMS],
+    members: [u8; MAX_TEAMS],
 }
 
 impl ControlPoint {
@@ -574,6 +606,11 @@ pub(crate) fn xyz(v: Vector) -> Position {
     [round1(v.x), round1(v.y), round1(v.z)]
 }
 
+/// To a thousandth: rates, fractions.
+pub(crate) fn round3(f: f32) -> f64 {
+    (f64::from(f) * 1000.0).round() / 1000.0
+}
+
 pub(crate) fn round2(f: f32) -> f64 {
     (f64::from(f) * 100.0).round() / 100.0
 }
@@ -647,8 +684,9 @@ impl Extractor {
     /// Seconds left of `mp_timelimit`, which counts from the start of the match.
     fn time_left(&self) -> Option<f32> {
         let limit = self.time_limit?;
-        (self.match_start > 0.0)
-            .then(|| (limit * 60.0 - (self.server_tick as f32 * self.interval() - self.match_start)).max(0.0))
+        (self.match_start > 0.0).then(|| {
+            (limit * SECONDS_PER_MINUTE - (self.server_tick as f32 * self.interval() - self.match_start)).max(0.0)
+        })
     }
 
     fn round_time(&self) -> Option<f32> {
@@ -674,7 +712,7 @@ impl Extractor {
                     medic: PlayerId(u16::from(info.user_id)),
                     medigun: gun.map(|m| medigun_kind(m.item)),
                 };
-                if before.charge < 100 && now.charge >= 100 && !now.releasing {
+                if before.charge < FULL_CHARGE && now.charge >= FULL_CHARGE && !now.releasing {
                     events.push(Line::UberReady(charge.clone()));
                 }
                 if before.releasing && !now.releasing {
@@ -770,7 +808,7 @@ impl Extractor {
         if name.as_str() == "m_vCPPositions" {
             if let SendPropValue::Array(items) = &p.value {
                 if self.control_points.len() < items.len() {
-                    self.control_points.resize(items.len().min(8), ControlPoint::default());
+                    self.control_points.resize(items.len().min(MAX_CONTROL_POINTS), ControlPoint::default());
                 }
                 for (cp, item) in self.control_points.iter_mut().zip(items) {
                     if let SendPropValue::Vector(v) = item {
@@ -782,15 +820,14 @@ impl Extractor {
         }
         if name.as_str() == "m_iNumControlPoints" {
             if let SendPropValue::Integer(n) = p.value {
-                self.num_control_points = n.clamp(0, 8) as usize;
+                self.num_control_points = usize::try_from(n).unwrap_or(0).min(MAX_CONTROL_POINTS);
             }
             return;
         }
         let Ok(idx) = name.as_str().parse::<usize>() else { return };
-        // Per team and point arrays: index = team * 8 + point (TEAM_ARRAY).
         if matches!(table.as_str(), "m_flTeamCapTime" | "m_iNumTeamMembers") {
-            let (team, point) = (idx / 8, idx % 8);
-            if team >= 4 {
+            let (team, point) = (idx / MAX_CONTROL_POINTS, idx % MAX_CONTROL_POINTS);
+            if team >= MAX_TEAMS {
                 return;
             }
             if self.control_points.len() <= point {
@@ -801,12 +838,12 @@ impl Extractor {
             cp.advance(tick, interval);
             match &p.value {
                 SendPropValue::Float(f) if table.as_str() == "m_flTeamCapTime" => cp.cap_time[team] = *f,
-                SendPropValue::Integer(i) => cp.members[team] = (*i).clamp(0, 255) as u8,
+                SendPropValue::Integer(i) => cp.members[team] = u8::try_from((*i).max(0)).unwrap_or(u8::MAX),
                 _ => {}
             }
             return;
         }
-        if idx >= 8 {
+        if idx >= MAX_CONTROL_POINTS {
             return;
         }
         let (tick, interval) = (self.server_tick, self.interval());
@@ -1249,10 +1286,13 @@ impl Extractor {
                 capping_team: team_num(cp.capping_team),
                 // m_flLazyCapPerc counts down from 1.0 while a team caps; it is stale otherwise.
                 cap_progress: round2(cp.progress_at(self.server_tick, interval)),
-                cap_rate: (f64::from(cp.cap_rate()) * 1000.0).round() / 1000.0,
+                cap_rate: round3(cp.cap_rate()),
                 locked: cp.locked,
                 blocked: cp.blocked,
-                on_point: out::OnPoint { red: cp.members[2], blue: cp.members[3] },
+                on_point: out::OnPoint {
+                    red: cp.members[usize::from(TEAM_RED)],
+                    blue: cp.members[usize::from(TEAM_BLUE)],
+                },
             })
             .collect();
         let carts: Vec<_> =
@@ -1260,7 +1300,7 @@ impl Extractor {
         // A payload's watcher belongs to the pushing team; maps use watchers of no team for other
         // things on a track (pd_watergate's UFO).
         let mut watchers: Vec<&TrainWatcher> =
-            self.train_watchers.values().filter(|w| matches!(w.team, 2 | 3)).collect();
+            self.train_watchers.values().filter(|w| w.team == TEAM_RED || w.team == TEAM_BLUE).collect();
         watchers.sort_by_key(|w| w.team);
         for (i, w) in watchers.iter().enumerate() {
             // The cart model either rides on a func_tracktrain (its moveparent) or is a free
@@ -1354,13 +1394,9 @@ pub(crate) fn strip_colors(text: &str) -> String {
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
         match c {
-            '\u{07}' => {
-                chars.by_ref().take(6).for_each(drop);
-            }
-            '\u{08}' => {
-                chars.by_ref().take(8).for_each(drop);
-            }
-            '\u{01}'..='\u{06}' => {}
+            CHAT_RGB => chars.by_ref().take(RGB_DIGITS).for_each(drop),
+            CHAT_RGBA => chars.by_ref().take(RGBA_DIGITS).for_each(drop),
+            c if CHAT_CODES.contains(&c) => {}
             _ => out.push(c),
         }
     }
@@ -1370,7 +1406,7 @@ pub(crate) fn strip_colors(text: &str) -> String {
 /// The coloured spans of a chat line with TF2 colour codes, or None without any. \x03 is the
 /// sender's team colour, \x04 and \x05 Valve's green ones, \x07 and \x08 a hex colour.
 pub(crate) fn color_parts(text: &str) -> Option<Vec<ChatPart>> {
-    if !text.chars().any(|c| ('\u{01}'..='\u{08}').contains(&c)) {
+    if !text.chars().any(|c| CHAT_CODES.contains(&c)) {
         return None;
     }
     let mut parts = Vec::new();
@@ -1378,14 +1414,14 @@ pub(crate) fn color_parts(text: &str) -> Option<Vec<ChatPart>> {
     let mut chars = text.trim_end_matches('\n').chars();
     while let Some(c) = chars.next() {
         let next = match c {
-            '\u{07}' | '\u{08}' => {
-                let hex: String = chars.by_ref().take(if c == '\u{07}' { 6 } else { 8 }).collect();
-                Some(hex.get(..6).and_then(ChatColor::from_hex))
+            CHAT_RGB | CHAT_RGBA => {
+                let hex: String = chars.by_ref().take(if c == CHAT_RGB { RGB_DIGITS } else { RGBA_DIGITS }).collect();
+                Some(hex.get(..RGB_DIGITS).and_then(ChatColor::from_hex))
             }
-            '\u{03}' => Some(Some(ChatColor::Team)),
-            '\u{04}' => Some(Some(ChatColor::Rgb([0x40, 0xFF, 0x40]))),
-            '\u{05}' => Some(Some(ChatColor::Rgb([0x99, 0xFF, 0x99]))),
-            '\u{01}' | '\u{02}' | '\u{06}' => Some(None),
+            CHAT_TEAM => Some(Some(ChatColor::Team)),
+            CHAT_GREEN => Some(Some(ChatColor::Rgb([0x40, 0xFF, 0x40]))),
+            CHAT_LIGHT_GREEN => Some(Some(ChatColor::Rgb([0x99, 0xFF, 0x99]))),
+            c if CHAT_DEFAULT.contains(&c) => Some(None),
             _ => {
                 run.push(c);
                 None
@@ -1648,7 +1684,7 @@ impl Extractor {
     }
 
     fn weapon(&mut self, idx: u32) -> &mut Weapon {
-        self.weapons.entry(idx).or_insert(Weapon { item: 0, clip: -1 })
+        self.weapons.entry(idx).or_insert(Weapon { item: 0, clip: NO_CLIP })
     }
 
     fn on_player(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {

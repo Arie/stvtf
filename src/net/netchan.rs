@@ -11,8 +11,17 @@ pub const FLAG_RELIABLE: u8 = 0x01;
 pub const FLAG_CHOKED: u8 = 0x10;
 pub const FLAG_CHALLENGE: u8 = 0x20;
 
+/// A datagram starts with an i32: the sequence of an in-band packet, or one of the markers below.
+pub const SEQUENCE_LEN: usize = 4;
+const MARKER_OOB: i32 = -1;
+const MARKER_SPLIT: i32 = -2;
+const MARKER_COMPRESSED: i32 = -3;
+/// Header offsets: flags after sequence and ack, then the checksum (u16).
+const FLAGS_AT: usize = 2 * SEQUENCE_LEN;
+const CHECKSUM_AT: usize = FLAGS_AT + 1;
 /// Where the checksummed part starts (after sequence, ack, flags and the checksum itself).
-pub const CHECKSUM_START: usize = 11;
+pub const CHECKSUM_START: usize = CHECKSUM_AT + 2;
+const CHALLENGE_LEN: usize = 4;
 /// The shortest header: up to and including `reliable_state`.
 pub const HEADER_MIN: usize = CHECKSUM_START + 1;
 
@@ -42,13 +51,13 @@ pub enum Kind {
 }
 
 pub fn classify(datagram: &[u8]) -> Kind {
-    if datagram.len() < 4 {
+    let Some(Ok(marker)) = datagram.get(..SEQUENCE_LEN).map(<[u8; SEQUENCE_LEN]>::try_from) else {
         return Kind::Short;
-    }
-    match i32::from_le_bytes([datagram[0], datagram[1], datagram[2], datagram[3]]) {
-        -1 => Kind::Oob,
-        -2 => Kind::Split,
-        -3 => Kind::Compressed,
+    };
+    match i32::from_le_bytes(marker) {
+        MARKER_OOB => Kind::Oob,
+        MARKER_SPLIT => Kind::Split,
+        MARKER_COMPRESSED => Kind::Compressed,
         _ => Kind::InBand,
     }
 }
@@ -62,7 +71,7 @@ pub fn verify_checksum(data: &[u8]) -> bool {
     if data.len() < HEADER_MIN {
         return false;
     }
-    let stored = u16::from_le_bytes([data[9], data[10]]);
+    let stored = u16::from_le_bytes([data[CHECKSUM_AT], data[CHECKSUM_AT + 1]]);
     fold_checksum(&data[CHECKSUM_START..]) == stored
 }
 
@@ -70,8 +79,8 @@ pub fn decode_header(data: &[u8]) -> Result<Header> {
     if data.len() < HEADER_MIN {
         bail!("short packet ({} bytes)", data.len());
     }
-    let sequence = i32::from_le_bytes(data[0..4].try_into()?);
-    let flags = data[8];
+    let sequence = i32::from_le_bytes(data[..SEQUENCE_LEN].try_into()?);
+    let flags = data[FLAGS_AT];
     let mut off = CHECKSUM_START;
     let reliable_state = data[off];
     off += 1;
@@ -82,9 +91,9 @@ pub fn decode_header(data: &[u8]) -> Result<Header> {
     }
     let mut challenge = None;
     if flags & FLAG_CHALLENGE != 0 {
-        let b = data.get(off..off + 4).ok_or_else(|| anyhow::anyhow!("truncated challenge"))?;
+        let b = data.get(off..off + CHALLENGE_LEN).ok_or_else(|| anyhow::anyhow!("truncated challenge"))?;
         challenge = Some(u32::from_le_bytes(b.try_into()?));
-        off += 4;
+        off += CHALLENGE_LEN;
     }
     Ok(Header { sequence, flags, reliable_state, choked, challenge, body_offset: off })
 }

@@ -4,6 +4,7 @@ use crate::capture::Recorder;
 use crate::decode::Tables;
 use crate::net::handshake::{self, GamePort, Rejected};
 use crate::output::{Line, Status};
+use crate::session::DEFAULT_SNAPSHOT_HZ;
 use crate::session::{self, End, Fatal, Options};
 use anyhow::{Context, Result, anyhow, bail};
 use std::fmt;
@@ -15,6 +16,14 @@ use std::time::{Duration, Instant};
 
 const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// Retry waits vary this much either way.
+const JITTER: f64 = 0.2;
+/// How often a wait checks for a stop.
+const STOP_POLL: Duration = Duration::from_millis(100);
+/// `SourceTV`'s default port: the game port + 5.
+const TV_PORT_OFFSET: u16 = 5;
+/// The exit status of a process interrupted by SIGINT (128 + 2).
+const EXIT_INTERRUPTED: i32 = 130;
 
 /// What to watch and how. `Debug` is implemented by hand to keep the password out of logs.
 pub struct Watch {
@@ -45,7 +54,7 @@ impl Watch {
             target: target.to_string(),
             password: password.to_string(),
             name: "stv.tf".to_string(),
-            snapshot_hz: 20.0,
+            snapshot_hz: DEFAULT_SNAPSHOT_HZ,
             tables: None,
             crc: None,
             build: None,
@@ -128,7 +137,7 @@ pub fn tables(build: &str, demo: Option<&Path>) -> Result<Tables> {
 pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
     ctrlc::set_handler(move || {
         if stop.swap(true, Ordering::Relaxed) {
-            std::process::exit(130);
+            std::process::exit(EXIT_INTERRUPTED);
         }
     })?;
     Ok(())
@@ -192,7 +201,7 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result
                 // Given the game port, try SourceTV's default place next to it: game port + 5.
                 if e.downcast_ref::<GamePort>().is_some()
                     && !tried_tv_port
-                    && let Some(port) = server.port().checked_add(5)
+                    && let Some(port) = server.port().checked_add(TV_PORT_OFFSET)
                 {
                     tried_tv_port = true;
                     server.set_port(port);
@@ -222,15 +231,16 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result
             until = until.min(d);
         }
         while Instant::now() < until && !stop.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(STOP_POLL);
         }
     }
 }
 
-/// ±20 %, so watchers of many servers that dropped together do not retry in lockstep.
+/// ± `JITTER`, so watchers of many servers that dropped together do not retry in lockstep.
 fn jitter(d: Duration) -> Duration {
-    let r = RandomState::new().hash_one(Instant::now()) % 401;
-    d.mul_f64(0.8 + r as f64 / 1000.0)
+    const STEPS: u64 = 1000;
+    let spread = (RandomState::new().hash_one(Instant::now()) % (STEPS + 1)) as f64 / STEPS as f64;
+    d.mul_f64(1.0 - JITTER + 2.0 * JITTER * spread)
 }
 
 #[cfg(test)]

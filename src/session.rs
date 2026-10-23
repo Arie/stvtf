@@ -18,6 +18,7 @@ use crate::net::handshake::Connection;
 use crate::net::messages::{self, Signon};
 use crate::net::netchan::{self, OutHeader};
 use crate::net::receiver::Receiver;
+use crate::net::reliable;
 use crate::output::{Line, Status};
 use anyhow::Result;
 use std::collections::HashSet;
@@ -48,7 +49,7 @@ impl Default for Options {
         Options {
             name: "stv.tf".to_string(),
             crc: 0,
-            snapshot_hz: 20.0,
+            snapshot_hz: DEFAULT_SNAPSHOT_HZ,
             silence: Duration::from_secs(15),
             max_decoder_bytes: 1 << 30,
         }
@@ -56,6 +57,10 @@ impl Default for Options {
 }
 
 const RESEND_AFTER: Duration = Duration::from_millis(500);
+/// Snapshots per second unless asked otherwise.
+pub const DEFAULT_SNAPSHOT_HZ: f32 = 20.0;
+/// How long a read waits, so resends and tick acks go out on time.
+const READ_POLL: Duration = Duration::from_millis(20);
 const TICK_ACK_EVERY: Duration = Duration::from_millis(100);
 
 struct Pending {
@@ -174,7 +179,7 @@ impl<'o> Session<'o> {
     fn send_reliable(&mut self, body: &BitBuf, subchannel: Option<u8>) {
         let sub = subchannel.unwrap_or_else(|| {
             let s = self.next_subchannel;
-            self.next_subchannel = (self.next_subchannel + 1) % 8;
+            self.next_subchannel = (self.next_subchannel + 1) % reliable::SUBCHANNELS;
             s
         });
         let region = messages::reliable_region(body, sub);
@@ -437,9 +442,9 @@ pub fn run(
             r.datagram(p)?;
         }
     }
-    conn.sock.set_read_timeout(Some(Duration::from_millis(20)))?;
+    conn.sock.set_read_timeout(Some(READ_POLL))?;
     s.send_reliable(&messages::connected_reply(&opt.name), Some(0));
-    let mut buf = vec![0u8; 65536];
+    let mut buf = vec![0u8; crate::net::MAX_DATAGRAM];
     let mut next = || -> Result<Next> {
         if stop.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d) {
             return Ok(Next::Stop);

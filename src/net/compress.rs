@@ -4,6 +4,12 @@
 use anyhow::{Result, bail};
 
 const MAX_OUTPUT: usize = 1 << 22;
+/// A compressed block starts with its kind; LZSS's then has the uncompressed size (u32).
+pub const SNAPPY_MAGIC: &[u8; 4] = b"SNAP";
+const LZSS_MAGIC: &[u8; 4] = b"LZSS";
+const LZSS_HEADER: usize = LZSS_MAGIC.len() + 4;
+/// LZSS: each command byte flags the next 8 items (1 a back reference, 0 a literal byte).
+const ITEMS_PER_COMMAND: u8 = 8;
 
 pub fn snappy(block: &[u8]) -> Result<Vec<u8>> {
     let len = snap::raw::decompress_len(block)?;
@@ -14,15 +20,15 @@ pub fn snappy(block: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
-    if data.len() < 8 || &data[..4] != b"LZSS" {
+    if data.len() < LZSS_HEADER || &data[..LZSS_MAGIC.len()] != LZSS_MAGIC {
         bail!("not an LZSS block");
     }
-    let actual = u32::from_le_bytes(data[4..8].try_into()?) as usize;
+    let actual = u32::from_le_bytes(data[LZSS_MAGIC.len()..LZSS_HEADER].try_into()?) as usize;
     if actual > MAX_OUTPUT {
         bail!("LZSS declared size {actual} over cap");
     }
     let mut out = Vec::with_capacity(actual);
-    let mut src = 8;
+    let mut src = LZSS_HEADER;
     let mut cmd = 0u8;
     let mut left = 0;
     while out.len() < actual {
@@ -30,7 +36,7 @@ pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
             let Some(&c) = data.get(src) else { break };
             cmd = c;
             src += 1;
-            left = 8;
+            left = ITEMS_PER_COMMAND;
         }
         if cmd & 1 == 1 {
             let Some(&[hi, lo]) = data.get(src..src + 2) else { break };
@@ -66,9 +72,9 @@ pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn inflate_transfer(payload: &[u8]) -> Result<Vec<u8>> {
-    match payload.get(..4) {
-        Some(b"SNAP") => snappy(&payload[4..]),
-        Some(b"LZSS") => lzss(payload),
+    match payload.get(..SNAPPY_MAGIC.len()) {
+        Some(m) if m == SNAPPY_MAGIC => snappy(&payload[SNAPPY_MAGIC.len()..]),
+        Some(m) if m == LZSS_MAGIC => lzss(payload),
         _ => bail!("unknown compressed transfer magic"),
     }
 }
