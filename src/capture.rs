@@ -15,6 +15,8 @@ use std::time::Instant;
 
 const MAGIC: &[u8; 8] = b"STVMAPC1";
 /// A record's header: receive time (u64 microseconds), kind (u8), data length (u32).
+const KIND_AT: usize = 8;
+const LEN_AT: usize = 9;
 const RECORD_HEADER: usize = 13;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,9 +78,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Record<'_>>> {
     let Some(mut r) = bytes.strip_prefix(MAGIC) else { bail!("not an stvtf capture") };
     let mut out = Vec::new();
     while let Some(header) = r.get(..RECORD_HEADER) {
-        let t_us = u64::from_le_bytes(header[..8].try_into()?);
-        let kind = header[8];
-        let len = u32::from_le_bytes(header[9..13].try_into()?) as usize;
+        let t_us = u64::from_le_bytes(header[..KIND_AT].try_into()?);
+        let kind = header[KIND_AT];
+        let len = u32::from_le_bytes(header[LEN_AT..RECORD_HEADER].try_into()?) as usize;
         let rest = &r[RECORD_HEADER..];
         // A truncated tail is what a killed run leaves behind.
         let Some(data) = rest.get(..len) else { break };

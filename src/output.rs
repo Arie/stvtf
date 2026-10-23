@@ -149,10 +149,11 @@ pub enum Round {
 }
 
 /// Where a flag is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub enum FlagStatus {
+    #[default]
     Home,
     Carried,
     Dropped,

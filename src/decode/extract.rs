@@ -69,7 +69,7 @@ const MAX_TEAMS: usize = 4;
 const COND_WORDS: usize = 6;
 const COND_BITS: usize = 32;
 /// Condition numbers: 0-31 and the four `Ex` words.
-const COND_NUMBERS: u8 = 32 * 5;
+const COND_NUMBERS: u8 = (COND_BITS * (COND_WORDS - 1)) as u8;
 /// A medigun's charge when full, in percent.
 const FULL_CHARGE: u8 = 100;
 /// `Weapon::clip` of a weapon without a clip.
@@ -113,7 +113,7 @@ const PROP_TEAM_NUM: SendPropIdentifier = prop_id("DT_BaseEntity", "m_iTeamNum")
 const PROP_ORIGIN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_vecOrigin");
 const PROP_ROTATION: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
 /// The condition words of a player: `m_nPlayerCond`, _`condition_bits`, `m_nPlayerCondEx..Ex4`.
-const PROP_CONDS: [SendPropIdentifier; 6] = [
+const PROP_CONDS: [SendPropIdentifier; COND_WORDS] = [
     prop_id("DT_TFPlayerShared", "m_nPlayerCond"),
     prop_id("DT_TFPlayerConditionListExclusive", "_condition_bits"),
     prop_id("DT_TFPlayerShared", "m_nPlayerCondEx"),
@@ -165,7 +165,23 @@ const PROP_FLAMETHROWER_STATE: SendPropIdentifier = prop_id("DT_WeaponFlameThrow
 const PROP_FLAMETHROWER_CRIT: SendPropIdentifier = prop_id("DT_WeaponFlameThrower", "m_bCritFire");
 const PROP_FLAMETHROWER_HIT: SendPropIdentifier = prop_id("DT_WeaponFlameThrower", "m_bHitTarget");
 /// `m_iWeaponState`: idle, starting to fire, firing, airblast.
+const FLAMETHROWER_STARTING: i64 = 1;
+const FLAMETHROWER_FIRING: i64 = 2;
 const FLAMETHROWER_AIRBLAST: i64 = 3;
+/// `m_nFlagStatus`: at home, carried, dropped.
+const FLAG_CARRIED: i64 = 1;
+const FLAG_DROPPED: i64 = 2;
+/// `m_iItemDefinitionIndex` of the mediguns that are not the stock one (or a reskin of it).
+const ITEM_KRITZKRIEG: i64 = 35;
+const ITEM_QUICKFIX: i64 = 411;
+const ITEM_VACCINATOR: i64 = 998;
+/// `m_nChargeResistType`: bullet, blast, fire.
+const RESIST_BULLET: i64 = 0;
+const RESIST_BLAST: i64 = 1;
+/// Entity handles carry the entity index in their low 11 bits.
+const HANDLE_INDEX_MASK: i64 = (1 << 11) - 1;
+/// `player_death` `assister` without an assister.
+const NO_ASSISTER: u16 = u16::MAX;
 const PROP_BULLETS_PLAYER: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_iPlayer");
 const PROP_BULLETS_ORIGIN: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecOrigin");
 const PROP_BULLETS_PITCH: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecAngles[0]");
@@ -311,8 +327,7 @@ impl Sentry {
 struct Flag {
     team: u8,
     pos: Vector,
-    /// 0 at home, 1 carried, 2 dropped.
-    status: i64,
+    status: out::FlagStatus,
     disabled: bool,
     carrier: Option<u32>,
     /// Server time a dropped flag goes home.
@@ -421,18 +436,26 @@ fn projectile_kind(ty: ProjectileType, class: &str) -> ProjectileKind {
 
 fn medigun_kind(item: i64) -> MedigunKind {
     match item {
-        35 => MedigunKind::Kritzkrieg,
-        411 => MedigunKind::Quickfix,
-        998 => MedigunKind::Vaccinator,
+        ITEM_KRITZKRIEG => MedigunKind::Kritzkrieg,
+        ITEM_QUICKFIX => MedigunKind::Quickfix,
+        ITEM_VACCINATOR => MedigunKind::Vaccinator,
         _ => MedigunKind::Medigun,
     }
 }
 
 fn resist(r: i64) -> Resist {
     match r {
-        0 => Resist::Bullet,
-        1 => Resist::Blast,
+        RESIST_BULLET => Resist::Bullet,
+        RESIST_BLAST => Resist::Blast,
         _ => Resist::Fire,
+    }
+}
+
+fn flag_status(v: i64) -> out::FlagStatus {
+    match v {
+        FLAG_CARRIED => out::FlagStatus::Carried,
+        FLAG_DROPPED => out::FlagStatus::Dropped,
+        _ => out::FlagStatus::Home,
     }
 }
 
@@ -539,9 +562,8 @@ impl ControlPoint {
     }
 }
 
-/// Entity handles carry the entity index in their low 11 bits.
 fn handle_entity(handle: i64) -> u32 {
-    (handle & 0x7ff) as u32
+    (handle & HANDLE_INDEX_MASK) as u32
 }
 
 /// Alive and spawned: a player who joined a team but has not picked a class yet is alive to the
@@ -770,7 +792,10 @@ impl Extractor {
 
     /// A pyro's flamethrower while it is firing.
     fn flames_of(&self, player_ent: u32) -> Option<out::Flames> {
-        let f = self.flamethrowers.values().find(|f| f.owner == Some(player_ent) && matches!(f.state, 1 | 2))?;
+        let f = self
+            .flamethrowers
+            .values()
+            .find(|f| f.owner == Some(player_ent) && matches!(f.state, FLAMETHROWER_STARTING | FLAMETHROWER_FIRING))?;
         Some(out::Flames { crit: f.crit, hit: f.hit })
     }
 
@@ -894,7 +919,7 @@ impl Extractor {
                     tick,
                     victim: user(d.user_id),
                     attacker: Self::opt_user(if d.attacker == d.user_id { 0 } else { d.attacker }),
-                    assister: if d.assister == u16::MAX { None } else { Self::opt_user(d.assister) },
+                    assister: if d.assister == NO_ASSISTER { None } else { Self::opt_user(d.assister) },
                     weapon: d.weapon.to_string(),
                     crit: d.damage_bits & DMG_CRIT != 0,
                     headshot: d.custom_kill == CUSTOM_KILL_HEADSHOT,
@@ -1324,7 +1349,10 @@ impl Extractor {
         let now = self.server_tick as f32 * interval;
         for (&id, f) in self.flags.iter().filter(|(_, f)| !f.disabled) {
             // A carried flag is attached to its carrier, its own origin relative to them.
-            let holder = gs.players.iter().find(|p| f.status == 1 && Some(u32::from(p.entity)) == f.carrier);
+            let holder = gs
+                .players
+                .iter()
+                .find(|p| f.status == out::FlagStatus::Carried && Some(u32::from(p.entity)) == f.carrier);
             if f.hidden && holder.is_none() {
                 continue;
             }
@@ -1332,13 +1360,10 @@ impl Extractor {
                 id,
                 pos: xyz(holder.map_or(f.pos, |p| p.position)),
                 team: team_num(f.team),
-                status: match f.status {
-                    1 => out::FlagStatus::Carried,
-                    2 => out::FlagStatus::Dropped,
-                    _ => out::FlagStatus::Home,
-                },
+                status: f.status,
                 carrier: holder.and_then(|p| p.info.as_ref()).map(|i| PlayerId(u16::from(i.user_id))),
-                returns_in: (f.status == 2 && f.reset_time > now).then(|| round1(f.reset_time - now)),
+                returns_in: (f.status == out::FlagStatus::Dropped && f.reset_time > now)
+                    .then(|| round1(f.reset_time - now)),
                 points: (f.points != 0).then_some(f.points),
             });
         }
@@ -1718,7 +1743,7 @@ impl Extractor {
             }
             GameEvent::PlayerHealed(h) if h.healer != 0 && h.healer != h.patient => (h.healer, |s, n| s.healing += n),
             GameEvent::PlayerDeath(d)
-                if d.death_flags & DEATH_FEIGN == 0 && d.assister != u16::MAX && d.assister != 0 =>
+                if d.death_flags & DEATH_FEIGN == 0 && d.assister != NO_ASSISTER && d.assister != 0 =>
             {
                 (d.assister, |s, _| s.assists += 1)
             }
@@ -1860,7 +1885,7 @@ impl Extractor {
                         f.pos = o;
                     }
                 }
-                PROP_FLAG_STATUS => f.status = v,
+                PROP_FLAG_STATUS => f.status = flag_status(v),
                 PROP_FLAG_DISABLED => f.disabled = v != 0,
                 PROP_OWNER_ENTITY => f.carrier = opt_handle(v),
                 PROP_FLAG_RESET_TIME => f.reset_time = as_float(&p.value),

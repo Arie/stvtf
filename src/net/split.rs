@@ -6,6 +6,11 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+/// After the split marker: i32 group, u8 parts, u8 this part's number, u16 part size.
+const GROUP_AT: usize = 4;
+const COUNT_AT: usize = 8;
+const NUMBER_AT: usize = 9;
+const SIZE_AT: usize = 10;
 const HEADER_LEN: usize = 12;
 const MAX_PARTS: u8 = 128;
 const MAX_JOINED: usize = 1 << 18;
@@ -33,10 +38,9 @@ impl SplitReassembler {
             self.dropped += 1;
             return None;
         }
-        // After the split marker: i32 group, u8 parts, u8 this part's number, u16 part size.
-        let gid = i32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        let (count, number) = (data[8], data[9]);
-        let split_size = u16::from_le_bytes([data[10], data[11]]);
+        let gid = i32::from_le_bytes(data[GROUP_AT..COUNT_AT].try_into().ok()?);
+        let (count, number) = (data[COUNT_AT], data[NUMBER_AT]);
+        let split_size = u16::from_le_bytes(data[SIZE_AT..HEADER_LEN].try_into().ok()?);
         let split_len = usize::from(split_size);
         if count == 0 || number >= count || count > MAX_PARTS || usize::from(count) * split_len > MAX_JOINED {
             self.dropped += 1;

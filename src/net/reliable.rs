@@ -96,19 +96,17 @@ fn read_block(br: &mut BitReader<'_>, st: &mut Transfer) -> Result<Option<Vec<u8
     };
     if start_frag == 0 {
         *st = Transfer::default();
+        // Only a multi-fragment block can be a file, whose id and name come first.
+        if multi && br.read_bit()? {
+            br.read_bits(TRANSFER_ID_BITS)?;
+            br.read_string(MAX_FILE_NAME)?;
+        }
+        if br.read_bit()? {
+            st.uncompressed = Some(br.read_bits(SIZE_BITS)? as usize);
+        }
         if multi {
-            if br.read_bit()? {
-                br.read_bits(TRANSFER_ID_BITS)?;
-                br.read_string(MAX_FILE_NAME)?;
-            }
-            if br.read_bit()? {
-                st.uncompressed = Some(br.read_bits(SIZE_BITS)? as usize);
-            }
             st.nbytes = br.read_bits(SIZE_BITS)? as usize;
         } else {
-            if br.read_bit()? {
-                st.uncompressed = Some(br.read_bits(SIZE_BITS)? as usize);
-            }
             st.nbytes = br.read_varint32()? as usize;
             num_frags = st.nbytes.div_ceil(FRAGMENT_SIZE);
             if st.nbytes == 0 {

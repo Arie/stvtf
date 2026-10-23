@@ -10,6 +10,8 @@ pub const CLC_CLIENTINFO: u32 = 8;
 /// Bits of a net message's type.
 pub const TYPE_BITS: usize = 6;
 const FRAME_TIME_BITS: usize = 16;
+/// The reason a client gives when it disconnects on its own.
+const GOODBYE: &str = "Disconnect by user.";
 
 /// Signon states (`SIGNONSTATE_*` in the engine). Ordered, so `>=` compares progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -90,6 +92,11 @@ pub fn disconnect(reason: &str) -> BitBuf {
     w.write_bits(NET_DISCONNECT, TYPE_BITS);
     w.write_string(reason);
     w.finish()
+}
+
+/// `net_Disconnect` as a client leaving on its own sends it.
+pub fn goodbye() -> BitBuf {
+    disconnect(GOODBYE)
 }
 
 /// Acking the server tick is what moves the server's delta reference forward.

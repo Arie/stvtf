@@ -47,14 +47,19 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            name: "stv.tf".to_string(),
+            name: DEFAULT_NAME.to_string(),
             crc: 0,
             snapshot_hz: DEFAULT_SNAPSHOT_HZ,
-            silence: Duration::from_secs(15),
-            max_decoder_bytes: 1 << 30,
+            silence: DEFAULT_SILENCE,
+            max_decoder_bytes: DEFAULT_MAX_DECODER_BYTES,
         }
     }
 }
+
+/// The spectator name shown on the server unless asked otherwise.
+pub(crate) const DEFAULT_NAME: &str = "stv.tf";
+const DEFAULT_SILENCE: Duration = Duration::from_secs(15);
+const DEFAULT_MAX_DECODER_BYTES: usize = 1 << 30;
 
 const RESEND_AFTER: Duration = Duration::from_millis(500);
 /// Snapshots per second unless asked otherwise.
@@ -464,7 +469,7 @@ pub fn run(
     let outcome = drive(&mut s, tables, conn.pending.as_deref(), &mut next, emit)?;
     // Always say goodbye: if the server already dropped us this is ignored, and if
     // we misjudged a break it frees the SourceTV slot instead of holding it 300 s.
-    let bye = messages::disconnect("Disconnect by user.");
+    let bye = messages::goodbye();
     s.send(None, Some(&bye));
     s.send(None, Some(&bye));
     finish(&s, &outcome, emit);

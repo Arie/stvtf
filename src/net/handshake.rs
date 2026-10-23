@@ -7,7 +7,7 @@
 use super::{MAX_DATAGRAM, messages, netchan};
 use anyhow::{Context, Result, anyhow, bail};
 use std::fmt;
-use std::hash::{BuildHasher, RandomState};
+
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ const A2S_FIXED: usize = 9;
 /// An `A2S_INFO` that needs a challenge gets an 'A' with it (4 bytes) first; resend with it.
 const A2S_CHALLENGE: std::ops::Range<usize> = OOB_KIND + 1..OOB_KIND + 5;
 const A2S_TRIES: usize = 3;
+/// Bind to any local address and port.
+const ANY_ADDR: &str = "0.0.0.0:0";
 
 /// Offsets in the 'A' challenge reply: magic, server challenge, our nonce echoed, auth protocol.
 const CHALLENGE_MAGIC: usize = 5;
@@ -151,7 +153,7 @@ pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
 }
 
 pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, timeout: Duration) -> Result<Connection> {
-    let sock = UdpSocket::bind("0.0.0.0:0")?;
+    let sock = UdpSocket::bind(ANY_ADDR)?;
     let nonce = random_u32();
     sock.send_to(&build_getchallenge(nonce), server)?;
     let mut buf = vec![0u8; MAX_DATAGRAM];
@@ -195,7 +197,7 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
         }
     }
     // The server may have opened a channel whose accept we missed; close it.
-    let bye = messages::disconnect("Disconnect by user.");
+    let bye = messages::goodbye();
     let header = netchan::OutHeader { sequence: 1, ack: 0, challenge: ch.challenge, reliable_state: 0 };
     let pkt = netchan::build_packet(&header, None, Some(&bye));
     let _ = sock.send(&pkt);
@@ -226,15 +228,14 @@ fn recv_from_port(
     }
 }
 
-/// An unpredictable nonce, so a spoofer cannot forge the challenge reply. `RandomState`
-/// is keyed from the OS random source; no extra dependency needed.
+/// An unpredictable nonce, so a spoofer cannot forge the challenge reply.
 fn random_u32() -> u32 {
-    RandomState::new().hash_one(Instant::now()) as u32
+    super::random_u64() as u32
 }
 
 /// The server build (`A2S_INFO` `version`), following the challenge some servers require.
 pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
-    let sock = UdpSocket::bind("0.0.0.0:0")?;
+    let sock = UdpSocket::bind(ANY_ADDR)?;
     let deadline = Instant::now() + timeout;
     let mut server = server;
     let mut req = OOB_PREFIX.to_vec();

@@ -8,7 +8,7 @@ use crate::session::DEFAULT_SNAPSHOT_HZ;
 use crate::session::{self, End, Fatal, Options};
 use anyhow::{Context, Result, anyhow, bail};
 use std::fmt;
-use std::hash::{BuildHasher, RandomState};
+
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +24,9 @@ const STOP_POLL: Duration = Duration::from_millis(100);
 const TV_PORT_OFFSET: u16 = 5;
 /// The exit status of a process interrupted by SIGINT (128 + 2).
 const EXIT_INTERRUPTED: i32 = 130;
+/// How long to wait for the server's build (`A2S_INFO`), and for it to accept us.
+const A2S_TIMEOUT: Duration = Duration::from_secs(3);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// What to watch and how. `Debug` is implemented by hand to keep the password out of logs.
 pub struct Watch {
@@ -53,7 +56,7 @@ impl Watch {
         Watch {
             target: target.to_string(),
             password: password.to_string(),
-            name: "stv.tf".to_string(),
+            name: session::DEFAULT_NAME.to_string(),
             snapshot_hz: DEFAULT_SNAPSHOT_HZ,
             tables: None,
             crc: None,
@@ -159,7 +162,7 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result
     let mut server_build = None;
     let build = match &w.build {
         Some(b) => b.clone(),
-        None => match handshake::a2s_version(server, Duration::from_secs(3)) {
+        None => match handshake::a2s_version(server, A2S_TIMEOUT) {
             Ok(b) if usable(&b) => b,
             Ok(b) => {
                 server_build = Some(b);
@@ -186,7 +189,7 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result
             build: build.clone(),
             server_build: server_build.clone(),
         }));
-        let streamed = match handshake::connect(server, &opt.name, &w.password, &build, Duration::from_secs(6)) {
+        let streamed = match handshake::connect(server, &opt.name, &w.password, &build, CONNECT_TIMEOUT) {
             Ok(conn) => match session::run(&conn, &tables, &opt, recorder.as_mut(), stop, deadline, emit)? {
                 End::Stopped => return Ok(()),
                 End::Broken(b) => {
@@ -239,7 +242,7 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result
 /// ± `JITTER`, so watchers of many servers that dropped together do not retry in lockstep.
 fn jitter(d: Duration) -> Duration {
     const STEPS: u64 = 1000;
-    let spread = (RandomState::new().hash_one(Instant::now()) % (STEPS + 1)) as f64 / STEPS as f64;
+    let spread = (crate::net::random_u64() % (STEPS + 1)) as f64 / STEPS as f64;
     d.mul_f64(1.0 - JITTER + 2.0 * JITTER * spread)
 }
 
