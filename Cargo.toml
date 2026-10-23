@@ -48,3 +48,7 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 # Tests compare exact values: rounded output and constants.
 float_cmp = "allow"
+
+[[example]]
+name = "cut_demo"
+test = true

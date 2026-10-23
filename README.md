@@ -270,3 +270,8 @@ cuts a demo after tick N, to make a fixture.
 - `tests/fixtures/pl_upward.dem` is cut from a serveme.tf match's STV demo on demos.tf, and
   `tests/fixtures/ctf_ballin_sky.dem` is a bball match's STV demo and
   `tests/fixtures/ctf_turbine.dem` a ctf_turbine match's (demos.tf 1287498), both from demos.tf.
+- The game-mode fixtures are the starts of STV demos from demos.tf, cut with `cut_demo`:
+  `pass_stadium.dem` (pass time, demos.tf 1516963), `rd_asteroid.dem` (robot destruction,
+  954995), `pd_watergate.dem` (player destruction, 340112), `sd_doomsday.dem` (special delivery,
+  1232410), `mvm_crossing.dem` (Mann vs. Machine on mvm_gd_crossing_b3b, 1484401) and
+  `tc_hydro.dem` (territorial control, 1503662).

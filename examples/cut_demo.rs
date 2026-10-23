@@ -86,8 +86,9 @@ fn cut(data: &[u8], last_tick: i32) -> Result<Vec<u8>> {
     let mut range: Option<(i32, i32)> = None;
     let mut frames: i32 = 0;
     for p in packets(data)? {
-        // Signon packets carry tick 0; only game ticks count towards the cut.
-        if p.cmd != SIGNON && p.tick > last_tick {
+        // The setup before the first game packet (signon, data and string tables) can carry any
+        // tick; only game ticks count towards the cut.
+        if (p.cmd == PACKET || range.is_some()) && p.tick > last_tick {
             break;
         }
         out.extend_from_slice(&data[p.start..p.end]);
@@ -123,4 +124,52 @@ fn main() -> Result<()> {
         .and_then(|mut f| std::io::Write::write_all(&mut f, &out))
         .with_context(|| format!("writing {output}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn packet(out: &mut Vec<u8>, cmd: u8, tick: i32) {
+        out.push(cmd);
+        out.extend_from_slice(&tick.to_le_bytes());
+        match cmd {
+            SIGNON | PACKET => {
+                out.extend_from_slice(&[0; CMD_INFO + 8]);
+                out.extend_from_slice(&1i32.to_le_bytes());
+                out.push(cmd);
+            }
+            6 | 8 => {
+                out.extend_from_slice(&1i32.to_le_bytes());
+                out.push(cmd);
+            }
+            _ => {}
+        }
+    }
+
+    fn demo(setup_tick: i32) -> Vec<u8> {
+        let mut d = MAGIC.to_vec();
+        d.resize(HEADER, 0);
+        for cmd in [SIGNON, 6, 8] {
+            packet(&mut d, cmd, setup_tick);
+        }
+        packet(&mut d, 3, 0);
+        for tick in [2, 4, 10] {
+            packet(&mut d, PACKET, tick);
+        }
+        d
+    }
+
+    #[test]
+    fn setup_before_the_game_is_kept_whatever_its_tick() {
+        // Some recorders stamp the data and string tables with a tick past the game's first ones.
+        for setup_tick in [0, i32::MIN, 5160] {
+            let cut = cut(&demo(setup_tick), 5).unwrap();
+            let kept: Vec<(u8, i32)> = packets(&cut).unwrap().iter().map(|p| (p.cmd, p.tick)).collect();
+            assert_eq!(
+                kept,
+                [(SIGNON, setup_tick), (6, setup_tick), (8, setup_tick), (3, 0), (PACKET, 2), (PACKET, 4)]
+            );
+        }
+    }
 }
