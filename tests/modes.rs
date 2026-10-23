@@ -231,3 +231,15 @@ fn special_delivery_opens_the_rocket_and_tc_selects_its_round() {
     let rounds: Vec<&str> = of!(tc, RoundSelected).map(|r| r.round.as_str()).collect();
     assert!(!rounds.is_empty() && rounds.iter().all(|r| r.starts_with("round_")), "{rounds:?}");
 }
+
+#[test]
+fn players_without_a_class_are_not_alive() {
+    for lines in [&*PASS, &*PD] {
+        let classless: Vec<_> = of!(lines, Snapshot)
+            .flat_map(|s| &s.players)
+            .filter(|p| p.class == stvtf::output::Class::Unknown)
+            .collect();
+        assert!(!classless.is_empty(), "players join before picking a class");
+        assert!(classless.iter().all(|p| !p.alive && p.pos.is_none()), "{:?}", classless.iter().find(|p| p.alive));
+    }
+}

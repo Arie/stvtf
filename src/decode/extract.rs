@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::data::game_state::{
-    Building, GameState, PlayerCondition, PlayerState, Projectile, ProjectileType,
+    Building, GameState, Player, PlayerCondition, PlayerState, Projectile, ProjectileType,
 };
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::gamevent::GameEventType;
@@ -505,6 +505,12 @@ impl ControlPoint {
 /// Entity handles carry the entity index in their low 11 bits.
 fn handle_entity(handle: i64) -> u32 {
     (handle & 0x7ff) as u32
+}
+
+/// Alive and spawned: a player who joined a team but has not picked a class yet is alive to the
+/// game, with no health, at the map's origin.
+fn alive(p: &Player) -> bool {
+    p.state == PlayerState::Alive && p.class != Class::Other
 }
 
 /// The entity of a building's builder. tf-demo-parser stores the builder's entity
@@ -1115,7 +1121,7 @@ impl Extractor {
                     return None;
                 }
                 let ent = u32::from(p.entity);
-                let alive = p.state == PlayerState::Alive;
+                let alive = alive(p);
                 // Dead: where they died, or nothing if that happened before we connected.
                 let last = if alive {
                     Some(Pose { pos: p.position, yaw: p.view_angle, pitch: p.pitch_angle })
@@ -1488,7 +1494,7 @@ impl Extractor {
         }
         self.track_frame(pe);
         for p in &self.gs.state.players {
-            if p.state == PlayerState::Alive {
+            if alive(p) {
                 self.last_alive
                     .insert(u32::from(p.entity), Pose { pos: p.position, yaw: p.view_angle, pitch: p.pitch_angle });
             }
