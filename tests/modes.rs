@@ -277,3 +277,9 @@ fn mvm_has_revive_markers_money_and_upgrades() {
     assert_eq!(bought[..5], [(30015, 50), (25, 350), (30015, 50), (30015, 50), (30015, 50)]);
     assert!(of!(MVM, Upgrade).all(|u| players.contains(&u.player)));
 }
+
+#[test]
+fn only_payload_maps_have_carts() {
+    // pd_watergate's UFO rides a train watcher of no team: it is not a cart.
+    assert!(!of!(PD, Snapshot).flat_map(|s| &s.objectives).any(|o| matches!(o, Objective::Cart { .. })));
+}

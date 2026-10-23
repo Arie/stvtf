@@ -112,6 +112,9 @@ const PROP_FLAG_STATUS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nFlagS
 const PROP_FLAG_DISABLED: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_bDisabled");
 const PROP_FLAG_RESET_TIME: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_flResetTime");
 const PROP_FLAG_POINTS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nPointValue");
+const PROP_EFFECTS: SendPropIdentifier = prop_id("DT_BaseEntity", "m_fEffects");
+/// `m_fEffects`: not drawn.
+const EF_NODRAW: i64 = 0x20;
 const PROP_ROUND_STATE: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_iRoundState");
 const PROP_CARRYING: SendPropIdentifier = prop_id("DT_TFPlayerShared", "m_bCarryingObject");
 const PROP_CARRIED: SendPropIdentifier = prop_id("DT_TFPlayerShared", "m_hCarriedObject");
@@ -282,8 +285,10 @@ struct Flag {
     carrier: Option<u32>,
     /// Server time a dropped flag goes home.
     reset_time: f32,
-    /// What it is worth: a robot destruction core's points, a player destruction pickup's bottles.
+    /// What it is worth: a robot destruction reactor's points, a player destruction pickup's bottles.
     points: i64,
+    /// Not drawn: a map's spare flag (`pd_watergate` keeps two in the teams' bases).
+    hidden: bool,
 }
 
 #[derive(Default, Clone)]
@@ -1252,7 +1257,10 @@ impl Extractor {
             .collect();
         let carts: Vec<_> =
             gs.objectives.iter().filter_map(|(id, o)| o.as_cart().map(|c| (u32::from(*id), c))).collect();
-        let mut watchers: Vec<&TrainWatcher> = self.train_watchers.values().collect();
+        // A payload's watcher belongs to the pushing team; maps use watchers of no team for other
+        // things on a track (pd_watergate's UFO).
+        let mut watchers: Vec<&TrainWatcher> =
+            self.train_watchers.values().filter(|w| matches!(w.team, 2 | 3)).collect();
         watchers.sort_by_key(|w| w.team);
         for (i, w) in watchers.iter().enumerate() {
             // The cart model either rides on a func_tracktrain (its moveparent) or is a free
@@ -1277,6 +1285,9 @@ impl Extractor {
         for (&id, f) in self.flags.iter().filter(|(_, f)| !f.disabled) {
             // A carried flag is attached to its carrier, its own origin relative to them.
             let holder = gs.players.iter().find(|p| f.status == 1 && Some(u32::from(p.entity)) == f.carrier);
+            if f.hidden && holder.is_none() {
+                continue;
+            }
             objectives.push(out::Objective::Flag {
                 id,
                 pos: xyz(holder.map_or(f.pos, |p| p.position)),
@@ -1818,6 +1829,7 @@ impl Extractor {
                 PROP_OWNER_ENTITY => f.carrier = opt_handle(v),
                 PROP_FLAG_RESET_TIME => f.reset_time = as_float(&p.value),
                 PROP_FLAG_POINTS => f.points = v,
+                PROP_EFFECTS => f.hidden = v & EF_NODRAW != 0,
                 _ => {}
             }
         }
@@ -2245,6 +2257,30 @@ mod koth_tests {
         assert_eq!(teams, [out::Team::Blue, out::Team::Red]);
         x.koth_timers = [None; 2];
         assert_eq!(x.snapshot().timers.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::*;
+
+    #[test]
+    fn flags_the_game_does_not_draw_are_not_reported_unless_carried() {
+        let mut x = Extractor::default();
+        // pd_watergate keeps two hidden power supply flags in the teams' bases.
+        x.flags.insert(5, Flag { team: 2, hidden: true, ..Flag::default() });
+        x.flags.insert(6, Flag { team: 0, points: 3, ..Flag::default() });
+        let flags = |x: &Extractor| -> Vec<u32> {
+            x.snapshot()
+                .objectives
+                .iter()
+                .filter_map(|o| match o {
+                    out::Objective::Flag { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(flags(&x), [6]);
     }
 }
 
