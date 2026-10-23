@@ -9,6 +9,7 @@
 mod detail;
 mod extract;
 mod modes;
+mod props;
 
 use crate::net::messages::{Signon, TYPE_BITS};
 use crate::output::Line;

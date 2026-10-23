@@ -2,10 +2,14 @@
 //! plus discrete events (kills, damage, shots, explosions, ubers, rounds, chat...).
 
 use super::detail;
-use super::modes::Modes;
+use super::modes::{self, Modes, Placed};
+use super::props::{
+    EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, as_float, as_int, handle_entity, opt_handle, origin_parts,
+    prop_f, prop_i, prop_id, prop_vec, team_byte,
+};
 use crate::output::{
     self as out, Airblast, BannerKind, BuildingKind, ChatColor, ChatKind, ChatPart, Condition, Line, MedigunKind,
-    PlayerId, Position, ProjectileKind, Resist, Round, Ubered,
+    PlayerId, Position, ProjectileKind, Resist, Round, Ubered, round1, round2, round3,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -51,8 +55,7 @@ const SENTRY_STATE_ATTACKING: i64 = 2;
 const USER_MESSAGE_SAY_TEXT: u8 = 3;
 /// Unattended cap progress decays over `mp_capdeteriorate_time` (default 90 s).
 const CAP_DECAY_SECONDS: f32 = 90.0;
-/// The handle value of "no entity".
-const INVALID_EHANDLE: i64 = 0x1f_ffff;
+
 /// `player_spawn` events waiting for a position; more than this means entity updates stopped.
 const MAX_PENDING_SPAWNS: usize = 256;
 /// Seconds per server tick until the server's own value (`ServerInfo`) arrives.
@@ -103,14 +106,6 @@ fn debug_entity() -> Option<u32> {
     DEBUG.as_deref()?.strip_prefix("ent:")?.parse().ok()
 }
 
-/// A send prop by send table and name. Elements of an array prop have the array as
-/// table and their index as name.
-const fn prop_id(table: &str, name: &str) -> SendPropIdentifier {
-    SendPropIdentifier::new(table, name)
-}
-
-const PROP_TEAM_NUM: SendPropIdentifier = prop_id("DT_BaseEntity", "m_iTeamNum");
-const PROP_ORIGIN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_vecOrigin");
 const PROP_ROTATION: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
 /// The condition words of a player: `m_nPlayerCond`, _`condition_bits`, `m_nPlayerCondEx..Ex4`.
 const PROP_CONDS: [SendPropIdentifier; COND_WORDS] = [
@@ -144,9 +139,6 @@ const PROP_FLAG_STATUS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nFlagS
 const PROP_FLAG_DISABLED: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_bDisabled");
 const PROP_FLAG_RESET_TIME: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_flResetTime");
 const PROP_FLAG_POINTS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nPointValue");
-const PROP_EFFECTS: SendPropIdentifier = prop_id("DT_BaseEntity", "m_fEffects");
-/// `m_fEffects`: not drawn.
-const EF_NODRAW: i64 = 0x20;
 const PROP_ROUND_STATE: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_iRoundState");
 const PROP_CARRYING: SendPropIdentifier = prop_id("DT_TFPlayerShared", "m_bCarryingObject");
 const PROP_CARRIED: SendPropIdentifier = prop_id("DT_TFPlayerShared", "m_hCarriedObject");
@@ -178,8 +170,7 @@ const ITEM_VACCINATOR: i64 = 998;
 /// `m_nChargeResistType`: bullet, blast, fire.
 const RESIST_BULLET: i64 = 0;
 const RESIST_BLAST: i64 = 1;
-/// Entity handles carry the entity index in their low 11 bits.
-const HANDLE_INDEX_MASK: i64 = (1 << 11) - 1;
+
 /// `player_death` `assister` without an assister.
 const NO_ASSISTER: u16 = u16::MAX;
 const PROP_BULLETS_PLAYER: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_iPlayer");
@@ -188,11 +179,7 @@ const PROP_BULLETS_PITCH: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_ve
 const PROP_BULLETS_YAW: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_vecAngles[1]");
 const PROP_BULLETS_WEAPON: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_iWeaponID");
 const PROP_BULLETS_CRIT: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_bCritical");
-const PROP_EXPLOSION_ORIGIN: [SendPropIdentifier; 3] = [
-    prop_id("DT_TETFExplosion", "m_vecOrigin[0]"),
-    prop_id("DT_TETFExplosion", "m_vecOrigin[1]"),
-    prop_id("DT_TETFExplosion", "m_vecOrigin[2]"),
-];
+const PROP_EXPLOSION_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TETFExplosion");
 const PROP_EXPLOSION_WEAPON: SendPropIdentifier = prop_id("DT_TETFExplosion", "m_iWeaponID");
 
 #[derive(Default)]
@@ -325,8 +312,7 @@ impl Sentry {
 /// An intelligence briefcase, or a neutral flag such as the bball ball.
 #[derive(Default, Clone)]
 struct Flag {
-    team: u8,
-    pos: Vector,
+    at: Placed,
     status: out::FlagStatus,
     disabled: bool,
     carrier: Option<u32>,
@@ -562,10 +548,6 @@ impl ControlPoint {
     }
 }
 
-fn handle_entity(handle: i64) -> u32 {
-    (handle & HANDLE_INDEX_MASK) as u32
-}
-
 /// Alive and spawned: a player who joined a team but has not picked a class yet is alive to the
 /// game, with no health, at the map's origin.
 fn alive(p: &Player) -> bool {
@@ -578,14 +560,9 @@ fn builder_entity(builder: UserId) -> u32 {
     handle_entity(i64::from(u16::from(builder)))
 }
 
-/// The entity a handle prop points at; none for the invalid handle (and 0, the world).
-pub(crate) fn opt_handle(handle: i64) -> Option<u32> {
-    (handle != INVALID_EHANDLE && handle != 0).then(|| handle_entity(handle))
-}
-
-/// A team number prop; out of range values are no team.
-pub(crate) fn team_byte(v: i64) -> u8 {
-    u8::try_from(v).unwrap_or(0)
+/// A user id field of an event; 0 is nobody.
+pub(crate) fn opt_user(id: u16) -> Option<PlayerId> {
+    (id != 0).then_some(PlayerId(id))
 }
 
 fn team(t: Team) -> out::Team {
@@ -626,55 +603,6 @@ fn class_num(n: u16) -> out::Class {
 /// A position as written out, to a tenth of a unit.
 pub(crate) fn xyz(v: Vector) -> Position {
     [round1(v.x), round1(v.y), round1(v.z)]
-}
-
-/// To a thousandth: rates, fractions.
-pub(crate) fn round3(f: f32) -> f64 {
-    (f64::from(f) * 1000.0).round() / 1000.0
-}
-
-pub(crate) fn round2(f: f32) -> f64 {
-    (f64::from(f) * 100.0).round() / 100.0
-}
-
-pub(crate) fn round1(f: f32) -> f64 {
-    (f64::from(f) * 10.0).round() / 10.0
-}
-
-/// A prop value as a number, whichever number type the table gave it; 0 otherwise.
-pub(crate) fn as_int(v: &SendPropValue) -> i64 {
-    match v {
-        SendPropValue::Integer(i) => *i,
-        SendPropValue::Float(f) => *f as i64,
-        _ => 0,
-    }
-}
-
-pub(crate) fn as_float(v: &SendPropValue) -> f32 {
-    match v {
-        SendPropValue::Float(f) => *f,
-        SendPropValue::Integer(i) => *i as f32,
-        _ => 0.0,
-    }
-}
-
-fn prop(props: &[SendProp], id: SendPropIdentifier) -> Option<&SendPropValue> {
-    props.iter().find(|p| p.identifier == id).map(|p| &p.value)
-}
-
-fn prop_f(props: &[SendProp], id: SendPropIdentifier) -> f32 {
-    prop(props, id).map_or(0.0, as_float)
-}
-
-fn prop_i(props: &[SendProp], id: SendPropIdentifier) -> i64 {
-    prop(props, id).map_or(0, as_int)
-}
-
-fn prop_vec(props: &[SendProp], id: SendPropIdentifier) -> Option<Vector> {
-    match prop(props, id)? {
-        SendPropValue::Vector(v) => Some(*v),
-        _ => None,
-    }
 }
 
 impl Extractor {
@@ -903,10 +831,6 @@ impl Extractor {
         }
     }
 
-    fn opt_user(id: u16) -> Option<PlayerId> {
-        (id != 0).then_some(PlayerId(id))
-    }
-
     #[expect(clippy::too_many_lines)]
     fn game_event(&mut self, event: &GameEvent) {
         self.count_score(event);
@@ -918,8 +842,8 @@ impl Extractor {
                 self.push(Line::Kill(out::Kill {
                     tick,
                     victim: user(d.user_id),
-                    attacker: Self::opt_user(if d.attacker == d.user_id { 0 } else { d.attacker }),
-                    assister: if d.assister == NO_ASSISTER { None } else { Self::opt_user(d.assister) },
+                    attacker: opt_user(if d.attacker == d.user_id { 0 } else { d.attacker }),
+                    assister: if d.assister == NO_ASSISTER { None } else { opt_user(d.assister) },
                     weapon: d.weapon.to_string(),
                     crit: d.damage_bits & DMG_CRIT != 0,
                     headshot: d.custom_kill == CUSTOM_KILL_HEADSHOT,
@@ -938,7 +862,7 @@ impl Extractor {
             GameEvent::PlayerHurt(h) => self.push(Line::Damage(out::Damage {
                 tick,
                 victim: user(h.user_id),
-                attacker: Self::opt_user(h.attacker),
+                attacker: opt_user(h.attacker),
                 amount: h.damage_amount,
                 health: h.health,
                 crit: h.crit,
@@ -960,7 +884,7 @@ impl Extractor {
             GameEvent::PlayerChargeDeployed(c) => self.push(Line::Uber(out::Uber {
                 tick,
                 medic: user(c.user_id),
-                target: Self::opt_user(c.target_id),
+                target: opt_user(c.target_id),
                 medigun: self
                     .entity_of_user(c.user_id)
                     .and_then(|e| self.mediguns.values().find(|m| m.owner == Some(e)))
@@ -1016,7 +940,7 @@ impl Extractor {
             GameEvent::ObjectDestroyed(o) => self.push(Line::BuildingDestroyed(out::BuildingDestroyed {
                 tick,
                 owner: user(o.user_id),
-                attacker: Self::opt_user(o.attacker),
+                attacker: opt_user(o.attacker),
                 object: building_kind(o.object_type),
                 id: o.index,
                 weapon: o.weapon.to_string(),
@@ -1061,7 +985,7 @@ impl Extractor {
             GameEvent::MedicDeath(m) => self.push(Line::MedicDeath(out::MedicDeath {
                 tick,
                 medic: user(m.user_id),
-                attacker: Self::opt_user(m.attacker),
+                attacker: opt_user(m.attacker),
                 healing: m.healing,
                 // Died with a full charge: a dropped über.
                 drop: m.charged,
@@ -1076,7 +1000,7 @@ impl Extractor {
             GameEvent::ObjectDeflected(o) => self.push(Line::Reflect(out::Reflect {
                 tick,
                 player: user(o.user_id),
-                owner: Self::opt_user(o.owner_id),
+                owner: opt_user(o.owner_id),
                 weapon_id: o.weapon_id,
             })),
             GameEvent::DeployBuffBanner(b) => self.push(Line::Banner(out::Banner {
@@ -1358,8 +1282,8 @@ impl Extractor {
             }
             objectives.push(out::Objective::Flag {
                 id,
-                pos: xyz(holder.map_or(f.pos, |p| p.position)),
-                team: team_num(f.team),
+                pos: xyz(holder.map_or(f.at.pos, |p| p.position)),
+                team: team_num(f.at.team),
                 status: f.status,
                 carrier: holder.and_then(|p| p.info.as_ref()).map(|i| PlayerId(u16::from(i.user_id))),
                 returns_in: (f.status == out::FlagStatus::Dropped && f.reset_time > now)
@@ -1877,14 +1801,9 @@ impl Extractor {
     fn on_flag(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
         let f = self.flags.entry(idx).or_default();
         for p in props {
+            modes::placed(&mut f.at, &p);
             let v = as_int(&p.value);
             match p.identifier {
-                PROP_TEAM_NUM => f.team = team_byte(v),
-                PROP_ORIGIN => {
-                    if let SendPropValue::Vector(o) = p.value {
-                        f.pos = o;
-                    }
-                }
                 PROP_FLAG_STATUS => f.status = flag_status(v),
                 PROP_FLAG_DISABLED => f.disabled = v != 0,
                 PROP_OWNER_ENTITY => f.carrier = opt_handle(v),
@@ -2163,15 +2082,6 @@ mod tests {
     }
 
     #[test]
-    fn entity_handles() {
-        assert_eq!(handle_entity(40967), 7);
-        assert_eq!(handle_entity(7), 7);
-        assert_eq!(opt_handle(40967), Some(7));
-        assert_eq!(opt_handle(INVALID_EHANDLE), None);
-        assert_eq!(opt_handle(0), None);
-    }
-
-    #[test]
     fn prop_identifiers_name_known_props() {
         // An identifier with a typo in its table or name would silently match nothing.
         let ids = [
@@ -2226,7 +2136,6 @@ mod tests {
         assert_eq!(team_num(2u8), out::Team::Red);
         assert_eq!(team_num(3u16), out::Team::Blue);
         assert_eq!(team_num(258u16), out::Team::Unassigned, "not truncated to red");
-        assert_eq!(team_byte(-1), 0);
     }
 
     #[test]
@@ -2329,8 +2238,8 @@ mod flag_tests {
     fn flags_the_game_does_not_draw_are_not_reported_unless_carried() {
         let mut x = Extractor::default();
         // pd_watergate keeps two hidden power supply flags in the teams' bases.
-        x.flags.insert(5, Flag { team: 2, hidden: true, ..Flag::default() });
-        x.flags.insert(6, Flag { team: 0, points: 3, ..Flag::default() });
+        x.flags.insert(5, Flag { at: Placed { team: 2, ..Placed::default() }, hidden: true, ..Flag::default() });
+        x.flags.insert(6, Flag { points: 3, ..Flag::default() });
         let flags = |x: &Extractor| -> Vec<u32> {
             x.snapshot()
                 .objectives

@@ -2,19 +2,16 @@
 //! robots and cores, the robot and player destruction logics' points, and Mann vs. Machine's tank
 //! and wave.
 
-use super::extract::{as_float, as_int, opt_handle, round3, team_byte, team_num, xyz};
-use crate::output::{Mvm, MvmClass, Objective, PlayerId, Points};
+use super::extract::{team_num, xyz};
+use super::props::{
+    EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, as_float, as_int, opt_handle, prop_id, saturating_u16,
+    team_byte,
+};
+use crate::output::{Mvm, MvmClass, Objective, PlayerId, Points, round3};
 use std::collections::BTreeMap;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
 
-const fn prop_id(table: &str, name: &str) -> SendPropIdentifier {
-    SendPropIdentifier::new(table, name)
-}
-
-const PROP_TEAM_NUM: SendPropIdentifier = prop_id("DT_BaseEntity", "m_iTeamNum");
-const PROP_ORIGIN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_vecOrigin");
-const PROP_EFFECTS: SendPropIdentifier = prop_id("DT_BaseEntity", "m_fEffects");
 const PROP_BALL_CARRIER: SendPropIdentifier = prop_id("DT_PasstimeBall", "m_hCarrier");
 const PROP_ROBOT_HEALTH: SendPropIdentifier = prop_id("DT_TFRobotDestruction_Robot", "m_iHealth");
 const PROP_ROBOT_MAX_HEALTH: SendPropIdentifier = prop_id("DT_TFRobotDestruction_Robot", "m_iMaxHealth");
@@ -33,14 +30,12 @@ const PROP_MVM_CLASS_NAMES: SendPropIdentifier = prop_id("DT_TFObjectiveResource
 const PROP_MVM_CLASS_NAMES_2: SendPropIdentifier =
     prop_id("DT_TFObjectiveResource", "m_iszMannVsMachineWaveClassNames2");
 const PROP_REVIVE_OWNER: SendPropIdentifier = prop_id("DT_TFReviveMarker", "m_hOwner");
-/// `m_fEffects`: not drawn (the ball between rounds).
-const EF_NODRAW: i64 = 0x20;
 
 /// A positioned entity of one team.
 #[derive(Default, Clone)]
-struct Placed {
-    team: u8,
-    pos: Vector,
+pub(crate) struct Placed {
+    pub(crate) team: u8,
+    pub(crate) pos: Vector,
 }
 
 #[derive(Default, Clone)]
@@ -122,7 +117,8 @@ pub(crate) struct Modes {
 /// A player, for the objectives that point at one: user id and position.
 pub(crate) type PlayerAt<'a> = &'a dyn Fn(u32) -> Option<(PlayerId, Vector)>;
 
-fn placed(at: &mut Placed, p: &SendProp) {
+/// The team and origin props of a positioned entity.
+pub(crate) fn placed(at: &mut Placed, p: &SendProp) {
     match p.identifier {
         PROP_TEAM_NUM => at.team = team_byte(as_int(&p.value)),
         PROP_ORIGIN => {
@@ -300,8 +296,8 @@ impl Modes {
             id,
             pos: xyz(r.at.pos),
             team: team_num(r.at.team),
-            hp: u16::try_from(r.hp.max(0)).unwrap_or(u16::MAX),
-            max_hp: u16::try_from(r.max_hp.max(0)).unwrap_or(u16::MAX),
+            hp: saturating_u16(r.hp),
+            max_hp: saturating_u16(r.max_hp),
         });
         let cores = self.cores.iter().map(|(&id, c)| Objective::Core { id, pos: xyz(c.pos), team: team_num(c.team) });
         let revives = self.revives.iter().map(|(&id, (at, owner))| Objective::Revive {
@@ -333,7 +329,7 @@ impl Modes {
     /// The wave, on a Mann vs. Machine map (one with waves).
     pub(crate) fn mvm(&self) -> Option<Mvm> {
         let w = &self.mvm;
-        let count = |v: i64| u16::try_from(v.max(0)).unwrap_or(u16::MAX);
+        let count = saturating_u16;
         (w.waves > 0).then(|| Mvm {
             wave: count(w.wave),
             waves: count(w.waves),

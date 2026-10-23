@@ -1,14 +1,15 @@
 //! Heals, blast jumps, pickups, the game modes' events and the HUD's messages: game events and
 //! user messages turned into lines.
 
-use super::extract::{building_kind, round1, round2, strip_colors, team_num};
+use super::extract::{building_kind, opt_user, strip_colors, team_num};
+use super::props::{origin_parts, prop, prop_vec};
 use crate::output::{
     Announcer, BallCarrierKilled, BlastJump, CaptureBroken, CaptureStarted, ChatColor, Heal, HealSource, Hint, HudText,
     Impact, ImpactKind, JumpKind, JumpPhase, KilledCapper, Line, Mark, MedicDefended, NpcDamage, ObjectChange,
     PassBlocked, PassCaught, PassFree, PassGet, PassScore, PassStolen, Pickup, PickupItem, PickupSize, PlayerId,
     PlayerMoment, PointLocked, PointsScored, RobotKilled, RocketOpen, RoundSelected, Sapped, ScoreMethod, ServerText,
     Stun, TeamLeaderKilled, Teleported, TimeRemaining, Tournament, Upgrade, VoiceCommand, VoteCast, VoteFailed,
-    VoteOptions, VotePassed, VoteStarted,
+    VoteOptions, VotePassed, VoteStarted, round1, round2,
 };
 use bitbuffer::{BitRead, LittleEndian};
 use std::collections::HashMap;
@@ -54,35 +55,20 @@ fn heal(
     Some(Line::Heal(Heal { tick, patient: patient?, healer, amount, source }))
 }
 
-const fn origin_parts(table: &str) -> [SendPropIdentifier; 3] {
-    [
-        SendPropIdentifier::new(table, "m_vecOrigin[0]"),
-        SendPropIdentifier::new(table, "m_vecOrigin[1]"),
-        SendPropIdentifier::new(table, "m_vecOrigin[2]"),
-    ]
-}
-
 const BLOOD_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TETFBlood");
 const SPARKS_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TEParticleSystem");
 const RICOCHET_POS: SendPropIdentifier = SendPropIdentifier::new("DT_TEMetalSparks", "m_vecPos");
 const WORLD_DECAL_ORIGIN: SendPropIdentifier = SendPropIdentifier::new("DT_TEWorldDecal", "m_vecOrigin");
 const DECAL_ORIGIN: SendPropIdentifier = SendPropIdentifier::new("DT_TEDecal", "m_vecOrigin");
 
-fn value(props: &[SendProp], id: SendPropIdentifier) -> Option<&SendPropValue> {
-    props.iter().find(|p| p.identifier == id).map(|p| &p.value)
-}
-
 fn vector(props: &[SendProp], id: SendPropIdentifier) -> Option<[f32; 3]> {
-    match value(props, id)? {
-        SendPropValue::Vector(v) => Some([v.x, v.y, v.z]),
-        _ => None,
-    }
+    prop_vec(props, id).map(|v| [v.x, v.y, v.z])
 }
 
 fn parts(props: &[SendProp], ids: [SendPropIdentifier; 3]) -> Option<[f32; 3]> {
     let mut out = [0.0; 3];
     for (o, id) in out.iter_mut().zip(ids) {
-        *o = match value(props, id)? {
+        *o = match prop(props, id)? {
             SendPropValue::Float(f) => *f,
             _ => return None,
         };
@@ -128,10 +114,6 @@ fn pickup(item: &str) -> Option<(PickupItem, Option<PickupSize>)> {
     } else {
         None
     }
-}
-
-fn opt_user(id: u16) -> Option<PlayerId> {
-    (id != 0).then_some(PlayerId(id))
 }
 
 fn score_method(method: u16) -> ScoreMethod {
