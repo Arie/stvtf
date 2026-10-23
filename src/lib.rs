@@ -16,7 +16,11 @@ pub mod watch;
 
 pub use output::Line;
 pub use session::DEFAULT_SNAPSHOT_HZ;
-pub use session::{Fatal, Options};
+pub use session::{Fatal, Options, parse_snapshot_hz};
+
+/// Seconds per server tick (TF2's 66.67 per second) until the server's own value arrives in
+/// [`output::Server::tick_interval`].
+pub const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
 /// The TF2 server build whose tables and CRC are compiled in.
 pub const CURRENT_BUILD: &str = "11138802";

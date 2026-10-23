@@ -64,6 +64,15 @@ const DEFAULT_MAX_DECODER_BYTES: usize = 1 << 30;
 const RESEND_AFTER: Duration = Duration::from_millis(500);
 /// Snapshots per second unless asked otherwise.
 pub const DEFAULT_SNAPSHOT_HZ: f32 = 20.0;
+
+/// A snapshot rate as given on a command line: a number, 0 or more (0 disables snapshots).
+pub fn parse_snapshot_hz(hz: &str) -> Result<f32> {
+    let parsed: f32 = hz.parse().map_err(|_| anyhow::anyhow!("--hz {hz}: not a number"))?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        anyhow::bail!("--hz must be 0 or more");
+    }
+    Ok(parsed)
+}
 /// How long a read waits, so resends and tick acks go out on time.
 const READ_POLL: Duration = Duration::from_millis(20);
 const TICK_ACK_EVERY: Duration = Duration::from_millis(100);
@@ -366,15 +375,16 @@ impl<'o> Session<'o> {
         &mut self,
         dec: &mut Decoder<'_>,
         first: Option<&[u8]>,
-        next: &mut dyn FnMut() -> Result<Next>,
+        next: &mut dyn FnMut(&mut [u8]) -> Result<Next>,
+        buf: &mut [u8],
         emit: &mut dyn FnMut(Line),
     ) -> Result<Option<End>> {
         if let Some(p) = first {
             self.datagram(p, dec, emit);
         }
         loop {
-            match next()? {
-                Next::Datagram(d) => self.datagram(&d, dec, emit),
+            match next(buf)? {
+                Next::Datagram(n) => self.datagram(&buf[..n], dec, emit),
                 Next::Idle => {}
                 Next::Failed(why) => self.break_with(why, None),
                 Next::Stop => return Ok(Some(End::Stopped)),
@@ -400,8 +410,9 @@ impl<'o> Session<'o> {
     }
 }
 
+/// What the datagram source has next; a datagram is the start of the buffer it was given.
 enum Next {
-    Datagram(Vec<u8>),
+    Datagram(usize),
     Idle,
     /// The datagram source failed (a socket error other than a timeout).
     Failed(String),
@@ -418,17 +429,18 @@ fn drive(
     s: &mut Session<'_>,
     tables: &Tables,
     first: Option<&[u8]>,
-    next: &mut dyn FnMut() -> Result<Next>,
+    next: &mut dyn FnMut(&mut [u8]) -> Result<Next>,
     emit: &mut dyn FnMut(Line),
 ) -> Result<Outcome> {
     let mut decode_errors = 0;
     let mut first = first;
+    let mut buf = vec![0u8; crate::net::MAX_DATAGRAM];
     let end = loop {
         // One decoder (and arena) per map; the netchannel state survives map changes.
         let arena = Arena::new();
         let mut dec = Decoder::new(&arena, tables, s.opt.snapshot_hz)?;
         let replayed = s.remap.take().is_none_or(|streams| s.replay_streams(streams, &mut dec, emit));
-        let end = if replayed { s.follow(&mut dec, first.take(), next, emit)? } else { None };
+        let end = if replayed { s.follow(&mut dec, first.take(), next, &mut buf, emit)? } else { None };
         decode_errors += dec.parse_errors();
         if let Some(end) = end {
             break end;
@@ -467,17 +479,16 @@ pub fn run(
     }
     conn.sock.set_read_timeout(Some(READ_POLL))?;
     s.send_reliable(&messages::connected_reply(&opt.name), Some(0));
-    let mut buf = vec![0u8; crate::net::MAX_DATAGRAM];
-    let mut next = || -> Result<Next> {
+    let mut next = |buf: &mut [u8]| -> Result<Next> {
         if stop.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d) {
             return Ok(Next::Stop);
         }
-        match conn.sock.recv(&mut buf) {
+        match conn.sock.recv(buf) {
             Ok(n) => {
                 if let Some(r) = recorder.as_deref_mut() {
                     r.datagram(&buf[..n])?;
                 }
-                Ok(Next::Datagram(buf[..n].to_vec()))
+                Ok(Next::Datagram(n))
             }
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(Next::Idle),
             // E.g. ConnectionRefused: an ICMP port unreachable, the server is gone.
@@ -504,7 +515,13 @@ pub fn replay(
 ) -> Result<()> {
     let mut s = Session::new(None, challenge, opt);
     let mut it = datagrams.iter();
-    let mut next = || -> Result<Next> { Ok(it.next().map_or(Next::Stop, |d| Next::Datagram(d.to_vec()))) };
+    let mut next = |buf: &mut [u8]| -> Result<Next> {
+        let Some(d) = it.next() else { return Ok(Next::Stop) };
+        // Recorded from a buffer of the same size, so a datagram always fits.
+        let n = d.len().min(buf.len());
+        buf[..n].copy_from_slice(&d[..n]);
+        Ok(Next::Datagram(n))
+    };
     let outcome = drive(&mut s, tables, None, &mut next, emit)?;
     finish(&s, &outcome, emit);
     Ok(())

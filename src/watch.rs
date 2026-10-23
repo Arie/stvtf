@@ -122,6 +122,15 @@ impl From<anyhow::Error> for WatchError {
     }
 }
 
+/// The IPv4 address of a `HOST:PORT` (`SourceTV` is IPv4 only).
+pub fn resolve(target: &str) -> Result<SocketAddr> {
+    target
+        .to_socket_addrs()
+        .with_context(|| format!("resolving {target}"))?
+        .find(SocketAddr::is_ipv4)
+        .ok_or_else(|| anyhow!("no IPv4 address for {target}"))
+}
+
 /// Send tables for a build: the given demo, or the compiled-in ones.
 pub fn tables(build: &str, demo: Option<&Path>) -> Result<Tables> {
     match (demo, crate::builtin(build)) {
@@ -149,12 +158,7 @@ pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
 /// Runs until `stop`, the duration, or a rejection that reconnecting cannot fix,
 /// passing every event and snapshot to `emit`. Blocks the calling thread.
 pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
-    let mut server: SocketAddr = w
-        .target
-        .to_socket_addrs()
-        .with_context(|| format!("resolving {}", w.target))?
-        .find(SocketAddr::is_ipv4)
-        .ok_or_else(|| anyhow!("no IPv4 address for {}", w.target))?;
+    let mut server = resolve(&w.target)?;
     // A2S_INFO is unauthenticated (and taken from any address, see handshake), so a
     // build we cannot use falls back to the current one: a forged reply must not end the
     // watch, and a server really on another build refuses our class tables anyway.

@@ -7,6 +7,7 @@ use super::props::{
     BLUE_SLOT, EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, RED_SLOT, as_float, as_int, handle_entity,
     opt_handle, origin_parts, prop_f, prop_i, prop_id, prop_vec, team_byte,
 };
+use crate::DEFAULT_TICK_INTERVAL;
 use crate::output::{
     self as out, Airblast, BannerKind, BuildingKind, ChatColor, ChatKind, ChatPart, Condition, Line, MedigunKind,
     PlayerId, Position, ProjectileKind, Resist, Round, Ubered, round1, round2, round3,
@@ -58,8 +59,7 @@ const CAP_DECAY_SECONDS: f32 = 90.0;
 
 /// `player_spawn` events waiting for a position; more than this means entity updates stopped.
 const MAX_PENDING_SPAWNS: usize = 256;
-/// Seconds per server tick until the server's own value (`ServerInfo`) arrives.
-pub(crate) const DEFAULT_TICK_INTERVAL: f32 = 0.015;
+
 /// TF2's team numbers (0 unassigned, 1 spectator).
 const TEAM_RED: u8 = 2;
 const TEAM_BLUE: u8 = 3;
