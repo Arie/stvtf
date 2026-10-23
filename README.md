@@ -28,8 +28,10 @@ cannot help (wrong password, tables of another build). Ctrl-C, SIGTERM or closin
 disconnects cleanly, so SourceTV does not hold the slot for 300 s; a second Ctrl-C exits at once.
 
 The same loop is a library, `stvtf::watch`, which [stvtf-web](../stvtf-web), the stv.tf server, uses. It
-returns a `WatchError` that tells a rejection (`Rejected { kind: Fatal::BadPassword, .. }`)
-apart from other failures.
+hands each line to a callback as a `stvtf::Line`: an enum with a variant per line type, whose types
+(in `stvtf::output`) serialize to exactly the JSON below and read it back, so JSON is only written
+where it leaves the program. It returns a `WatchError` that tells a rejection
+(`Rejected { kind: Fatal::BadPassword, .. }`) apart from other failures.
 
 Names and chat come from players: valid JSON, but any Unicode (right-to-left overrides,
 zero-width characters). Escape them before display.
@@ -72,6 +74,7 @@ lower-case names (`scout` … `engineer`, `unknown`).
 {"type":"status","state":"map_change"}                // signon restarts for the new map; reset your view
 {"type":"status","state":"disconnected","reason":"...","decode_errors":0,"packets":11935,"lost":0}
 {"type":"status","state":"connect_failed","reason":"connect refused: #GameUI_ServerRejectServerFull"}
+{"type":"status","state":"gave_up","reason":"..."}       // not from the CLI: a host of the library reporting watch's error
 ```
 
 ### Map

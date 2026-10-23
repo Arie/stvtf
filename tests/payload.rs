@@ -4,99 +4,109 @@
 //! (serveme.tf, 2026-10-18, from demos.tf), cut with `cargo run --example cut_demo -- IN.dem OUT.dem 13600`:
 //! setup, BLU pushing the cart, a rollback, and the first point captured.
 
-use serde_json::Value;
+mod common;
+
+use common::{dist, of};
 use std::sync::LazyLock;
+use stvtf::Line;
+use stvtf::output::{Objective, Position, Round, Snapshot, Team};
 
-const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem");
+static EVENTS: LazyLock<Vec<Line>> = LazyLock::new(|| common::demo("pl_upward.dem", 20.0));
 
-static EVENTS: LazyLock<Vec<Value>> = LazyLock::new(|| {
-    let bytes = std::fs::read(DEMO).unwrap();
-    let mut out = Vec::new();
-    stvtf::decode::demo_file(&bytes, 20.0, &mut |v| out.push(v)).unwrap();
-    out
-});
-
-fn snapshots() -> impl Iterator<Item = &'static Value> {
-    EVENTS.iter().filter(|e| e["type"] == "snapshot")
+fn snapshots() -> impl Iterator<Item = &'static Snapshot> {
+    of!(EVENTS, Snapshot)
 }
 
-fn cart(snapshot: &Value) -> Option<&Value> {
-    snapshot["objectives"].as_array()?.iter().find(|o| o["kind"] == "cart")
+/// A cart's position, team, progress, cappers and speed.
+struct Cart {
+    pos: Position,
+    team: Team,
+    progress: f64,
+    cappers: i64,
+    speed: i64,
 }
 
-fn pos(v: &Value) -> [f64; 3] {
-    [v[0].as_f64().unwrap(), v[1].as_f64().unwrap(), v[2].as_f64().unwrap()]
+fn carts(snapshot: &Snapshot) -> impl Iterator<Item = Cart> {
+    snapshot.objectives.iter().filter_map(|o| match *o {
+        Objective::Cart { pos, team, progress, cappers, speed, .. } => {
+            Some(Cart { pos, team, progress, cappers, speed })
+        }
+        _ => None,
+    })
 }
 
-fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
-    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+fn cart(snapshot: &Snapshot) -> Option<Cart> {
+    carts(snapshot).next()
+}
+
+/// Control point `index`: its position and owner.
+fn point(snapshot: &Snapshot, index: usize) -> (Option<Position>, Team) {
+    snapshot
+        .objectives
+        .iter()
+        .find_map(|o| match *o {
+            Objective::ControlPoint { index: i, pos, owner, .. } if i == index => Some((pos, owner)),
+            _ => None,
+        })
+        .unwrap()
 }
 
 #[test]
 fn one_blu_cart_in_every_running_snapshot() {
-    let running: Vec<_> = snapshots().filter(|s| s["round"] == "running").collect();
+    let running: Vec<_> = snapshots().filter(|s| s.round == Round::Running).collect();
     assert!(running.len() > 1000);
     for s in running {
-        let carts = s["objectives"].as_array().unwrap().iter().filter(|o| o["kind"] == "cart").count();
-        assert_eq!(carts, 1, "tick {}", s["tick"]);
+        assert_eq!(carts(s).count(), 1, "tick {}", s.tick);
         let c = cart(s).unwrap();
-        assert_eq!(c["team"], "blue");
-        let progress = c["progress"].as_f64().unwrap();
-        assert!((0.0..=1.0).contains(&progress), "{c}");
-        let speed = c["speed"].as_i64().unwrap();
-        assert!((-1..=3).contains(&speed), "{c}");
+        assert_eq!(c.team, Team::Blue);
+        assert!((0.0..=1.0).contains(&c.progress), "progress {}", c.progress);
+        assert!((-1..=3).contains(&c.speed), "speed {}", c.speed);
     }
 }
 
 #[test]
 fn cart_advances_along_the_track() {
     let carts: Vec<_> = snapshots().filter_map(cart).collect();
-    let start = pos(&carts[0]["pos"]);
-    let furthest = carts.iter().map(|c| c["progress"].as_f64().unwrap()).fold(0.0, f64::max);
+    let start = carts[0].pos;
+    let furthest = carts.iter().map(|c| c.progress).fold(0.0, f64::max);
     assert!(furthest > 0.2, "furthest progress {furthest}");
-    let moved = carts.iter().map(|c| dist(pos(&c["pos"]), start)).fold(0.0, f64::max);
+    let moved = carts.iter().map(|c| dist(c.pos, start)).fold(0.0, f64::max);
     assert!(moved > 2000.0, "cart moved at most {moved} units");
     // Pushing it means players on it: the speed level follows the number of cappers.
-    assert!(carts.iter().any(|c| c["cappers"].as_i64().unwrap() >= 3 && c["speed"] == 3));
+    assert!(carts.iter().any(|c| c.cappers >= 3 && c.speed == 3));
 }
 
 #[test]
 fn cart_rolls_back_with_nobody_on_it() {
-    let rolling: Vec<_> =
-        snapshots().filter_map(cart).filter(|c| c["speed"].as_i64().unwrap() < 0 && c["cappers"] == 0).collect();
+    let rolling: Vec<_> = snapshots().filter_map(cart).filter(|c| c.speed < 0 && c.cappers == 0).collect();
     assert!(rolling.len() > 20, "{} rollback snapshots", rolling.len());
-    let first = pos(&rolling[0]["pos"]);
-    assert!(rolling.iter().any(|c| dist(pos(&c["pos"]), first) > 20.0), "the cart moves while rolling back");
+    let first = rolling[0].pos;
+    assert!(rolling.iter().any(|c| dist(c.pos, first) > 20.0), "the cart moves while rolling back");
 }
 
 #[test]
 fn first_point_is_captured_by_the_cart() {
-    let caps: Vec<_> = EVENTS.iter().filter(|e| e["type"] == "point_captured").collect();
+    let caps: Vec<_> = of!(EVENTS, PointCaptured).collect();
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0]["point"], 0);
-    assert_eq!(caps[0]["team"], "blue");
-    assert!(!caps[0]["cappers"].as_array().unwrap().is_empty(), "a capture without cappers");
-    let tick = caps[0]["tick"].as_u64().unwrap();
-    let before = snapshots().filter(|s| s["tick"].as_u64().unwrap() <= tick).last().unwrap();
-    let point = before["objectives"].as_array().unwrap().iter().find(|o| o["index"] == 0).unwrap();
-    let gap = dist(pos(&cart(before).unwrap()["pos"]), pos(&point["pos"]));
+    assert_eq!(caps[0].point, 0);
+    assert_eq!(caps[0].team, Team::Blue);
+    assert!(!caps[0].cappers.is_empty(), "a capture without cappers");
+    let before = snapshots().filter(|s| s.tick <= caps[0].tick).last().unwrap();
+    let gap = dist(cart(before).unwrap().pos, point(before, 0).0.unwrap());
     assert!(gap < 100.0, "cart {gap} units from the point it captures");
-    let after = snapshots().last().unwrap();
-    let point = after["objectives"].as_array().unwrap().iter().find(|o| o["index"] == 0).unwrap();
-    assert_eq!(point["owner"], "blue");
+    assert_eq!(point(snapshots().last().unwrap(), 0).1, Team::Blue);
 }
 
 #[test]
 fn setup_timer_runs_out_before_the_push() {
-    let tick_of = |t: &str| EVENTS.iter().find(|e| e["type"] == t).unwrap()["tick"].as_u64().unwrap();
     // The demo starts in the previous round; setup runs from round_active to setup_finished.
-    let (active, setup_end) = (tick_of("round_active"), tick_of("setup_finished"));
-    let during: Vec<_> = snapshots()
-        .filter(|s| s["round"] == "running" && (active..setup_end).contains(&s["tick"].as_u64().unwrap()))
-        .collect();
+    let active = of!(EVENTS, RoundActive).next().unwrap().tick;
+    let setup_end = of!(EVENTS, SetupFinished).next().unwrap().tick;
+    let during: Vec<_> =
+        snapshots().filter(|s| s.round == Round::Running && (active..setup_end).contains(&s.tick)).collect();
     assert!(during.len() > 1000, "{} setup snapshots", during.len());
     for s in during {
-        assert!(s["timers"].as_array().unwrap().iter().any(|t| t["setup"] == true), "tick {}", s["tick"]);
-        assert_eq!(cart(s).unwrap()["progress"], 0.0, "the cart cannot move during setup");
+        assert!(s.timers.iter().any(|t| t.setup), "tick {}", s.tick);
+        assert_eq!(cart(s).unwrap().progress, 0.0, "the cart cannot move during setup");
     }
 }

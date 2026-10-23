@@ -18,8 +18,8 @@ use crate::net::handshake::Connection;
 use crate::net::messages::{self, Signon};
 use crate::net::netchan::{self, OutHeader};
 use crate::net::receiver::Receiver;
+use crate::output::{Line, Status};
 use anyhow::Result;
-use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::net::UdpSocket;
@@ -203,14 +203,14 @@ impl<'o> Session<'o> {
         self.send_reliable(&body, None);
     }
 
-    fn advance(&mut self, state: Signon, emit: &mut dyn FnMut(Value)) {
+    fn advance(&mut self, state: Signon, emit: &mut dyn FnMut(Line)) {
         if state == Signon::ChangeLevel {
-            emit(json!({"type": "status", "state": "changelevel"}));
+            emit(Line::Status(Status::Changelevel));
             return;
         }
         if self.state >= Signon::Full && state <= Signon::New {
             // The server re-runs signon in place for a new map; a relay keeps its connection.
-            emit(json!({"type": "status", "state": "map_change"}));
+            emit(Line::Status(Status::MapChange));
             self.state = state;
             self.echoed.clear();
             self.remap = Some(Vec::new());
@@ -219,12 +219,27 @@ impl<'o> Session<'o> {
         }
         if state > self.state {
             self.state = state;
-            emit(json!({"type": "status", "state": state.name()}));
+            if let Some(status) = self.status(state) {
+                emit(Line::Status(status));
+            }
         }
         self.echo(state);
     }
 
-    fn lifecycle(&mut self, life: Lifecycle, emit: &mut dyn FnMut(Value)) {
+    /// The status line for reaching a signon state; states below CONNECTED are never reached
+    /// from here (a session starts at CONNECTED).
+    fn status(&self, state: Signon) -> Option<Status> {
+        match state {
+            Signon::New => Some(Status::New),
+            Signon::PreSpawn => Some(Status::Prespawn),
+            Signon::Spawn => Some(Status::Spawn),
+            Signon::Full => Some(Status::Full { map: self.map.clone() }),
+            Signon::ChangeLevel => Some(Status::Changelevel),
+            Signon::None | Signon::Challenge | Signon::Connected => None,
+        }
+    }
+
+    fn lifecycle(&mut self, life: Lifecycle, emit: &mut dyn FnMut(Line)) {
         if let Some(t) = life.tick {
             self.server_tick = self.server_tick.max(t);
         }
@@ -248,16 +263,16 @@ impl<'o> Session<'o> {
 
     /// FULL is the client's own promotion once ticks flow. Live it waits for our
     /// last reliable echo to be acknowledged; offline there are no acks to wait for.
-    fn promote(&mut self, emit: &mut dyn FnMut(Value)) {
+    fn promote(&mut self, emit: &mut dyn FnMut(Line)) {
         if self.state == Signon::Spawn && self.server_tick > 0 && (self.pending.is_none() || self.sock.is_none()) {
             self.state = Signon::Full;
             self.reached_full = true;
-            emit(json!({"type": "status", "state": "full", "map": self.map}));
+            emit(Line::Status(Status::Full { map: self.map.clone() }));
             self.echo(Signon::Full);
         }
     }
 
-    fn datagram(&mut self, data: &[u8], dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Value)) {
+    fn datagram(&mut self, data: &[u8], dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Line)) {
         let now = Instant::now();
         let Some(pkt) = self.rx.feed(data, now) else { return };
         // Only a packet that passed the checksum, challenge and sequence checks proves
@@ -280,8 +295,8 @@ impl<'o> Session<'o> {
                 rest.push(stream.bits);
             }
         }
-        for v in dec.take_output() {
-            emit(v);
+        for line in dec.take_output() {
+            emit(line);
         }
         if let Some(p) = &self.pending {
             let want = (self.out_reliable_state >> p.subchannel) & 1;
@@ -296,7 +311,7 @@ impl<'o> Session<'o> {
         self.send(None, None);
     }
 
-    fn poll(&mut self, emit: &mut dyn FnMut(Value)) {
+    fn poll(&mut self, emit: &mut dyn FnMut(Line)) {
         let now = Instant::now();
         if now.duration_since(self.last_inbound) > self.opt.silence {
             self.break_with(format!("no data for {:?}", self.opt.silence), None);
@@ -333,7 +348,7 @@ fn drive(
     tables: &Tables,
     first: Option<&[u8]>,
     next: &mut dyn FnMut() -> Result<Next>,
-    emit: &mut dyn FnMut(Value),
+    emit: &mut dyn FnMut(Line),
 ) -> Result<Outcome> {
     let mut decode_errors = 0;
     let mut first = first;
@@ -352,8 +367,8 @@ fn drive(
                     break;
                 }
             }
-            for v in dec.take_output() {
-                emit(v);
+            for line in dec.take_output() {
+                emit(line);
             }
             if let Some(next_map) = &mut s.remap {
                 next_map.extend(rest);
@@ -394,14 +409,15 @@ fn drive(
     Ok(Outcome { end, decode_errors })
 }
 
-fn finish(s: &Session<'_>, outcome: &Outcome, emit: &mut dyn FnMut(Value)) {
-    emit(json!({
-        "type": "status",
-        "state": "disconnected",
-        "reason": match &outcome.end { End::Broken(b) => b.reason.as_str(), End::Stopped => "stopped" },
-        "decode_errors": outcome.decode_errors,
-        "packets": s.rx.counters.packets,
-        "lost": s.rx.counters.lost,
+fn finish(s: &Session<'_>, outcome: &Outcome, emit: &mut dyn FnMut(Line)) {
+    emit(Line::Status(Status::Disconnected {
+        reason: match &outcome.end {
+            End::Broken(b) => b.reason.clone(),
+            End::Stopped => "stopped".to_string(),
+        },
+        decode_errors: outcome.decode_errors,
+        packets: s.rx.counters.packets,
+        lost: s.rx.counters.lost,
     }));
 }
 
@@ -412,7 +428,7 @@ pub fn run(
     mut recorder: Option<&mut Recorder>,
     stop: &AtomicBool,
     deadline: Option<Instant>,
-    emit: &mut dyn FnMut(Value),
+    emit: &mut dyn FnMut(Line),
 ) -> Result<End> {
     let mut s = Session::new(Some(&conn.sock), conn.challenge, opt);
     if let Some(r) = recorder.as_deref_mut() {
@@ -456,7 +472,7 @@ pub fn replay(
     datagrams: &[&[u8]],
     tables: &Tables,
     opt: &Options,
-    emit: &mut dyn FnMut(Value),
+    emit: &mut dyn FnMut(Line),
 ) -> Result<()> {
     let mut s = Session::new(None, challenge, opt);
     let mut it = datagrams.iter();

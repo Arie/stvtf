@@ -5,9 +5,9 @@
 //! Only inbound traffic is recorded, so the password (sent outbound) never is.
 
 use crate::decode::Tables;
+use crate::output::Line;
 use crate::session::{self, Options};
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -88,7 +88,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Record<'_>>> {
 }
 
 /// Decodes a capture without a network, one session per recorded connection.
-pub fn replay(records: &[Record<'_>], tables: &Tables, opt: &Options, emit: &mut dyn FnMut(Value)) -> Result<()> {
+pub fn replay(records: &[Record<'_>], tables: &Tables, opt: &Options, emit: &mut dyn FnMut(Line)) -> Result<()> {
     let mut sessions: Vec<(u32, Vec<&[u8]>)> = Vec::new();
     for rec in records {
         if rec.kind == Kind::Session as u8 {

@@ -1,31 +1,34 @@
-//! Heals, blast jumps and pickups: game events turned into JSON lines.
+//! Heals, blast jumps and pickups: game events turned into lines.
 
-use super::extract::{strip_colors, team_num};
-use serde_json::{Value, json};
+use super::extract::{round1, strip_colors, team_num};
+use crate::output::{
+    Announcer, BlastJump, CaptureBroken, Heal, HealSource, Impact, ImpactKind, JumpKind, JumpPhase, KilledCapper, Line,
+    Mark, MedicDefended, Pickup, PickupItem, PickupSize, PlayerId, ServerText, TimeRemaining, Tournament, VoiceCommand,
+    VoteCast, VoteOptions,
+};
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::message::usermessage::UserMessage;
 use tf_demo_parser::demo::parser::analyser::Class;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
-/// Lookups the extractor owns: entity index to user id, and a user's current class.
+/// Lookups the extractor owns: entity index to user id, a user's current class, and the tick.
 pub(crate) struct Lookup<'a> {
-    pub user_of_entity: &'a dyn Fn(u32) -> Option<u16>,
+    pub user_of_entity: &'a dyn Fn(u32) -> Option<PlayerId>,
     pub class_of_user: &'a dyn Fn(u16) -> Option<Class>,
+    pub tick: u32,
 }
 
-fn heal(patient: Option<u16>, healer: Option<u16>, amount: i64, source: &str) -> Option<Value> {
+fn heal(
+    tick: u32,
+    patient: Option<PlayerId>,
+    healer: Option<PlayerId>,
+    amount: i64,
+    source: HealSource,
+) -> Option<Line> {
     if amount <= 0 {
         return None;
     }
-    Some(json!({"type": "heal", "patient": patient?, "healer": healer, "amount": amount, "source": source}))
-}
-
-fn jump(player: u16, kind: &str, phase: &str) -> Value {
-    json!({"type": "blast_jump", "player": player, "kind": kind, "phase": phase})
-}
-
-fn pickup(player: u16, item: &str, size: Option<&str>) -> Value {
-    json!({"type": "pickup", "player": player, "item": item, "size": size})
+    Some(Line::Heal(Heal { tick, patient: patient?, healer, amount, source }))
 }
 
 const fn origin_parts(table: &str) -> [SendPropIdentifier; 3] {
@@ -64,110 +67,128 @@ fn parts(props: &[SendProp], ids: [SendPropIdentifier; 3]) -> Option<[f32; 3]> {
     Some(out)
 }
 
-fn round1(f: f32) -> f64 {
-    (f64::from(f) * 10.0).round() / 10.0
+fn impact(tick: u32, kind: ImpactKind, pos: Option<[f32; 3]>) -> Option<Line> {
+    Some(Line::Impact(Impact { tick, kind, pos: pos?.map(round1) }))
 }
 
-fn impact(kind: &str, pos: Option<[f32; 3]>) -> Option<Value> {
-    Some(json!({"type": "impact", "kind": kind, "pos": pos?.map(round1)}))
+fn mark(tick: u32, pos: Option<[f32; 3]>) -> Option<Line> {
+    Some(Line::Mark(Mark { tick, pos: pos?.map(round1) }))
 }
 
 /// Where bullets landed and what they left behind. `props` already has omitted values filled in.
-pub(crate) fn temp_entity(class: &str, props: &[SendProp]) -> Option<Value> {
+pub(crate) fn temp_entity(class: &str, props: &[SendProp], tick: u32) -> Option<Line> {
     match class {
-        "CTETFBlood" => impact("blood", parts(props, BLOOD_ORIGIN)),
-        "CTESparks" => impact("sparks", parts(props, SPARKS_ORIGIN)),
-        "CTEMetalSparks" => impact("sparks", vector(props, RICOCHET_POS)),
-        "CTEArmorRicochet" => impact("ricochet", vector(props, RICOCHET_POS)),
-        "CTEWorldDecal" => Some(json!({"type": "mark", "pos": vector(props, WORLD_DECAL_ORIGIN)?.map(round1)})),
-        "CTEDecal" => Some(json!({"type": "mark", "pos": vector(props, DECAL_ORIGIN)?.map(round1)})),
+        "CTETFBlood" => impact(tick, ImpactKind::Blood, parts(props, BLOOD_ORIGIN)),
+        "CTESparks" => impact(tick, ImpactKind::Sparks, parts(props, SPARKS_ORIGIN)),
+        "CTEMetalSparks" => impact(tick, ImpactKind::Sparks, vector(props, RICOCHET_POS)),
+        "CTEArmorRicochet" => impact(tick, ImpactKind::Ricochet, vector(props, RICOCHET_POS)),
+        "CTEWorldDecal" => mark(tick, vector(props, WORLD_DECAL_ORIGIN)),
+        "CTEDecal" => mark(tick, vector(props, DECAL_ORIGIN)),
         _ => None,
     }
 }
 
-pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Value> {
+fn pickup(item: &str) -> Option<(PickupItem, Option<PickupSize>)> {
+    let size = if item.ends_with("small") {
+        Some(PickupSize::Small)
+    } else if item.ends_with("medium") {
+        Some(PickupSize::Medium)
+    } else if item.ends_with("large") || item.ends_with("full") {
+        Some(PickupSize::Full)
+    } else {
+        None
+    };
+    if item.starts_with("medkit") {
+        Some((PickupItem::Health, size))
+    } else if item.starts_with("ammopack") || item == "tf_ammo_pack" {
+        Some((PickupItem::Ammo, size))
+    } else {
+        None
+    }
+}
+
+pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
+    let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
     match event {
         GameEvent::PlayerHealed(h) => {
             // The event doesn't say what healed: infer it from the healer's class.
             let source = match (look.class_of_user)(h.healer) {
-                Some(Class::Medic) => "medigun",
-                Some(Class::Engineer) => "dispenser",
-                _ => "other",
+                Some(Class::Medic) => HealSource::Medigun,
+                Some(Class::Engineer) => HealSource::Dispenser,
+                _ => HealSource::Other,
             };
-            heal(Some(h.patient), (h.healer != 0).then_some(h.healer), i64::from(h.amount), source)
+            let healer = (h.healer != 0).then_some(PlayerId(h.healer));
+            heal(tick, Some(PlayerId(h.patient)), healer, i64::from(h.amount), source)
         }
         // `healer` and `target` are entity indexes.
-        GameEvent::CrossbowHeal(c) => heal(
-            (look.user_of_entity)(u32::from(c.target)),
-            (look.user_of_entity)(u32::from(c.healer)),
-            i64::from(c.amount),
-            "crossbow",
-        ),
-        GameEvent::PlayerHealOnHit(h) => {
-            heal((look.user_of_entity)(u32::from(h.ent_index)), None, i64::from(h.amount), "on_hit")
+        GameEvent::CrossbowHeal(c) => {
+            heal(tick, user(c.target), user(c.healer), i64::from(c.amount), HealSource::Crossbow)
         }
-        GameEvent::RocketJump(j) => Some(jump(j.user_id, "rocket", "start")),
-        GameEvent::RocketJumpLanded(j) => Some(jump(j.user_id, "rocket", "land")),
-        GameEvent::StickyJump(j) => Some(jump(j.user_id, "sticky", "start")),
-        GameEvent::StickyJumpLanded(j) => Some(jump(j.user_id, "sticky", "land")),
+        GameEvent::PlayerHealOnHit(h) => heal(tick, user(h.ent_index), None, i64::from(h.amount), HealSource::OnHit),
+        GameEvent::RocketJump(j) => Some(jump(tick, j.user_id, JumpKind::Rocket, JumpPhase::Start)),
+        GameEvent::RocketJumpLanded(j) => Some(jump(tick, j.user_id, JumpKind::Rocket, JumpPhase::Land)),
+        GameEvent::StickyJump(j) => Some(jump(tick, j.user_id, JumpKind::Sticky, JumpPhase::Start)),
+        GameEvent::StickyJumpLanded(j) => Some(jump(tick, j.user_id, JumpKind::Sticky, JumpPhase::Land)),
         GameEvent::ItemPickup(i) => {
-            let item = i.item.to_string();
-            let size = ["small", "medium", "large", "full"].into_iter().find(|s| item.ends_with(s));
-            let size = size.map(|s| if s == "large" { "full" } else { s });
-            if item.starts_with("medkit") {
-                Some(pickup(i.user_id, "health", size))
-            } else if item.starts_with("ammopack") || item == "tf_ammo_pack" {
-                Some(pickup(i.user_id, "ammo", size))
-            } else {
-                None
-            }
+            let (item, size) = pickup(i.item.as_ref())?;
+            Some(Line::Pickup(Pickup { tick, player: PlayerId(i.user_id), item, size }))
         }
         GameEvent::TeamPlayCaptureBroken(b) => {
-            Some(json!({"type": "capture_broken", "point": b.cp, "name": b.cp_name.to_string()}))
+            Some(Line::CaptureBroken(CaptureBroken { tick, point: b.cp, name: b.cp_name.to_string() }))
         }
         // The ids are entity indexes; 0 means no assister.
-        GameEvent::KilledCappingPlayer(k) => Some(json!({
-            "type": "killed_capper",
-            "point": k.cp,
-            "killer": (look.user_of_entity)(u32::from(k.killer))?,
-            "victim": (look.user_of_entity)(u32::from(k.victim))?,
-            "assister": (k.assister != 0).then(|| (look.user_of_entity)(u32::from(k.assister))).flatten(),
+        GameEvent::KilledCappingPlayer(k) => Some(Line::KilledCapper(KilledCapper {
+            tick,
+            point: k.cp,
+            killer: user(k.killer)?,
+            victim: user(k.victim)?,
+            assister: (k.assister != 0).then(|| user(k.assister)).flatten(),
         })),
-        GameEvent::MedicDefended(m) => Some(json!({"type": "medic_defended", "player": m.user_id, "medic": m.medic})),
+        GameEvent::MedicDefended(m) => {
+            Some(Line::MedicDefended(MedicDefended { tick, player: PlayerId(m.user_id), medic: PlayerId(m.medic) }))
+        }
         GameEvent::VoteOptions(v) => {
             let all = [&v.option_1, &v.option_2, &v.option_3, &v.option_4, &v.option_5];
-            let options: Vec<String> = all.iter().take(usize::from(v.count)).map(ToString::to_string).collect();
-            Some(json!({"type": "vote_options", "options": options}))
+            let options = all.iter().take(usize::from(v.count)).map(ToString::to_string).collect();
+            Some(Line::VoteOptions(VoteOptions { tick, options }))
         }
-        GameEvent::VoteCast(v) => Some(json!({
-            "type": "vote_cast",
-            "player": (look.user_of_entity)(v.entity_id),
-            "option": v.vote_option,
-            "team": team_num(v.team),
+        GameEvent::VoteCast(v) => Some(Line::VoteCast(VoteCast {
+            tick,
+            player: (look.user_of_entity)(v.entity_id),
+            option: v.vote_option,
+            team: team_num(v.team),
         })),
-        GameEvent::TournamentStateUpdate(t) => Some(json!({
-            "type": "tournament",
-            "player": (t.user_id != 0).then_some(t.user_id),
-            "ready": (!t.name_change).then_some(t.ready_state != 0),
+        GameEvent::TournamentStateUpdate(t) => Some(Line::Tournament(Tournament {
+            tick,
+            player: (t.user_id != 0).then_some(PlayerId(t.user_id)),
+            ready: (!t.name_change).then_some(t.ready_state != 0),
         })),
         GameEvent::TeamPlayBroadcastAudio(a) => {
-            Some(json!({"type": "announcer", "sound": a.sound.to_string(), "team": team_num(a.team)}))
+            Some(Line::Announcer(Announcer { tick, sound: a.sound.to_string(), team: team_num(a.team) }))
         }
-        GameEvent::TeamPlayMapTimeRemaining(t) => Some(json!({"type": "time_remaining", "seconds": t.seconds})),
-        GameEvent::TfMapTimeRemaining(t) => Some(json!({"type": "time_remaining", "seconds": t.seconds})),
+        GameEvent::TeamPlayMapTimeRemaining(t) => {
+            Some(Line::TimeRemaining(TimeRemaining { tick, seconds: u32::from(t.seconds) }))
+        }
+        GameEvent::TfMapTimeRemaining(t) => Some(Line::TimeRemaining(TimeRemaining { tick, seconds: t.seconds })),
         _ => None,
     }
 }
 
-pub(crate) fn user_message(message: &UserMessage<'_>, look: &Lookup<'_>) -> Option<Value> {
+fn jump(tick: u32, user: u16, kind: JumpKind, phase: JumpPhase) -> Line {
+    Line::BlastJump(BlastJump { tick, player: PlayerId(user), kind, phase })
+}
+
+pub(crate) fn user_message(message: &UserMessage<'_>, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
     match message {
-        UserMessage::VoiceSubtitle(v) => Some(json!({
-            "type": "voice_command",
-            "player": (look.user_of_entity)(u32::from(v.client))?,
-            "menu": v.menu,
-            "item": v.item,
+        UserMessage::VoiceSubtitle(v) => Some(Line::VoiceCommand(VoiceCommand {
+            tick,
+            player: (look.user_of_entity)(u32::from(v.client))?,
+            menu: v.menu,
+            item: v.item,
         })),
-        UserMessage::Text(t) => Some(json!({"type": "server_text", "text": strip_colors(t.text.as_ref())})),
+        UserMessage::Text(t) => Some(Line::ServerText(ServerText { tick, text: strip_colors(t.text.as_ref()) })),
         _ => None,
     }
 }
@@ -180,12 +201,12 @@ mod tests {
     #[test]
     fn voice_commands_name_the_player() {
         let msg = UserMessage::VoiceSubtitle(VoiceSubtitleMessage { client: 5, menu: 0, item: 1 });
-        let user = |ent: u32| (ent == 5).then_some(12u16);
+        let user = |ent: u32| (ent == 5).then_some(PlayerId(12));
         let class = |_| None;
-        let look = Lookup { user_of_entity: &user, class_of_user: &class };
+        let look = Lookup { user_of_entity: &user, class_of_user: &class, tick: 3 };
         assert_eq!(
             user_message(&msg, &look),
-            Some(json!({"type": "voice_command", "player": 12, "menu": 0, "item": 1}))
+            Some(Line::VoiceCommand(VoiceCommand { tick: 3, player: PlayerId(12), menu: 0, item: 1 }))
         );
         let other = UserMessage::VoiceSubtitle(VoiceSubtitleMessage { client: 6, menu: 0, item: 1 });
         assert_eq!(user_message(&other, &look), None);

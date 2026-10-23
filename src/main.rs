@@ -1,14 +1,14 @@
 use anyhow::{Context, Result, anyhow, bail};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use stvtf::Options;
 use stvtf::capture;
 use stvtf::decode::{self, Tables};
+use stvtf::output::Stamped;
 use stvtf::watch::{self, Watch};
+use stvtf::{Line, Options};
 
 const USAGE: &str = "\
 stvtf: headless TF2 SourceTV spectator emitting top-down overview data as JSON lines
@@ -104,18 +104,19 @@ fn main() -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
     let live = args.command == "connect";
-    let mut emit = |mut v: Value| {
+    let mut emit = |line: Line| {
         if STOP.load(Ordering::Relaxed) && !live {
             return;
         }
         // Wall-clock receive time (ms since the Unix epoch), for live streams only.
-        if live && let Some(o) = v.as_object_mut() {
-            let ms =
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-            o.insert("time".into(), ms.into());
-        }
+        let time = live.then(|| {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+        });
         // Live lines go out at once; offline output is flushed when the buffer fills.
-        let written = writeln!(out, "{v}").and_then(|()| if live { out.flush() } else { Ok(()) });
+        let written = serde_json::to_writer(&mut out, &Stamped { line, time })
+            .map_err(std::io::Error::from)
+            .and_then(|()| writeln!(out))
+            .and_then(|()| if live { out.flush() } else { Ok(()) });
         if written.is_err() {
             // The reader went away (e.g. `| head`): stop, which frees the SourceTV slot.
             STOP.store(true, Ordering::Relaxed);
@@ -140,7 +141,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn connect(args: &Args, emit: &mut dyn FnMut(Value)) -> Result<()> {
+fn connect(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
     let password = match args.get("password") {
         Some(p) => p.to_string(),
         None => std::env::var("STVTF_PASSWORD").unwrap_or_default(),

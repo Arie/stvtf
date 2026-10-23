@@ -3,9 +3,9 @@
 use crate::capture::Recorder;
 use crate::decode::Tables;
 use crate::net::handshake::{self, GamePort, Rejected};
+use crate::output::{Line, Status};
 use crate::session::{self, End, Fatal, Options};
 use anyhow::{Context, Result, anyhow, bail};
-use serde_json::{Value, json};
 use std::fmt;
 use std::hash::{BuildHasher, RandomState};
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -136,7 +136,7 @@ pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
 
 /// Runs until `stop`, the duration, or a rejection that reconnecting cannot fix,
 /// passing every event and snapshot to `emit`. Blocks the calling thread.
-pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Result<(), WatchError> {
+pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
     let mut server: SocketAddr = w
         .target
         .to_socket_addrs()
@@ -172,11 +172,11 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Resul
         if deadline.is_some_and(|d| Instant::now() >= d) || stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let mut status = json!({"type": "status", "state": "connecting", "server": server.to_string(), "build": build});
-        if let Some(b) = &server_build {
-            status["server_build"] = b.as_str().into();
-        }
-        emit(status);
+        emit(Line::Status(Status::Connecting {
+            server: server.to_string(),
+            build: build.clone(),
+            server_build: server_build.clone(),
+        }));
         let streamed = match handshake::connect(server, &opt.name, &w.password, &build, Duration::from_secs(6)) {
             Ok(conn) => match session::run(&conn, &tables, &opt, recorder.as_mut(), stop, deadline, emit)? {
                 End::Stopped => return Ok(()),
@@ -188,7 +188,7 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Value)) -> Resul
                 }
             },
             Err(e) => {
-                emit(json!({"type": "status", "state": "connect_failed", "reason": e.to_string()}));
+                emit(Line::Status(Status::ConnectFailed { reason: e.to_string() }));
                 // Given the game port, try SourceTV's default place next to it: game port + 5.
                 if e.downcast_ref::<GamePort>().is_some()
                     && !tried_tv_port

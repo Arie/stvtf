@@ -1,9 +1,11 @@
-//! Turns parser state into the JSON the overview consumes: periodic snapshots
+//! Turns parser state into the lines the overview consumes: periodic snapshots
 //! plus discrete events (kills, damage, shots, explosions, ubers, rounds, chat...).
 
 use super::detail;
-use serde::Serialize;
-use serde_json::{Value, json};
+use crate::output::{
+    self as out, Airblast, BannerKind, BuildingKind, ChatKind, ChatPart, Condition, Line, MedigunKind, PlayerId,
+    Position, ProjectileKind, Resist, Round, Ubered,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::LazyLock;
@@ -144,7 +146,7 @@ pub(crate) struct Extractor {
     gs: GameStateAnalyser,
     /// Latest server tick seen in a `net_Tick`.
     pub(crate) server_tick: u32,
-    events: RefCell<Vec<Value>>,
+    events: RefCell<Vec<Line>>,
     world_sent: Cell<bool>,
     control_points: Vec<ControlPoint>,
     num_control_points: usize,
@@ -164,7 +166,7 @@ pub(crate) struct Extractor {
     timers: BTreeMap<u32, RoundTimer>,
     /// King of the hill: each team's own timer, which runs while that team holds the point.
     koth_timers: [Option<u32>; 2],
-    round_state: RoundState,
+    round_state: Round,
     /// Server time the match started (`m_flMapResetTime`) and the current round went live.
     match_start: f32,
     round_live_since: Option<f32>,
@@ -190,7 +192,7 @@ pub(crate) struct Extractor {
     /// CTF flags and the bball ball (`item_teamflag`), by entity.
     flags: BTreeMap<u32, Flag>,
     /// `player_spawn` arrives before the player's new position: held until the next entity update.
-    pending_spawns: Vec<(u16, Value)>,
+    pending_spawns: Vec<(u16, out::Spawn)>,
     /// The entities in each recent frame, by server tick, to find the ones a delta drops silently.
     frames: VecDeque<(u32, HashSet<u32>)>,
     /// Players who disconnected: the server keeps their slot, and so their entity and info, for
@@ -201,7 +203,7 @@ pub(crate) struct Extractor {
     /// Engineers carrying a building: player entity -> the building's entity.
     carried: HashMap<u32, u32>,
     /// What each building entity is: a carried building is not sent while it is carried.
-    building_kinds: HashMap<u32, &'static str>,
+    building_kinds: HashMap<u32, BuildingKind>,
 }
 
 /// A player's line on the scoreboard. Points, kills and deaths are the server's match totals;
@@ -307,53 +309,19 @@ impl RoundTimer {
 }
 
 /// `CTFGameRulesProxy` `m_iRoundState` (`gamerules_roundstate_t`).
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
-enum RoundState {
-    #[default]
-    Init,
-    Pregame,
-    StartGame,
-    Preround,
-    Running,
-    TeamWin,
-    Restart,
-    Stalemate,
-    GameOver,
-    Bonus,
-    BetweenRounds,
-}
-
-impl RoundState {
-    fn from_raw(v: i64) -> Self {
-        match v {
-            0 => Self::Init,
-            1 => Self::Pregame,
-            2 => Self::StartGame,
-            3 => Self::Preround,
-            4 => Self::Running,
-            5 => Self::TeamWin,
-            6 => Self::Restart,
-            7 => Self::Stalemate,
-            8 => Self::GameOver,
-            9 => Self::Bonus,
-            _ => Self::BetweenRounds,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Init => "init",
-            Self::Pregame => "pregame",
-            Self::StartGame => "start_game",
-            Self::Preround => "preround",
-            Self::Running => "running",
-            Self::TeamWin => "team_win",
-            Self::Restart => "restart",
-            Self::Stalemate => "stalemate",
-            Self::GameOver => "game_over",
-            Self::Bonus => "bonus",
-            Self::BetweenRounds => "between_rounds",
-        }
+fn round_from_raw(v: i64) -> Round {
+    match v {
+        0 => Round::Init,
+        1 => Round::Pregame,
+        2 => Round::StartGame,
+        3 => Round::Preround,
+        4 => Round::Running,
+        5 => Round::TeamWin,
+        6 => Round::Restart,
+        7 => Round::Stalemate,
+        8 => Round::GameOver,
+        9 => Round::Bonus,
+        _ => Round::BetweenRounds,
     }
 }
 
@@ -382,184 +350,46 @@ struct Medigun {
 }
 
 /// tf-demo-parser names the common projectiles; the rest go by their server class.
-fn projectile_kind(ty: ProjectileType, class: &str) -> &'static str {
+fn projectile_kind(ty: ProjectileType, class: &str) -> ProjectileKind {
     match ty {
-        ProjectileType::Rocket => return "Rocket",
-        ProjectileType::HealingArrow => return "HealingArrow",
-        ProjectileType::Sticky => return "Sticky",
-        ProjectileType::Pipe => return "Pipe",
-        ProjectileType::Flare => return "Flare",
-        ProjectileType::LooseCannon => return "LooseCannon",
+        ProjectileType::Rocket => return ProjectileKind::Rocket,
+        ProjectileType::HealingArrow => return ProjectileKind::HealingArrow,
+        ProjectileType::Sticky => return ProjectileKind::Sticky,
+        ProjectileType::Pipe => return ProjectileKind::Pipe,
+        ProjectileType::Flare => return ProjectileKind::Flare,
+        ProjectileType::LooseCannon => return ProjectileKind::LooseCannon,
         ProjectileType::Unknown => {}
     }
     match class {
-        "CTFProjectile_Arrow" => "Arrow",
-        "CTFProjectile_EnergyBall" => "EnergyBall",
-        "CTFProjectile_EnergyRing" => "EnergyRing",
-        "CTFProjectile_BallOfFire" => "Fireball",
-        "CTFProjectile_Cleaver" => "Cleaver",
-        "CTFProjectile_Jar" => "Jarate",
-        "CTFProjectile_JarMilk" => "MadMilk",
-        "CTFProjectile_JarGas" => "GasPasser",
-        "CTFProjectile_MechanicalArmOrb" => "ShortCircuitOrb",
-        _ => "Unknown",
+        "CTFProjectile_Arrow" => ProjectileKind::Arrow,
+        "CTFProjectile_EnergyBall" => ProjectileKind::EnergyBall,
+        "CTFProjectile_EnergyRing" => ProjectileKind::EnergyRing,
+        "CTFProjectile_BallOfFire" => ProjectileKind::Fireball,
+        "CTFProjectile_Cleaver" => ProjectileKind::Cleaver,
+        "CTFProjectile_Jar" => ProjectileKind::Jarate,
+        "CTFProjectile_JarMilk" => ProjectileKind::MadMilk,
+        "CTFProjectile_JarGas" => ProjectileKind::GasPasser,
+        "CTFProjectile_MechanicalArmOrb" => ProjectileKind::ShortCircuitOrb,
+        _ => ProjectileKind::Unknown,
     }
 }
 
-fn medigun_kind(item: i64) -> &'static str {
+fn medigun_kind(item: i64) -> MedigunKind {
     match item {
-        35 => "kritzkrieg",
-        411 => "quickfix",
-        998 => "vaccinator",
-        _ => "medigun",
+        35 => MedigunKind::Kritzkrieg,
+        411 => MedigunKind::Quickfix,
+        998 => MedigunKind::Vaccinator,
+        _ => MedigunKind::Medigun,
     }
 }
 
-fn resist_name(r: i64) -> &'static str {
+fn resist(r: i64) -> Resist {
     match r {
-        0 => "bullet",
-        1 => "blast",
-        _ => "fire",
+        0 => Resist::Bullet,
+        1 => Resist::Blast,
+        _ => Resist::Fire,
     }
 }
-
-/// Output names of the TF2 player conditions (`ETFCond`), by number; "" for unused numbers.
-/// The names follow tf-demo-parser's `PlayerCondition`, but are spelled out here so the
-/// output does not change with that crate's Debug formatting.
-#[rustfmt::skip]
-const COND_NAMES: [&str; 131] = [
-    "Aiming",
-    "Zoomed",
-    "Disguising",
-    "Disguised",
-    "Stealthed",
-    "Invulnerable",
-    "Teleported",
-    "Taunting",
-    "InvulnerableWearingOff",
-    "StealthedBlink",
-    "SelectedToTeleport",
-    "CritBoosted",
-    "TmpDamageBonus",
-    "FeignDeath",
-    "Phase",
-    "Stunned",
-    "OffensiveBuff",
-    "ShieldCharge",
-    "DemoBuff",
-    "EnergyBuff",
-    "RadiusHeal",
-    "HealthBuff",
-    "Burning",
-    "HealthOverHealed",
-    "Urine",
-    "Bleeding",
-    "DefensiveBuff",
-    "MadMilk",
-    "MegaHeal",
-    "RegenOnDamageBuff",
-    "MarkedForDeath",
-    "NoHealingDamageBuff",
-    "SpeedBoost",
-    "CritBoostedPumpkin",
-    "CritBoostedUserBuff",
-    "CritBoostedDemoCharge",
-    "SodaPopperHype",
-    "CritBoostedFirstBlood",
-    "CritBoostedBonusTime",
-    "CritBoostedCtfCapture",
-    "CritBoostedOnKill",
-    "CannotSwitchFromMelee",
-    "DefenseBuffNoCritBlock",
-    "Reprogrammed",
-    "CritBoostedRageBuff",
-    "DefenseBuffHigh",
-    "SniperChargeRageBuff",
-    "DisguiseWearingOff",
-    "MarkedForDeathSilent",
-    "DisguisedAsDispenser",
-    "Sapped",
-    "InvulnerableHideUnlessDamaged",
-    "InvulnerableUserBuff",
-    "HalloweenBombHead",
-    "HalloweenThriller",
-    "RadiusHealOnDamage",
-    "CritBoostedCardEffect",
-    "InvulnerableCardEffect",
-    "MedigunUberBulletResist",
-    "MedigunUberBlastResist",
-    "MedigunUberFireResist",
-    "MedigunSmallBulletResist",
-    "MedigunSmallBlastResist",
-    "MedigunSmallFireResist",
-    "StealthedUserBuff",
-    "MedigunDebuff",
-    "StealthedUserBuffFading",
-    "BulletImmune",
-    "BlastImmune",
-    "FireImmune",
-    "PreventDeath",
-    "MvmBotStunRadiowave",
-    "HalloweenSpeedBoost",
-    "HalloweenQuickHeal",
-    "HalloweenGiant",
-    "HalloweenTiny",
-    "HalloweenInHell",
-    "HalloweenGhostMode",
-    "MiniCritBoostedOnKill",
-    "ObscuredSmoke",
-    "ParachuteActive",
-    "BlastJumping",
-    "HalloweenKart",
-    "HalloweenKartDash",
-    "BalloonHead",
-    "MeleeOnly",
-    "SwimmingCurse",
-    "FreezeInput",
-    "HalloweenKartCage",
-    "", // 89: unused
-    "RuneStrength",
-    "RuneHaste",
-    "RuneRegen",
-    "RuneResist",
-    "RuneVampire",
-    "RuneReflect",
-    "RunePrecision",
-    "RuneAgility",
-    "GrapplingHook",
-    "GrapplingHookSafeFall",
-    "GrapplingHookLatched",
-    "GrapplingHookBleeding",
-    "AfterburnImmune",
-    "RuneKnockout",
-    "RuneImbalance",
-    "CritBoostedRuneTemp",
-    "PasstimeInterception",
-    "SwimmingNoEffects",
-    "PURGATORY",
-    "RuneKing",
-    "RunePlague",
-    "RuneSupernova",
-    "PLAGUE",
-    "KingBuffed",
-    "TeamGlows",
-    "KnockedIntoAir",
-    "CompetitiveWinner",
-    "CompetitiveLoser",
-    "HealingDebuff",
-    "PasstimePenaltyDebuff",
-    "GrappledToPlayer",
-    "GrappledByPlayer",
-    "ParachuteDeployed",
-    "GAS",
-    "BurningPyro",
-    "RocketPack",
-    "LostFooting",
-    "AirCurrent",
-    "HalloweenHellHeal",
-    "PowerUpModeDominant",
-    "ImmuneToPushback",
-];
 
 /// Whether condition number `n` is set.
 fn has_cond_bit(words: &[u32; 6], n: usize) -> bool {
@@ -571,29 +401,26 @@ fn has_cond(words: &[u32; 6], c: PlayerCondition) -> bool {
     has_cond_bit(words, c as usize)
 }
 
-fn cond_names(words: &[u32; 6]) -> Vec<&'static str> {
-    COND_NAMES
-        .iter()
-        .enumerate()
-        .filter(|&(n, name)| !name.is_empty() && has_cond_bit(words, n))
-        .map(|(_, name)| *name)
-        .collect()
+/// The conditions set in a player's condition words (160 numbers: 0-31 twice, then four more
+/// words), in number order.
+fn conditions(words: &[u32; 6]) -> Vec<Condition> {
+    (0..32 * 5).filter(|&n| has_cond_bit(words, n)).filter_map(Condition::from_number).collect()
 }
 
-fn chat_kind(kind: ChatMessageKind) -> &'static str {
+fn chat_kind(kind: ChatMessageKind) -> ChatKind {
     match kind {
-        ChatMessageKind::ChatAll => "ChatAll",
-        ChatMessageKind::ChatTeam => "ChatTeam",
-        ChatMessageKind::ChatAllDead => "ChatAllDead",
-        ChatMessageKind::ChatTeamDead => "ChatTeamDead",
-        ChatMessageKind::ChatAllSpec => "ChatAllSpec",
-        ChatMessageKind::NameChange => "NameChange",
-        ChatMessageKind::Empty => "Empty",
+        ChatMessageKind::ChatAll => ChatKind::ChatAll,
+        ChatMessageKind::ChatTeam => ChatKind::ChatTeam,
+        ChatMessageKind::ChatAllDead => ChatKind::ChatAllDead,
+        ChatMessageKind::ChatTeamDead => ChatKind::ChatTeamDead,
+        ChatMessageKind::ChatAllSpec => ChatKind::ChatAllSpec,
+        ChatMessageKind::NameChange => ChatKind::NameChange,
+        ChatMessageKind::Empty => ChatKind::Empty,
     }
 }
 
 /// The medigun charge effect a player is under, from their conditions.
-fn ubered(words: &[u32; 6]) -> Option<&'static str> {
+fn ubered(words: &[u32; 6]) -> Option<Ubered> {
     use PlayerCondition::{
         CritBoosted, Invulnerable, MedigunUberBlastResist, MedigunUberBulletResist, MedigunUberFireResist, MegaHeal,
     };
@@ -601,17 +428,17 @@ fn ubered(words: &[u32; 6]) -> Option<&'static str> {
     // InvulnerableWearingOff only marks the fade-out next to Invulnerable; servers have been
     // seen leaving it set on a medic for good, so it is not an über on its own.
     if on(Invulnerable) {
-        Some("uber")
+        Some(Ubered::Uber)
     } else if on(MegaHeal) {
-        Some("quickfix")
+        Some(Ubered::Quickfix)
     } else if on(MedigunUberBulletResist) {
-        Some("vaccinator_bullet")
+        Some(Ubered::VaccinatorBullet)
     } else if on(MedigunUberBlastResist) {
-        Some("vaccinator_blast")
+        Some(Ubered::VaccinatorBlast)
     } else if on(MedigunUberFireResist) {
-        Some("vaccinator_fire")
+        Some(Ubered::VaccinatorFire)
     } else if on(CritBoosted) {
-        Some("kritz")
+        Some(Ubered::Kritz)
     } else {
         None
     }
@@ -688,55 +515,51 @@ fn team_byte(v: i64) -> u8 {
     u8::try_from(v).unwrap_or(0)
 }
 
-fn team_name(t: Team) -> &'static str {
+fn team(t: Team) -> out::Team {
     match t {
-        Team::Red => "red",
-        Team::Blue => "blue",
-        Team::Spectator => "spectator",
-        Team::Other => "none",
+        Team::Red => out::Team::Red,
+        Team::Blue => out::Team::Blue,
+        Team::Spectator => out::Team::Spectator,
+        Team::Other => out::Team::Unassigned,
     }
 }
 
-pub(crate) fn team_num<N>(n: N) -> &'static str
+pub(crate) fn team_num<N>(n: N) -> out::Team
 where
     u8: TryFrom<N>,
 {
-    team_name(Team::new(n))
+    team(Team::new(n))
 }
 
-fn class_name(c: Class) -> &'static str {
+fn class(c: Class) -> out::Class {
     match c {
-        Class::Scout => "scout",
-        Class::Sniper => "sniper",
-        Class::Soldier => "soldier",
-        Class::Demoman => "demoman",
-        Class::Medic => "medic",
-        Class::Heavy => "heavy",
-        Class::Pyro => "pyro",
-        Class::Spy => "spy",
-        Class::Engineer => "engineer",
-        Class::Other => "unknown",
+        Class::Scout => out::Class::Scout,
+        Class::Sniper => out::Class::Sniper,
+        Class::Soldier => out::Class::Soldier,
+        Class::Demoman => out::Class::Demoman,
+        Class::Medic => out::Class::Medic,
+        Class::Heavy => out::Class::Heavy,
+        Class::Pyro => out::Class::Pyro,
+        Class::Spy => out::Class::Spy,
+        Class::Engineer => out::Class::Engineer,
+        Class::Other => out::Class::Unknown,
     }
 }
 
-fn class_num(n: u16) -> &'static str {
-    class_name(Class::new(i64::from(n)))
+fn class_num(n: u16) -> out::Class {
+    class(Class::new(i64::from(n)))
 }
 
 /// A position as written out, to a tenth of a unit.
-fn xyz(v: Vector) -> [f64; 3] {
+fn xyz(v: Vector) -> Position {
     [round1(v.x), round1(v.y), round1(v.z)]
-}
-
-fn vec3(v: Vector) -> Value {
-    json!(xyz(v))
 }
 
 fn round2(f: f32) -> f64 {
     (f64::from(f) * 100.0).round() / 100.0
 }
 
-fn round1(f: f32) -> f64 {
+pub(crate) fn round1(f: f32) -> f64 {
     (f64::from(f) * 10.0).round() / 10.0
 }
 
@@ -786,7 +609,7 @@ impl Extractor {
         self.tick_interval.unwrap_or(DEFAULT_TICK_INTERVAL)
     }
 
-    fn projectile_kind(&self, pr: &Projectile) -> &'static str {
+    fn projectile_kind(&self, pr: &Projectile) -> ProjectileKind {
         projectile_kind(pr.ty, self.class_names.get(usize::from(pr.class)).map_or("", String::as_str))
     }
 
@@ -795,8 +618,8 @@ impl Extractor {
     fn track_round_time(&mut self) {
         let now = self.server_tick as f32 * self.interval();
         match self.round_state {
-            RoundState::Running => (self.round_live_since, self.round_ended_at) = (Some(self.state_transition), None),
-            RoundState::Preround => (self.round_live_since, self.round_ended_at) = (None, None),
+            Round::Running => (self.round_live_since, self.round_ended_at) = (Some(self.state_transition), None),
+            Round::Preround => (self.round_live_since, self.round_ended_at) = (None, None),
             _ if self.round_live_since.is_some() && self.round_ended_at.is_none() => self.round_ended_at = Some(now),
             _ => {}
         }
@@ -827,12 +650,16 @@ impl Extractor {
             let gun = self.mediguns.values().find(|m| m.owner == Some(ent));
             let now = Charge { charge: p.charge, releasing: gun.is_some_and(|m| m.releasing) };
             if let Some(&before) = self.medic_charge.get(&ent) {
-                let medigun = gun.map(|m| medigun_kind(m.item));
+                let charge = out::MedicCharge {
+                    tick: self.server_tick,
+                    medic: PlayerId(u16::from(info.user_id)),
+                    medigun: gun.map(|m| medigun_kind(m.item)),
+                };
                 if before.charge < 100 && now.charge >= 100 && !now.releasing {
-                    events.push(json!({"type": "uber_ready", "medic": u16::from(info.user_id), "medigun": medigun}));
+                    events.push(Line::UberReady(charge.clone()));
                 }
                 if before.releasing && !now.releasing {
-                    events.push(json!({"type": "uber_ended", "medic": u16::from(info.user_id), "medigun": medigun}));
+                    events.push(Line::UberEnded(charge));
                 }
             }
             self.medic_charge.insert(ent, now);
@@ -867,56 +694,53 @@ impl Extractor {
             .map(|p| u32::from(p.entity))
     }
 
-    fn weapon_of(&self, player_ent: u32) -> Option<WeaponOut> {
+    fn weapon_of(&self, player_ent: u32) -> Option<out::Weapon> {
         let w = self.weapons.get(self.active_weapons.get(&player_ent)?)?;
-        Some(WeaponOut { item: w.item, clip: (w.clip >= 0).then_some(w.clip) })
+        Some(out::Weapon { item: w.item, clip: (w.clip >= 0).then_some(w.clip) })
     }
 
-    fn medigun_of(&self, player_ent: u32) -> Option<MedigunOut> {
+    fn medigun_of(&self, player_ent: u32) -> Option<out::Medigun> {
         let m = self.mediguns.values().find(|m| m.owner == Some(player_ent))?;
         let kind = medigun_kind(m.item);
-        Some(MedigunOut {
+        Some(out::Medigun {
             kind,
             releasing: m.releasing,
-            resist: (kind == "vaccinator").then(|| resist_name(m.resist)),
+            resist: (kind == MedigunKind::Vaccinator).then(|| resist(m.resist)),
             target: m.target.and_then(|t| self.user_of_entity(t)),
         })
     }
 
     /// A pyro's flamethrower while it is firing.
-    fn flames_of(&self, player_ent: u32) -> Option<FlamesOut> {
+    fn flames_of(&self, player_ent: u32) -> Option<out::Flames> {
         let f = self.flamethrowers.values().find(|f| f.owner == Some(player_ent) && matches!(f.state, 1 | 2))?;
-        Some(FlamesOut { crit: f.crit, hit: f.hit })
+        Some(out::Flames { crit: f.crit, hit: f.hit })
     }
 
-    /// Queues an event, stamped with the current tick unless it has its own.
-    fn push(&self, mut v: Value) {
-        if let Some(obj) = v.as_object_mut() {
-            obj.entry("tick").or_insert_with(|| json!(self.server_tick));
-        }
-        self.events.borrow_mut().push(v);
+    /// Queues an event.
+    fn push(&self, line: Line) {
+        self.events.borrow_mut().push(line);
     }
 
     /// Takes the queued events.
-    pub(crate) fn drain(&self) -> Vec<Value> {
+    pub(crate) fn drain(&self) -> Vec<Line> {
         self.events.take()
     }
 
-    fn user_pos(&self, user_id: u16) -> Value {
+    fn user_pos(&self, user_id: u16) -> Option<Position> {
         self.state()
             .players
             .iter()
             .find(|p| p.info.as_ref().is_some_and(|i| u16::from(i.user_id) == user_id))
-            .map_or(Value::Null, |p| vec3(p.position))
+            .map(|p| xyz(p.position))
     }
 
-    fn user_of_entity(&self, ent: u32) -> Option<u16> {
+    fn user_of_entity(&self, ent: u32) -> Option<PlayerId> {
         self.state()
             .players
             .iter()
             .find(|p| u32::from(p.entity) == ent)
             .and_then(|p| p.info.as_ref())
-            .map(|i| u16::from(i.user_id))
+            .map(|i| PlayerId(u16::from(i.user_id)))
     }
 
     /// One prop of `CTFObjectiveResource`. Its per point arrays come as elements named
@@ -997,195 +821,204 @@ impl Extractor {
         }
     }
 
-    fn opt_user(id: u16) -> Value {
-        if id == 0 { Value::Null } else { json!(id) }
+    fn opt_user(id: u16) -> Option<PlayerId> {
+        (id != 0).then_some(PlayerId(id))
     }
 
     #[expect(clippy::too_many_lines)]
     fn game_event(&mut self, event: &GameEvent) {
         self.count_score(event);
+        let tick = self.server_tick;
+        let user = PlayerId;
         match event {
             GameEvent::PlayerDeath(d) => {
                 // Building kills (sentries) report the building as inflictor; attacker stays the engineer.
-                self.push(json!({
-                    "type": "kill",
-                    "victim": d.user_id,
-                    "attacker": Self::opt_user(if d.attacker == d.user_id { 0 } else { d.attacker }),
-                    "assister": if d.assister == u16::MAX { Value::Null } else { Self::opt_user(d.assister) },
-                    "weapon": d.weapon.to_string(),
-                    "crit": d.damage_bits & DMG_CRIT != 0,
-                    "headshot": d.custom_kill == CUSTOM_KILL_HEADSHOT,
-                    "backstab": d.custom_kill == CUSTOM_KILL_BACKSTAB,
-                    "suicide": d.attacker == 0 || d.attacker == d.user_id,
-                    "dominated": d.death_flags & DEATH_DOMINATION != 0,
-                    "revenge": d.death_flags & DEATH_REVENGE != 0,
+                self.push(Line::Kill(out::Kill {
+                    tick,
+                    victim: user(d.user_id),
+                    attacker: Self::opt_user(if d.attacker == d.user_id { 0 } else { d.attacker }),
+                    assister: if d.assister == u16::MAX { None } else { Self::opt_user(d.assister) },
+                    weapon: d.weapon.to_string(),
+                    crit: d.damage_bits & DMG_CRIT != 0,
+                    headshot: d.custom_kill == CUSTOM_KILL_HEADSHOT,
+                    backstab: d.custom_kill == CUSTOM_KILL_BACKSTAB,
+                    suicide: d.attacker == 0 || d.attacker == d.user_id,
+                    dominated: d.death_flags & DEATH_DOMINATION != 0,
+                    revenge: d.death_flags & DEATH_REVENGE != 0,
                     // A spy's Dead Ringer: the victim is not actually dead.
-                    "feign": d.death_flags & DEATH_FEIGN != 0,
+                    feign: d.death_flags & DEATH_FEIGN != 0,
                     // The victim was blast jumping: an airshot for projectiles.
-                    "airborne": d.rocket_jump,
-                    "victim_pos": self.user_pos(d.user_id),
-                    "attacker_pos": self.user_pos(d.attacker),
+                    airborne: d.rocket_jump,
+                    victim_pos: self.user_pos(d.user_id),
+                    attacker_pos: self.user_pos(d.attacker),
                 }));
             }
-            GameEvent::PlayerHurt(h) => self.push(json!({
-                "type": "damage",
-                "victim": h.user_id,
-                "attacker": Self::opt_user(h.attacker),
-                "amount": h.damage_amount,
-                "health": h.health,
-                "crit": h.crit,
-                "minicrit": h.mini_crit,
-                "weapon_id": h.weapon_id,
+            GameEvent::PlayerHurt(h) => self.push(Line::Damage(out::Damage {
+                tick,
+                victim: user(h.user_id),
+                attacker: Self::opt_user(h.attacker),
+                amount: h.damage_amount,
+                health: h.health,
+                crit: h.crit,
+                minicrit: h.mini_crit,
+                weapon_id: h.weapon_id,
             })),
             GameEvent::PlayerSpawn(s) => {
                 if self.pending_spawns.len() < MAX_PENDING_SPAWNS {
-                    self.pending_spawns.push((
-                        s.user_id,
-                        json!({
-                            "type": "spawn",
-                            "player": s.user_id,
-                            "team": team_num(s.team),
-                            "class": class_num(s.class),
-                            "tick": self.server_tick,
-                        }),
-                    ));
+                    let spawn = out::Spawn {
+                        tick,
+                        player: user(s.user_id),
+                        team: team_num(s.team),
+                        class: class_num(s.class),
+                        pos: None,
+                    };
+                    self.pending_spawns.push((s.user_id, spawn));
                 }
             }
-            GameEvent::PlayerChargeDeployed(c) => self.push(json!({
-                "type": "uber",
-                "medic": c.user_id,
-                "target": Self::opt_user(c.target_id),
-                "medigun": self
+            GameEvent::PlayerChargeDeployed(c) => self.push(Line::Uber(out::Uber {
+                tick,
+                medic: user(c.user_id),
+                target: Self::opt_user(c.target_id),
+                medigun: self
                     .entity_of_user(c.user_id)
                     .and_then(|e| self.mediguns.values().find(|m| m.owner == Some(e)))
                     .map(|m| medigun_kind(m.item)),
             })),
-            GameEvent::PlayerTeam(t) => self.push(json!({
-                "type": "team_change",
-                "player": t.user_id,
-                "team": team_num(t.team),
-                "old_team": team_num(t.old_team),
-                "disconnect": t.disconnect,
+            GameEvent::PlayerTeam(t) => self.push(Line::TeamChange(out::TeamChange {
+                tick,
+                player: user(t.user_id),
+                team: team_num(t.team),
+                old_team: team_num(t.old_team),
+                disconnect: t.disconnect,
             })),
-            GameEvent::PlayerChangeClass(c) => self.push(json!({
-                "type": "class_change",
-                "player": c.user_id,
-                "class": class_num(c.class),
-            })),
-            GameEvent::PlayerDisconnect(d) => {
-                self.left.insert(d.user_id);
-                self.push(json!({
-                    "type": "player_leave",
-                    "player": d.user_id,
-                    "name": d.name.to_string(),
-                    "reason": d.reason.to_string(),
+            GameEvent::PlayerChangeClass(c) => {
+                self.push(Line::ClassChange(out::ClassChange {
+                    tick,
+                    player: user(c.user_id),
+                    class: class_num(c.class),
                 }));
             }
-            GameEvent::PlayerBuiltObject(b) => self.push(json!({
-                "type": "build",
-                "player": b.user_id,
-                "object": building_kind(b.object),
-                "id": b.index,
+            GameEvent::PlayerDisconnect(d) => {
+                self.left.insert(d.user_id);
+                self.push(Line::PlayerLeave(out::PlayerLeave {
+                    tick,
+                    player: user(d.user_id),
+                    name: d.name.to_string(),
+                    reason: d.reason.to_string(),
+                }));
+            }
+            GameEvent::PlayerBuiltObject(b) => self.push(Line::Build(out::ObjectChange {
+                tick,
+                player: user(b.user_id),
+                object: building_kind(b.object),
+                id: b.index,
             })),
-            GameEvent::PlayerUpgradedObject(u) => self.push(json!({
-                "type": "building_upgrade",
-                "player": u.user_id,
-                "object": building_kind(u.object),
-                "id": u.index,
+            GameEvent::PlayerUpgradedObject(u) => self.push(Line::BuildingUpgrade(out::ObjectChange {
+                tick,
+                player: user(u.user_id),
+                object: building_kind(u.object),
+                id: u.index,
             })),
-            GameEvent::BuildingHealed(b) => self.push(json!({
-                "type": "building_repair",
-                "id": b.building,
-                "amount": b.amount,
-            })),
+            GameEvent::BuildingHealed(b) => {
+                self.push(Line::BuildingRepair(out::BuildingRepair { tick, id: b.building, amount: b.amount }));
+            }
             GameEvent::TeamPlayTimerTimeAdded(t) => {
                 let idx = u32::from(t.timer);
                 let team = match self.koth_timers.iter().position(|k| *k == Some(idx)) {
-                    Some(0) => "red",
-                    Some(_) => "blue",
-                    None => self.timers.get(&idx).map_or("none", |t| team_num(t.team)),
+                    Some(0) => out::Team::Red,
+                    Some(_) => out::Team::Blue,
+                    None => self.timers.get(&idx).map_or(out::Team::Unassigned, |t| team_num(t.team)),
                 };
-                self.push(json!({"type": "time_added", "team": team, "seconds": t.seconds_added}));
+                self.push(Line::TimeAdded(out::TimeAdded { tick, team, seconds: t.seconds_added }));
             }
-            GameEvent::ObjectDestroyed(o) => self.push(json!({
-                "type": "building_destroyed",
-                "owner": o.user_id,
-                "attacker": Self::opt_user(o.attacker),
-                "object": building_kind(o.object_type),
-                "id": o.index,
-                "weapon": o.weapon.to_string(),
-                "was_building": o.was_building,
+            GameEvent::ObjectDestroyed(o) => self.push(Line::BuildingDestroyed(out::BuildingDestroyed {
+                tick,
+                owner: user(o.user_id),
+                attacker: Self::opt_user(o.attacker),
+                object: building_kind(o.object_type),
+                id: o.index,
+                weapon: o.weapon.to_string(),
+                was_building: o.was_building,
             })),
-            GameEvent::TeamPlayRoundStart(r) => self.push(json!({"type": "round_start", "full_reset": r.full_reset})),
-            GameEvent::TeamPlayRoundActive(_) => self.push(json!({"type": "round_active"})),
-            GameEvent::TeamPlaySetupFinished(_) => self.push(json!({"type": "setup_finished"})),
-            GameEvent::TeamPlayRoundWin(w) => self.push(json!({
-                "type": "round_win",
-                "team": team_num(w.team),
-                "reason": w.win_reason,
-                "round_time": w.round_time,
+            GameEvent::TeamPlayRoundStart(r) => {
+                self.push(Line::RoundStart(out::RoundStart { tick, full_reset: r.full_reset }));
+            }
+            GameEvent::TeamPlayRoundActive(_) => self.push(Line::RoundActive(out::Moment { tick })),
+            GameEvent::TeamPlaySetupFinished(_) => self.push(Line::SetupFinished(out::Moment { tick })),
+            GameEvent::TeamPlayRoundWin(w) => self.push(Line::RoundWin(out::RoundWin {
+                tick,
+                team: team_num(w.team),
+                reason: w.win_reason,
+                round_time: f64::from(w.round_time),
             })),
-            GameEvent::TeamPlayPointCaptured(c) => self.push(json!({
-                "type": "point_captured",
-                "point": c.cp,
-                "name": c.cp_name.to_string(),
-                "team": team_num(c.team),
-                "cappers": c.cappers.as_bytes().iter().map(|&e| self.user_of_entity(u32::from(e))).collect::<Vec<_>>(),
+            GameEvent::TeamPlayPointCaptured(c) => self.push(Line::PointCaptured(out::PointCaptured {
+                tick,
+                point: c.cp,
+                name: c.cp_name.to_string(),
+                team: team_num(c.team),
+                cappers: c.cappers.as_bytes().iter().map(|&e| self.user_of_entity(u32::from(e))).collect(),
             })),
             // `player` and `carrier` are entity indexes here, not user ids.
             GameEvent::TeamPlayFlagEvent(f) => {
                 let event = match f.event_type {
-                    1 => "pickup",
-                    2 => "captured",
-                    3 => "defended",
-                    4 => "dropped",
-                    5 => "returned",
+                    1 => out::FlagAction::Pickup,
+                    2 => out::FlagAction::Captured,
+                    3 => out::FlagAction::Defended,
+                    4 => out::FlagAction::Dropped,
+                    5 => out::FlagAction::Returned,
                     _ => return,
                 };
-                self.push(json!({
-                    "type": "flag",
-                    "event": event,
-                    "player": self.user_of_entity(u32::from(f.player)),
-                    "carrier": (f.carrier != 0).then(|| self.user_of_entity(u32::from(f.carrier))).flatten(),
-                    "team": team_num(f.team),
+                self.push(Line::Flag(out::Flag {
+                    tick,
+                    event,
+                    player: self.user_of_entity(u32::from(f.player)),
+                    carrier: (f.carrier != 0).then(|| self.user_of_entity(u32::from(f.carrier))).flatten(),
+                    team: team_num(f.team),
                 }));
             }
-            GameEvent::MedicDeath(m) => self.push(json!({
-                "type": "medic_death",
-                "medic": m.user_id,
-                "attacker": Self::opt_user(m.attacker),
-                "healing": m.healing,
+            GameEvent::MedicDeath(m) => self.push(Line::MedicDeath(out::MedicDeath {
+                tick,
+                medic: user(m.user_id),
+                attacker: Self::opt_user(m.attacker),
+                healing: m.healing,
                 // Died with a full charge: a dropped über.
-                "drop": m.charged,
+                drop: m.charged,
             })),
-            GameEvent::TeamPlayCaptureBlocked(b) => self.push(json!({
-                "type": "capture_blocked",
-                "point": b.cp,
-                "name": b.cp_name.to_string(),
-                "blocker": self.user_of_entity(u32::from(b.blocker)),
-                "victim": self.user_of_entity(u32::from(b.victim)),
+            GameEvent::TeamPlayCaptureBlocked(b) => self.push(Line::CaptureBlocked(out::CaptureBlocked {
+                tick,
+                point: b.cp,
+                name: b.cp_name.to_string(),
+                blocker: self.user_of_entity(u32::from(b.blocker)),
+                victim: self.user_of_entity(u32::from(b.victim)),
             })),
-            GameEvent::ObjectDeflected(o) => self.push(json!({
-                "type": "reflect",
-                "player": o.user_id,
-                "owner": Self::opt_user(o.owner_id),
-                "weapon_id": o.weapon_id,
+            GameEvent::ObjectDeflected(o) => self.push(Line::Reflect(out::Reflect {
+                tick,
+                player: user(o.user_id),
+                owner: Self::opt_user(o.owner_id),
+                weapon_id: o.weapon_id,
             })),
-            GameEvent::DeployBuffBanner(b) => self.push(json!({
-                "type": "banner",
-                "player": b.buff_owner,
-                "kind": match b.buff_type { 1 => "buff_banner", 2 => "battalions_backup", 3 => "concheror", _ => "other" },
+            GameEvent::DeployBuffBanner(b) => self.push(Line::Banner(out::Banner {
+                tick,
+                player: user(b.buff_owner),
+                kind: match b.buff_type {
+                    1 => BannerKind::BuffBanner,
+                    2 => BannerKind::BattalionsBackup,
+                    3 => BannerKind::Concheror,
+                    _ => BannerKind::Other,
+                },
             })),
-            GameEvent::TeamPlayRoundStalemate(_) => self.push(json!({"type": "stalemate"})),
-            GameEvent::TeamPlayOvertimeBegin(_) => self.push(json!({"type": "overtime"})),
-            GameEvent::TeamPlayWinPanel(w) => self.push(json!({
-                "type": "scores",
-                "red": w.red_score,
-                "blue": w.blue_score,
-                "game_over": w.game_over != 0,
+            GameEvent::TeamPlayRoundStalemate(_) => self.push(Line::Stalemate(out::Moment { tick })),
+            GameEvent::TeamPlayOvertimeBegin(_) => self.push(Line::Overtime(out::Moment { tick })),
+            GameEvent::TeamPlayWinPanel(w) => self.push(Line::Scores(out::Scores {
+                tick,
+                red: w.red_score,
+                blue: w.blue_score,
+                game_over: w.game_over != 0,
             })),
-            GameEvent::TeamPlayGameOver(g) => self.push(json!({"type": "game_over", "reason": g.reason.to_string()})),
-            GameEvent::TfGameOver(g) => self.push(json!({"type": "game_over", "reason": g.reason.to_string()})),
+            GameEvent::TeamPlayGameOver(g) => {
+                self.push(Line::GameOver(out::GameOver { tick, reason: g.reason.to_string() }));
+            }
+            GameEvent::TfGameOver(g) => self.push(Line::GameOver(out::GameOver { tick, reason: g.reason.to_string() })),
             _ => {
                 let class_of_user = |id: u16| {
                     let state = self.state();
@@ -1193,9 +1026,9 @@ impl Extractor {
                     p.map(|p| p.class)
                 };
                 let user_of_entity = |ent: u32| self.user_of_entity(ent);
-                let look = detail::Lookup { user_of_entity: &user_of_entity, class_of_user: &class_of_user };
-                if let Some(v) = detail::game_event(event, &look) {
-                    self.push(v);
+                let look = detail::Lookup { user_of_entity: &user_of_entity, class_of_user: &class_of_user, tick };
+                if let Some(line) = detail::game_event(event, &look) {
+                    self.push(line);
                 }
             }
         }
@@ -1207,6 +1040,7 @@ impl Extractor {
                 eprintln!("{class} {:?} = {:?}", p.identifier.names(), p.value);
             }
         }
+        let tick = self.server_tick;
         match class {
             "CTEFireBullets" => {
                 // m_iPlayer is the player's entity index minus one.
@@ -1214,26 +1048,26 @@ impl Extractor {
                     .ok()
                     .and_then(|i| i.checked_add(1))
                     .and_then(|ent| self.user_of_entity(ent));
-                self.push(json!({
-                    "type": "shot",
-                    "player": player,
-                    "origin": vec3(prop_vec(props, PROP_BULLETS_ORIGIN).unwrap_or_default()),
-                    "pitch": round1(prop_f(props, PROP_BULLETS_PITCH)),
-                    "yaw": round1(prop_f(props, PROP_BULLETS_YAW)),
-                    "weapon_id": prop_i(props, PROP_BULLETS_WEAPON),
-                    "crit": prop_i(props, PROP_BULLETS_CRIT) != 0,
+                self.push(Line::Shot(out::Shot {
+                    tick,
+                    player,
+                    origin: xyz(prop_vec(props, PROP_BULLETS_ORIGIN).unwrap_or_default()),
+                    pitch: round1(prop_f(props, PROP_BULLETS_PITCH)),
+                    yaw: round1(prop_f(props, PROP_BULLETS_YAW)),
+                    weapon_id: prop_i(props, PROP_BULLETS_WEAPON),
+                    crit: prop_i(props, PROP_BULLETS_CRIT) != 0,
                 }));
             }
             "CTETFExplosion" => {
-                self.push(json!({
-                    "type": "explosion",
-                    "origin": PROP_EXPLOSION_ORIGIN.map(|id| round1(prop_f(props, id))),
-                    "weapon_id": prop_i(props, PROP_EXPLOSION_WEAPON),
+                self.push(Line::Explosion(out::Explosion {
+                    tick,
+                    origin: PROP_EXPLOSION_ORIGIN.map(|id| round1(prop_f(props, id))),
+                    weapon_id: prop_i(props, PROP_EXPLOSION_WEAPON),
                 }));
             }
             _ => {
-                if let Some(v) = detail::temp_entity(class, props) {
-                    self.push(v);
+                if let Some(line) = detail::temp_entity(class, props, tick) {
+                    self.push(line);
                 }
             }
         }
@@ -1244,14 +1078,14 @@ impl Extractor {
         if !self.world_sent.get()
             && let Some(w) = &self.state().world
         {
-            let v = json!({"type": "world", "min": vec3(w.boundary_min), "max": vec3(w.boundary_max)});
+            let world = out::World { tick: self.server_tick, min: xyz(w.boundary_min), max: xyz(w.boundary_max) };
             self.world_sent.set(true);
-            self.push(v);
+            self.push(Line::World(world));
         }
     }
 
     #[expect(clippy::too_many_lines)]
-    pub(crate) fn snapshot(&self) -> Value {
+    pub(crate) fn snapshot(&self) -> out::Snapshot {
         let gs = self.state();
         let interval = self.interval();
         let players = gs
@@ -1275,13 +1109,13 @@ impl Extractor {
                     self.last_alive.get(&ent).copied()
                 };
                 let conds = self.conds.get(&ent);
-                Some(PlayerOut {
-                    id: u16::from(info.user_id),
+                Some(out::Player {
+                    id: PlayerId(u16::from(info.user_id)),
                     ent,
-                    name: &info.name,
-                    steamid: &info.steam_id,
-                    team: team_name(p.team),
-                    class: class_name(p.class),
+                    name: info.name.clone(),
+                    steamid: info.steam_id.clone(),
+                    team: team(p.team),
+                    class: class(p.class),
                     alive,
                     hp: p.health,
                     max_hp: p.max_health,
@@ -1290,7 +1124,7 @@ impl Extractor {
                     pitch: last.map(|l| round1(l.pitch)),
                     uber: p.charge,
                     ping: p.ping,
-                    conds: conds.map(cond_names).unwrap_or_default(),
+                    conds: conds.map(conditions).unwrap_or_default(),
                     ubered: conds.and_then(ubered),
                     medigun: (p.class == Class::Medic).then(|| self.medigun_of(ent)).flatten(),
                     weapon: self.weapon_of(ent),
@@ -1302,7 +1136,7 @@ impl Extractor {
                         .map(|st| st.respawn_at - self.server_tick as f32 * interval)
                         .map(round1)
                         .filter(|left| *left > 0.0),
-                    score: self.stats.get(&ent).map(|st| PlayerScoreOut {
+                    score: self.stats.get(&ent).map(|st| out::PlayerScore {
                         points: st.points,
                         kills: st.kills,
                         deaths: st.deaths,
@@ -1323,18 +1157,18 @@ impl Extractor {
         let projectiles = gs
             .projectiles
             .values()
-            .map(|pr| ProjectileOut {
+            .map(|pr| out::Projectile {
                 id: u32::from(pr.id),
                 kind: self.projectile_kind(pr),
                 yaw: round1(pr.rotation.y),
-                team: team_name(pr.team),
+                team: team(pr.team),
                 pos: xyz(pr.position),
                 owner: gs
                     .players
                     .iter()
                     .find(|p| pr.launcher.0 != 0 && p.weapons.contains(&pr.launcher))
                     .and_then(|p| p.info.as_ref())
-                    .map(|i| u16::from(i.user_id)),
+                    .map(|i| PlayerId(u16::from(i.user_id))),
                 crit: pr.critical,
             })
             .collect();
@@ -1344,10 +1178,10 @@ impl Extractor {
             .values()
             .filter(|b| !carried.contains(&u32::from(b.entity_id())))
             .map(|b| {
-                let mut out = BuildingOut {
+                let mut building = out::Building {
                     id: u32::from(b.entity_id()),
                     kind: building_kind_of(b),
-                    team: team_name(b.team()),
+                    team: team(b.team()),
                     level: b.level(),
                     hp: b.health(),
                     max_hp: b.max_health(),
@@ -1363,28 +1197,27 @@ impl Extractor {
                     attacking: None,
                 };
                 if let Building::Teleporter(t) = b {
-                    out.entrance = Some(t.is_entrance);
+                    building.entrance = Some(t.is_entrance);
                 }
                 if let Building::Sentry(s) = b {
-                    out.mini = Some(s.is_mini);
-                    out.building = Some(s.building);
+                    building.mini = Some(s.is_mini);
+                    building.building = Some(s.building);
                     if let Some(t) = self.sentries.get(&u32::from(b.entity_id())) {
-                        out.yaw = round1(t.yaw);
-                        out.aim = Some(round1(t.aim()));
-                        out.target = Some(t.enemy.and_then(|e| self.user_of_entity(e)));
-                        out.attacking = Some(t.state == SENTRY_STATE_ATTACKING);
+                        building.yaw = round1(t.yaw);
+                        building.aim = Some(round1(t.aim()));
+                        building.target = Some(t.enemy.and_then(|e| self.user_of_entity(e)));
+                        building.attacking = Some(t.state == SENTRY_STATE_ATTACKING);
                     }
                 }
-                out
+                building
             })
             .collect();
-        let mut objectives: Vec<ObjectiveOut> = self
+        let mut objectives: Vec<out::Objective> = self
             .control_points
             .iter()
             .take(self.num_control_points)
             .enumerate()
-            .map(|(index, cp)| ObjectiveOut::ControlPoint {
-                kind: "control_point",
+            .map(|(index, cp)| out::Objective::ControlPoint {
                 index,
                 pos: cp.pos.map(xyz),
                 owner: team_num(cp.owner),
@@ -1394,7 +1227,7 @@ impl Extractor {
                 cap_rate: (f64::from(cp.cap_rate()) * 1000.0).round() / 1000.0,
                 locked: cp.locked,
                 blocked: cp.blocked,
-                on_point: OnPoint { red: cp.members[2], blue: cp.members[3] },
+                on_point: out::OnPoint { red: cp.members[2], blue: cp.members[3] },
             })
             .collect();
         let carts: Vec<_> =
@@ -1411,8 +1244,7 @@ impl Extractor {
                 (None, None) if carts.len() == watchers.len() => (carts[i].0, carts[i].1.position),
                 _ => continue,
             };
-            objectives.push(ObjectiveOut::Cart {
-                kind: "cart",
+            objectives.push(out::Objective::Cart {
                 id,
                 pos: xyz(pos),
                 team: team_num(w.team),
@@ -1425,38 +1257,36 @@ impl Extractor {
         for (&id, f) in self.flags.iter().filter(|(_, f)| !f.disabled) {
             // A carried flag is attached to its carrier, its own origin relative to them.
             let holder = gs.players.iter().find(|p| f.status == 1 && Some(u32::from(p.entity)) == f.carrier);
-            objectives.push(ObjectiveOut::Flag {
-                kind: "flag",
+            objectives.push(out::Objective::Flag {
                 id,
                 pos: xyz(holder.map_or(f.pos, |p| p.position)),
                 team: team_num(f.team),
                 status: match f.status {
-                    1 => "carried",
-                    2 => "dropped",
-                    _ => "home",
+                    1 => out::FlagStatus::Carried,
+                    2 => out::FlagStatus::Dropped,
+                    _ => out::FlagStatus::Home,
                 },
-                carrier: holder.and_then(|p| p.info.as_ref()).map(|i| u16::from(i.user_id)),
+                carrier: holder.and_then(|p| p.info.as_ref()).map(|i| PlayerId(u16::from(i.user_id))),
                 returns_in: (f.status == 2 && f.reset_time > now).then(|| round1(f.reset_time - now)),
             });
         }
         let score = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.score);
         let captures = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.captures);
-        let snapshot = SnapshotOut {
-            kind: "snapshot",
+        out::Snapshot {
             tick: self.server_tick,
             players,
             projectiles,
             buildings,
             objectives,
-            round: self.round_state.name(),
+            round: self.round_state,
             round_time: self.round_time().map(round1),
             time_left: self.time_left().map(round1),
             win_limit: self.win_limit,
             match_time: (self.match_start > 0.0)
                 .then(|| round1((self.server_tick as f32 * interval - self.match_start).max(0.0))),
-            score: ScoreOut { red: score(Team::Red), blue: score(Team::Blue) },
+            score: out::Score { red: score(Team::Red), blue: score(Team::Blue) },
             captures: (!self.flags.is_empty())
-                .then(|| ScoreOut { red: captures(Team::Red), blue: captures(Team::Blue) }),
+                .then(|| out::Score { red: captures(Team::Red), blue: captures(Team::Blue) }),
             timers: self
                 .timers
                 .iter()
@@ -1464,10 +1294,10 @@ impl Extractor {
                 .filter(|(idx, t)| {
                     t.show && !t.disabled && (self.koth_timers == [None; 2] || self.koth_timers.contains(&Some(**idx)))
                 })
-                .map(|(idx, t)| TimerOut {
+                .map(|(idx, t)| out::Timer {
                     team: match self.koth_timers.iter().position(|k| *k == Some(*idx)) {
-                        Some(0) => "red",
-                        Some(_) => "blue",
+                        Some(0) => out::Team::Red,
+                        Some(_) => out::Team::Blue,
                         None => team_num(t.team),
                     },
                     remaining: round1(t.remaining_at(self.server_tick, interval)),
@@ -1475,194 +1305,8 @@ impl Extractor {
                     setup: t.setup,
                 })
                 .collect(),
-        };
-        serde_json::to_value(snapshot).expect("a snapshot has only string map keys")
+        }
     }
-}
-
-// The snapshot as it is written out (see the README's Snapshot section). Floats are
-// f64, as serde_json would otherwise print an f32 with its shortest f32 digits.
-
-#[derive(Serialize)]
-struct SnapshotOut<'a> {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    tick: u32,
-    players: Vec<PlayerOut<'a>>,
-    projectiles: Vec<ProjectileOut>,
-    buildings: Vec<BuildingOut>,
-    objectives: Vec<ObjectiveOut>,
-    round: &'static str,
-    /// Seconds since the round went live and since the match started (null if unknown).
-    round_time: Option<f64>,
-    time_left: Option<f64>,
-    win_limit: Option<i64>,
-    match_time: Option<f64>,
-    score: ScoreOut,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    captures: Option<ScoreOut>,
-    timers: Vec<TimerOut>,
-}
-
-#[derive(Serialize)]
-struct PlayerOut<'a> {
-    id: u16,
-    ent: u32,
-    name: &'a str,
-    steamid: &'a str,
-    team: &'static str,
-    class: &'static str,
-    alive: bool,
-    hp: u16,
-    max_hp: u16,
-    pos: Option<[f64; 3]>,
-    yaw: Option<f64>,
-    pitch: Option<f64>,
-    uber: u8,
-    ping: u16,
-    conds: Vec<&'static str>,
-    ubered: Option<&'static str>,
-    medigun: Option<MedigunOut>,
-    weapon: Option<WeaponOut>,
-    flames: Option<FlamesOut>,
-    /// Seconds until a dead player respawns, when the server has set it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    respawn: Option<f64>,
-    /// The scoreboard line (unchanged ones repeat, which compresses better than leaving them out).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    score: Option<PlayerScoreOut>,
-    /// An engineer carrying a building: its kind.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    carrying: Option<&'static str>,
-}
-
-#[derive(Serialize)]
-struct PlayerScoreOut {
-    points: i64,
-    kills: i64,
-    deaths: i64,
-    assists: i64,
-    damage: i64,
-    healing: i64,
-    dominations: i64,
-    streak: i64,
-}
-
-#[derive(Serialize)]
-struct WeaponOut {
-    item: i64,
-    clip: Option<i64>,
-}
-
-#[derive(Serialize)]
-struct FlamesOut {
-    crit: bool,
-    hit: bool,
-}
-
-#[derive(Serialize)]
-struct MedigunOut {
-    kind: &'static str,
-    releasing: bool,
-    resist: Option<&'static str>,
-    target: Option<u16>,
-}
-
-#[derive(Serialize)]
-struct ProjectileOut {
-    id: u32,
-    kind: &'static str,
-    yaw: f64,
-    team: &'static str,
-    pos: [f64; 3],
-    owner: Option<u16>,
-    crit: bool,
-}
-
-#[derive(Serialize)]
-struct BuildingOut {
-    id: u32,
-    kind: &'static str,
-    team: &'static str,
-    level: u8,
-    hp: u16,
-    max_hp: u16,
-    pos: [f64; 3],
-    yaw: f64,
-    builder: Option<u16>,
-    sapped: bool,
-    /// Teleporters only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    entrance: Option<bool>,
-    /// Sentries only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mini: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    building: Option<bool>,
-    /// Sentries whose turret has been seen.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    aim: Option<f64>,
-    /// Absent when unknown, null when the sentry has no target.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[expect(clippy::option_option)]
-    target: Option<Option<u16>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attacking: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct OnPoint {
-    red: u8,
-    blue: u8,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-enum ObjectiveOut {
-    ControlPoint {
-        kind: &'static str,
-        index: usize,
-        pos: Option<[f64; 3]>,
-        owner: &'static str,
-        capping_team: &'static str,
-        cap_progress: f64,
-        cap_rate: f64,
-        locked: bool,
-        blocked: bool,
-        on_point: OnPoint,
-    },
-    Cart {
-        kind: &'static str,
-        id: u32,
-        pos: [f64; 3],
-        team: &'static str,
-        progress: f64,
-        cappers: i64,
-        speed: i64,
-    },
-    Flag {
-        kind: &'static str,
-        id: u32,
-        pos: [f64; 3],
-        team: &'static str,
-        status: &'static str,
-        carrier: Option<u16>,
-        returns_in: Option<f64>,
-    },
-}
-
-#[derive(Serialize)]
-struct ScoreOut {
-    red: i64,
-    blue: i64,
-}
-
-#[derive(Serialize)]
-struct TimerOut {
-    team: &'static str,
-    remaining: f64,
-    paused: bool,
-    setup: bool,
 }
 
 /// Removes TF2 chat colour codes: \x01-\x06 select a colour, \x07 takes RRGGBB, \x08 RRGGBBAA.
@@ -1684,30 +1328,26 @@ pub(crate) fn strip_colors(text: &str) -> String {
     out.trim_end_matches('\n').to_string()
 }
 
-/// The coloured spans of a chat line with TF2 colour codes, or None without any: `{"c": colour,
-/// "t": text}`, where the colour is `RRGGBB`, `team` (the sender's team colour) or null (the
-/// default). \x03 is the team colour, \x04 and \x05 Valve's green ones.
-pub(crate) fn color_parts(text: &str) -> Option<Vec<Value>> {
+/// The coloured spans of a chat line with TF2 colour codes, or None without any. A span's colour
+/// is `RRGGBB`, `team` (the sender's team colour) or none (the default). \x03 is the team colour,
+/// \x04 and \x05 Valve's green ones.
+pub(crate) fn color_parts(text: &str) -> Option<Vec<ChatPart>> {
     if !text.chars().any(|c| ('\u{01}'..='\u{08}').contains(&c)) {
         return None;
     }
-    let mut parts: Vec<Value> = Vec::new();
-    let (mut color, mut run) = (Value::Null, String::new());
+    let mut parts = Vec::new();
+    let (mut color, mut run): (Option<String>, String) = (None, String::new());
     let mut chars = text.trim_end_matches('\n').chars();
     while let Some(c) = chars.next() {
         let next = match c {
             '\u{07}' | '\u{08}' => {
                 let hex: String = chars.by_ref().take(if c == '\u{07}' { 6 } else { 8 }).collect();
-                Some(
-                    hex.get(..6)
-                        .filter(|h| h.chars().all(|d| d.is_ascii_hexdigit()))
-                        .map_or(Value::Null, |h| json!(h.to_ascii_uppercase())),
-                )
+                Some(hex.get(..6).filter(|h| h.chars().all(|d| d.is_ascii_hexdigit())).map(str::to_ascii_uppercase))
             }
-            '\u{03}' => Some(json!("team")),
-            '\u{04}' => Some(json!("40FF40")),
-            '\u{05}' => Some(json!("99FF99")),
-            '\u{01}' | '\u{02}' | '\u{06}' => Some(Value::Null),
+            '\u{03}' => Some(Some("team".to_string())),
+            '\u{04}' => Some(Some("40FF40".to_string())),
+            '\u{05}' => Some(Some("99FF99".to_string())),
+            '\u{01}' | '\u{02}' | '\u{06}' => Some(None),
             _ => {
                 run.push(c);
                 None
@@ -1715,34 +1355,34 @@ pub(crate) fn color_parts(text: &str) -> Option<Vec<Value>> {
         };
         if let Some(next) = next {
             if !run.is_empty() {
-                parts.push(json!({"c": color, "t": std::mem::take(&mut run)}));
+                parts.push(ChatPart { c: color.clone(), t: std::mem::take(&mut run) });
             }
             color = next;
         }
     }
     if !run.is_empty() {
-        parts.push(json!({"c": color, "t": run}));
+        parts.push(ChatPart { c: color, t: run });
     }
     Some(parts)
 }
 
 // tf-demo-parser's `Building::class()` reports dispensers as sentries; go by the variant.
-fn building_kind_of(b: &Building) -> &'static str {
+fn building_kind_of(b: &Building) -> BuildingKind {
     match b {
-        Building::Sentry(_) => "sentry",
-        Building::Dispenser(_) => "dispenser",
-        Building::Teleporter(_) => "teleporter",
-        _ => "unknown",
+        Building::Sentry(_) => BuildingKind::Sentry,
+        Building::Dispenser(_) => BuildingKind::Dispenser,
+        Building::Teleporter(_) => BuildingKind::Teleporter,
+        _ => BuildingKind::Unknown,
     }
 }
 
-fn building_kind(object: u16) -> &'static str {
+fn building_kind(object: u16) -> BuildingKind {
     match object {
-        0 => "dispenser",
-        1 => "teleporter",
-        2 => "sentry",
-        3 => "sapper",
-        _ => "unknown",
+        0 => BuildingKind::Dispenser,
+        1 => BuildingKind::Teleporter,
+        2 => BuildingKind::Sentry,
+        3 => BuildingKind::Sapper,
+        _ => BuildingKind::Unknown,
     }
 }
 
@@ -1833,9 +1473,9 @@ impl Extractor {
             }
         }
         self.medic_changes();
-        for (user, mut ev) in std::mem::take(&mut self.pending_spawns) {
-            ev["pos"] = self.user_pos(user);
-            self.push(ev);
+        for (user, mut spawn) in std::mem::take(&mut self.pending_spawns) {
+            spawn.pos = self.user_pos(user);
+            self.push(Line::Spawn(spawn));
         }
     }
 
@@ -1914,14 +1554,14 @@ impl Extractor {
             "CTFTeam" => self.on_team(idx, props),
             "CTeamRoundTimer" => self.on_round_timer(idx, props),
             "CObjectSentrygun" => {
-                self.building_kinds.insert(idx, "sentry");
+                self.building_kinds.insert(idx, BuildingKind::Sentry);
                 self.on_sentry(idx, props);
             }
             "CObjectDispenser" => {
-                self.building_kinds.insert(idx, "dispenser");
+                self.building_kinds.insert(idx, BuildingKind::Dispenser);
             }
             "CObjectTeleporter" => {
-                self.building_kinds.insert(idx, "teleporter");
+                self.building_kinds.insert(idx, BuildingKind::Teleporter);
             }
             "CTeamTrainWatcher" => self.on_train_watcher(idx, props),
             "CCaptureFlag" => self.on_flag(idx, props),
@@ -2101,12 +1741,12 @@ impl Extractor {
         if fired > 0 {
             let target = sentry.enemy;
             let builder = self.gs.state.buildings.get(&EntityId::from(idx)).map(Building::builder);
-            self.push(json!({
-                "type": "sentry_shot",
-                "sentry": idx,
-                "builder": builder.and_then(|b| self.user_of_entity(builder_entity(b))),
-                "target": target.and_then(|t| self.user_of_entity(t)),
-                "shells": fired,
+            self.push(Line::SentryShot(out::SentryShot {
+                tick: self.server_tick,
+                sentry: idx,
+                builder: builder.and_then(|b| self.user_of_entity(builder_entity(b))),
+                target: target.and_then(|t| self.user_of_entity(t)),
+                shells: fired,
             }));
         }
     }
@@ -2149,7 +1789,7 @@ impl Extractor {
     fn on_game_rules(&mut self, props: impl Iterator<Item = SendProp>) {
         for p in props {
             match p.identifier {
-                PROP_ROUND_STATE => self.round_state = RoundState::from_raw(as_int(&p.value)),
+                PROP_ROUND_STATE => self.round_state = round_from_raw(as_int(&p.value)),
                 PROP_RED_KOTH_TIMER => self.koth_timers[0] = opt_handle(as_int(&p.value)),
                 PROP_BLUE_KOTH_TIMER => self.koth_timers[1] = opt_handle(as_int(&p.value)),
                 PROP_MAP_RESET_TIME => self.match_start = as_float(&p.value),
@@ -2192,7 +1832,7 @@ impl Extractor {
             && before != FLAMETHROWER_AIRBLAST
             && let Some(player) = f.owner.and_then(|o| self.user_of_entity(o))
         {
-            self.push(json!({"type": "airblast", "player": player}));
+            self.push(Line::Airblast(Airblast { tick: self.server_tick, player }));
         }
     }
 
@@ -2247,13 +1887,14 @@ impl Extractor {
         if info.interval_per_tick > 0.0 {
             self.tick_interval = Some(info.interval_per_tick);
         }
-        self.push(json!({
-            "type": "server",
-            "map": info.map,
-            "hostname": info.server_name,
-            "tick_interval": info.interval_per_tick,
-            "max_players": info.max_player_count,
-            "spawn_count": info.server_count,
+        self.push(Line::Server(out::Server {
+            tick: self.server_tick,
+            map: info.map.clone(),
+            hostname: info.server_name.clone(),
+            // Widened, as the output has always written it (0.014999999664723873, not 0.015).
+            tick_interval: f64::from(info.interval_per_tick),
+            max_players: info.max_player_count,
+            spawn_count: info.server_count,
         }));
     }
 
@@ -2264,32 +1905,36 @@ impl Extractor {
                 let mut d = u.data.clone();
                 let client: u8 = d.read().unwrap_or(0);
                 let text: String = d.read().unwrap_or_default();
-                self.push(json!({
-                    "type": "chat",
-                    "player": if client == 0 { None } else { self.user_of_entity(u32::from(client)) },
-                    "name": Value::Null,
-                    "text": strip_colors(&text),
-                    "parts": color_parts(&text),
-                    "kind": "SayText",
+                self.push(Line::Chat(out::Chat {
+                    tick: self.server_tick,
+                    player: if client == 0 { None } else { self.user_of_entity(u32::from(client)) },
+                    name: None,
+                    text: strip_colors(&text),
+                    parts: color_parts(&text),
+                    kind: ChatKind::SayText,
                 }));
             }
             UserMessage::SayText2(m) => {
                 let player = self.user_of_entity(u32::from(m.client));
-                self.push(json!({
-                    "type": "chat",
-                    "player": player,
-                    "name": m.from.as_ref().map(ToString::to_string),
-                    "text": strip_colors(m.text.as_ref()),
-                    "parts": color_parts(m.text.as_ref()),
-                    "kind": chat_kind(m.kind),
+                self.push(Line::Chat(out::Chat {
+                    tick: self.server_tick,
+                    player,
+                    name: m.from.as_ref().map(ToString::to_string),
+                    text: strip_colors(m.text.as_ref()),
+                    parts: color_parts(m.text.as_ref()),
+                    kind: chat_kind(m.kind),
                 }));
             }
             _ => {
                 let class_of_user = |_| None;
                 let user_of_entity = |ent: u32| self.user_of_entity(ent);
-                let look = detail::Lookup { user_of_entity: &user_of_entity, class_of_user: &class_of_user };
-                if let Some(v) = detail::user_message(message, &look) {
-                    self.push(v);
+                let look = detail::Lookup {
+                    user_of_entity: &user_of_entity,
+                    class_of_user: &class_of_user,
+                    tick: self.server_tick,
+                };
+                if let Some(line) = detail::user_message(message, &look) {
+                    self.push(line);
                 }
             }
         }
@@ -2377,13 +2022,19 @@ mod tests {
 
     #[test]
     fn chat_colour_codes_become_spans() {
+        let part = |c: Option<&str>, t: &str| ChatPart { c: c.map(str::to_string), t: t.to_string() };
         let parts = color_parts("\u{1}\u{1}[STV Stats] \u{7}99ccffBLU\u{1}'s medic \u{3}DROPPED!\n").unwrap();
         assert_eq!(
-            Value::Array(parts),
-            json!([{"c": null, "t": "[STV Stats] "}, {"c": "99CCFF", "t": "BLU"}, {"c": null, "t": "'s medic "}, {"c": "team", "t": "DROPPED!"}])
+            parts,
+            [
+                part(None, "[STV Stats] "),
+                part(Some("99CCFF"), "BLU"),
+                part(None, "'s medic "),
+                part(Some("team"), "DROPPED!")
+            ]
         );
         assert!(color_parts("plain text").is_none());
-        assert_eq!(color_parts("\u{8}FF0000AAred").unwrap(), [json!({"c": "FF0000", "t": "red"})]);
+        assert_eq!(color_parts("\u{8}FF0000AAred").unwrap(), [part(Some("FF0000"), "red")]);
     }
 
     #[test]
@@ -2447,9 +2098,9 @@ mod tests {
 
     #[test]
     fn team_numbers_out_of_range_are_no_team() {
-        assert_eq!(team_num(2u8), "red");
-        assert_eq!(team_num(3u16), "blue");
-        assert_eq!(team_num(258u16), "none", "not truncated to red");
+        assert_eq!(team_num(2u8), out::Team::Red);
+        assert_eq!(team_num(3u16), out::Team::Blue);
+        assert_eq!(team_num(258u16), out::Team::Unassigned, "not truncated to red");
         assert_eq!(team_byte(-1), 0);
     }
 
@@ -2477,50 +2128,52 @@ mod cond_tests {
 
     #[test]
     fn conditions_decode_by_bit() {
+        let names = |w: &[u32; 6]| conditions(w).into_iter().map(Condition::name).collect::<Vec<_>>();
         assert_eq!(
-            cond_names(&words(&[1, 4, 32, 64, 130])),
+            names(&words(&[1, 4, 32, 64, 130])),
             ["Zoomed", "Stealthed", "SpeedBoost", "StealthedUserBuff", "ImmuneToPushback"]
         );
         // m_nPlayerCond and _condition_bits both carry conditions 0-31.
         let mut w = [0u32; 6];
         w[1] = 1 << 5;
-        assert_eq!(cond_names(&w), ["Invulnerable"]);
+        assert_eq!(names(&w), ["Invulnerable"]);
     }
 
     #[test]
     fn uber_kinds_from_conditions() {
-        assert_eq!(ubered(&words(&[5])), Some("uber"));
-        assert_eq!(ubered(&words(&[5, 8])), Some("uber"));
+        assert_eq!(ubered(&words(&[5])), Some(Ubered::Uber));
+        assert_eq!(ubered(&words(&[5, 8])), Some(Ubered::Uber));
         assert_eq!(ubered(&words(&[8])), None, "a leftover fade-out flag is not an über");
-        assert_eq!(ubered(&words(&[11])), Some("kritz"));
-        assert_eq!(ubered(&words(&[28])), Some("quickfix"));
-        assert_eq!(ubered(&words(&[59])), Some("vaccinator_blast"));
+        assert_eq!(ubered(&words(&[11])), Some(Ubered::Kritz));
+        assert_eq!(ubered(&words(&[28])), Some(Ubered::Quickfix));
+        assert_eq!(ubered(&words(&[59])), Some(Ubered::VaccinatorBlast));
         assert_eq!(ubered(&words(&[23, 21])), None, "overheal is not an uber");
     }
 
     #[test]
     fn projectile_kinds() {
-        assert_eq!(projectile_kind(ProjectileType::Sticky, "CTFGrenadePipebombProjectile"), "Sticky");
-        assert_eq!(projectile_kind(ProjectileType::Unknown, "CTFProjectile_Arrow"), "Arrow");
-        assert_eq!(projectile_kind(ProjectileType::Unknown, "CTFProjectile_JarMilk"), "MadMilk");
-        assert_eq!(projectile_kind(ProjectileType::Unknown, "CTFProjectile_SpellBats"), "Unknown");
+        let kind = projectile_kind;
+        assert_eq!(kind(ProjectileType::Sticky, "CTFGrenadePipebombProjectile"), ProjectileKind::Sticky);
+        assert_eq!(kind(ProjectileType::Unknown, "CTFProjectile_Arrow"), ProjectileKind::Arrow);
+        assert_eq!(kind(ProjectileType::Unknown, "CTFProjectile_JarMilk"), ProjectileKind::MadMilk);
+        assert_eq!(kind(ProjectileType::Unknown, "CTFProjectile_SpellBats"), ProjectileKind::Unknown);
     }
 
     #[test]
     fn condition_names_match_the_parser() {
         for n in 0..=PlayerCondition::MAX as u8 {
-            let expected = PlayerCondition::try_from(n).map(|c| format!("{c:?}")).unwrap_or_default();
-            assert_eq!(COND_NAMES[usize::from(n)], expected, "condition {n}");
+            let expected = PlayerCondition::try_from(n).map(|c| format!("{c:?}")).ok();
+            assert_eq!(Condition::from_number(usize::from(n)).map(|c| c.name().to_string()), expected, "condition {n}");
         }
     }
 
     #[test]
     fn medigun_kinds() {
-        assert_eq!(medigun_kind(29), "medigun");
-        assert_eq!(medigun_kind(211), "medigun");
-        assert_eq!(medigun_kind(35), "kritzkrieg");
-        assert_eq!(medigun_kind(411), "quickfix");
-        assert_eq!(medigun_kind(998), "vaccinator");
+        assert_eq!(medigun_kind(29), MedigunKind::Medigun);
+        assert_eq!(medigun_kind(211), MedigunKind::Medigun);
+        assert_eq!(medigun_kind(35), MedigunKind::Kritzkrieg);
+        assert_eq!(medigun_kind(411), MedigunKind::Quickfix);
+        assert_eq!(medigun_kind(998), MedigunKind::Vaccinator);
     }
 }
 
@@ -2536,15 +2189,10 @@ mod koth_tests {
             x.timers.insert(idx, shown.clone());
         }
         x.koth_timers = [Some(6), Some(5)];
-        let teams: Vec<String> = x.snapshot()["timers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["team"].as_str().unwrap().to_string())
-            .collect();
-        assert_eq!(teams, ["blue", "red"]);
+        let teams: Vec<out::Team> = x.snapshot().timers.iter().map(|t| t.team).collect();
+        assert_eq!(teams, [out::Team::Blue, out::Team::Red]);
         x.koth_timers = [None; 2];
-        assert_eq!(x.snapshot()["timers"].as_array().unwrap().len(), 3);
+        assert_eq!(x.snapshot().timers.len(), 3);
     }
 }
 
@@ -2655,24 +2303,22 @@ mod medic_tests {
         x
     }
 
-    fn step(x: &mut Extractor, charge: u8, releasing: bool) -> Vec<String> {
+    fn step(x: &mut Extractor, charge: u8, releasing: bool) -> Vec<Line> {
         x.gs.state.players[0].charge = charge;
         x.mediguns.get_mut(&9).unwrap().releasing = releasing;
         x.medic_changes();
         x.drain()
-            .iter()
-            .map(|e| format!("{} {}", e["type"].as_str().unwrap(), e["medigun"].as_str().unwrap_or("?")))
-            .collect()
     }
 
     #[test]
     fn ready_once_when_full_and_ended_when_the_charge_runs_out() {
         let mut x = with_medic(90, false);
+        let charge = out::MedicCharge { tick: 0, medic: PlayerId(7), medigun: Some(MedigunKind::Kritzkrieg) };
         assert!(step(&mut x, 95, false).is_empty(), "the first sighting only records the state");
-        assert_eq!(step(&mut x, 100, false), ["uber_ready kritzkrieg"]);
+        assert_eq!(step(&mut x, 100, false), [Line::UberReady(charge.clone())]);
         assert!(step(&mut x, 100, false).is_empty(), "ready only once");
         assert!(step(&mut x, 98, true).is_empty(), "deploying is the game's own uber event");
-        assert_eq!(step(&mut x, 0, false), ["uber_ended kritzkrieg"]);
+        assert_eq!(step(&mut x, 0, false), [Line::UberEnded(charge)]);
     }
 }
 
@@ -2695,7 +2341,7 @@ mod timer_tests {
     use super::*;
 
     fn at(x: &mut Extractor, state: i64, transition: f32, seconds: f32) -> Option<f32> {
-        x.round_state = RoundState::from_raw(state);
+        x.round_state = round_from_raw(state);
         x.state_transition = transition;
         x.server_tick = (seconds / DEFAULT_TICK_INTERVAL).round() as u32;
         x.track_round_time();

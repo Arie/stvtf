@@ -23,21 +23,6 @@ pub enum Signon {
     ChangeLevel = 7,
 }
 
-impl Signon {
-    pub fn name(self) -> &'static str {
-        match self {
-            Signon::None => "none",
-            Signon::Challenge => "challenge",
-            Signon::Connected => "connected",
-            Signon::New => "new",
-            Signon::PreSpawn => "prespawn",
-            Signon::Spawn => "spawn",
-            Signon::Full => "full",
-            Signon::ChangeLevel => "changelevel",
-        }
-    }
-}
-
 const USERINFO: &[(&str, &str)] = &[
     ("cl_team", "default"),
     ("cl_class", "default"),

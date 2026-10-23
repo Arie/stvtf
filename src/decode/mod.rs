@@ -10,10 +10,10 @@ mod detail;
 mod extract;
 
 use crate::net::messages::Signon;
+use crate::output::Line;
 use anyhow::{Context, Result, bail};
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
 use extract::Extractor;
-use serde_json::Value;
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::generated::SignOnState;
@@ -82,7 +82,7 @@ pub(crate) struct Decoder<'a> {
     parse_errors: u64,
     /// The parser panicked on some input; its state can no longer be trusted.
     panicked: bool,
-    out: Vec<Value>,
+    out: Vec<Line>,
 }
 
 impl<'a> Decoder<'a> {
@@ -190,7 +190,7 @@ impl<'a> Decoder<'a> {
         if has_entities && snapshot_due(self.last_snapshot, now, every) {
             self.last_snapshot = Some(now);
             let snap = self.extractor().snapshot();
-            self.out.push(snap);
+            self.out.push(Line::Snapshot(snap));
         }
         life
     }
@@ -200,7 +200,7 @@ impl<'a> Decoder<'a> {
     }
 
     /// Takes the events and snapshots produced so far.
-    pub(crate) fn take_output(&mut self) -> Vec<Value> {
+    pub(crate) fn take_output(&mut self) -> Vec<Line> {
         std::mem::take(&mut self.out)
     }
 
@@ -245,7 +245,7 @@ fn snapshot_due(last: Option<u32>, now: u32, every: u32) -> bool {
 
 /// Runs a demo file through the same extractor a live session uses, passing events and
 /// snapshots (at most `snapshot_hz` per second; 0 disables them) to `emit`.
-pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Value)) -> Result<()> {
+pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Line)) -> Result<()> {
     let demo = tf_demo_parser::Demo::new(bytes);
     let parser = tf_demo_parser::DemoParser::new_with_analyser(demo.get_stream(), Extractor::default());
     let (_header, mut ticker) = parser.ticker()?;
@@ -253,13 +253,13 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Value)) ->
     while ticker.tick()? {
         let x = ticker.state();
         x.announce();
-        for v in x.drain() {
-            emit(v);
+        for line in x.drain() {
+            emit(line);
         }
         let now = x.server_tick;
         if now > 0 && snapshot_due(last, now, snapshot_every(snapshot_hz, x.interval())) {
             last = Some(now);
-            emit(x.snapshot());
+            emit(Line::Snapshot(x.snapshot()));
         }
     }
     Ok(())
