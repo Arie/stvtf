@@ -484,28 +484,40 @@ mod tests {
     use super::*;
     use tf_demo_parser::demo::message::usermessage::VoiceSubtitleMessage;
 
+    /// Runs `f` with lookups that know players by `user` and nobody's class, at tick 3.
+    fn with_lookup<R>(
+        user: impl Fn(u32) -> Option<PlayerId>,
+        raw_names: &RawNames,
+        f: impl FnOnce(&Lookup<'_>) -> R,
+    ) -> R {
+        let class = |_| None;
+        f(&Lookup { user_of_entity: &user, class_of_user: &class, tick: 3, raw_names })
+    }
+
     #[test]
     fn voice_commands_name_the_player() {
         let msg = UserMessage::VoiceSubtitle(VoiceSubtitleMessage { client: 5, menu: 0, item: 1 });
-        let user = |ent: u32| (ent == 5).then_some(PlayerId(12));
-        let class = |_| None;
-        let raw_names = RawNames::new();
-        let look = Lookup { user_of_entity: &user, class_of_user: &class, tick: 3, raw_names: &raw_names };
-        assert_eq!(
-            user_message(&msg, &look),
-            Some(Line::VoiceCommand(VoiceCommand { tick: 3, player: PlayerId(12), menu: 0, item: 1 }))
-        );
         let other = UserMessage::VoiceSubtitle(VoiceSubtitleMessage { client: 6, menu: 0, item: 1 });
-        assert_eq!(user_message(&other, &look), None);
+        with_lookup(
+            |ent| (ent == 5).then_some(PlayerId(12)),
+            &RawNames::new(),
+            |look| {
+                assert_eq!(
+                    user_message(&msg, look),
+                    Some(Line::VoiceCommand(VoiceCommand { tick: 3, player: PlayerId(12), menu: 0, item: 1 }))
+                );
+                assert_eq!(user_message(&other, look), None);
+            },
+        );
     }
 
     fn read_raw(kind: u8, bytes: &[u8]) -> Option<Line> {
-        let user = |ent: u32| (ent == 10).then_some(PlayerId(12));
-        let class = |_| None;
-        let raw_names = RawNames::new();
-        let look = Lookup { user_of_entity: &user, class_of_user: &class, tick: 3, raw_names: &raw_names };
         let buffer = bitbuffer::BitReadBuffer::new(bytes, LittleEndian);
-        raw_user_message(kind, &mut bitbuffer::BitReadStream::new(buffer), &look)
+        with_lookup(
+            |ent| (ent == 10).then_some(PlayerId(12)),
+            &RawNames::new(),
+            |look| raw_user_message(kind, &mut bitbuffer::BitReadStream::new(buffer), look),
+        )
     }
 
     fn hex(text: &str) -> Vec<u8> {
@@ -556,13 +568,10 @@ mod tests {
     }
 
     fn raw(names: &[&str], values: Vec<GameEventValue>) -> Option<Line> {
-        let user = |ent: u32| (ent < 10).then_some(PlayerId(100 + ent as u16));
-        let class = |_| None;
         let mut raw_names = RawNames::new();
         raw_names.insert("killed_ball_carrier".into(), names.iter().map(ToString::to_string).collect());
-        let look = Lookup { user_of_entity: &user, class_of_user: &class, tick: 3, raw_names: &raw_names };
         let event = RawGameEvent { event_type: GameEventType::Unknown("killed_ball_carrier".into()), values };
-        raw_event(&event, &look)
+        with_lookup(|ent| (ent < 10).then_some(PlayerId(100 + ent as u16)), &raw_names, |look| raw_event(&event, look))
     }
 
     #[test]
