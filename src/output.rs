@@ -330,12 +330,33 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Optio
     T::deserialize(d).map(Some)
 }
 
-/// One line of output.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[expect(missing_docs, reason = "each variant is documented on the type it holds")]
-pub enum Line {
-    Status(Status),
+/// The `Line` enum and its `tick()`: every line but a status carries the tick it happened at, so
+/// listing a variant once gives both.
+macro_rules! lines {
+    ($($variant:ident($payload:ty),)*) => {
+        /// One line of output.
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        #[expect(missing_docs, reason = "each variant is documented on the type it holds")]
+        pub enum Line {
+            Status(Status),
+            $($variant($payload),)*
+        }
+
+        impl Line {
+            /// The server tick of an event or snapshot (66.67 per second, restarting at each map
+            /// load); none for a status.
+            pub fn tick(&self) -> Option<u32> {
+                match self {
+                    Line::Status(_) => None,
+                    $(Line::$variant(line) => Some(line.tick),)*
+                }
+            }
+        }
+    };
+}
+
+lines! {
     Server(Server),
     World(World),
     Snapshot(Snapshot),
@@ -418,93 +439,6 @@ pub enum Line {
 }
 
 impl Line {
-    /// The server tick of an event or snapshot (66.67 per second, restarting at each map load);
-    /// none for a status.
-    pub fn tick(&self) -> Option<u32> {
-        match self {
-            Line::Status(_) => None,
-            Line::Server(Server { tick, .. })
-            | Line::World(World { tick, .. })
-            | Line::Snapshot(Snapshot { tick, .. })
-            | Line::Kill(Kill { tick, .. })
-            | Line::Damage(Damage { tick, .. })
-            | Line::Spawn(Spawn { tick, .. })
-            | Line::Uber(Uber { tick, .. })
-            | Line::UberReady(MedicCharge { tick, .. })
-            | Line::UberEnded(MedicCharge { tick, .. })
-            | Line::TeamChange(TeamChange { tick, .. })
-            | Line::ClassChange(ClassChange { tick, .. })
-            | Line::PlayerLeave(PlayerLeave { tick, .. })
-            | Line::Build(ObjectChange { tick, .. })
-            | Line::BuildingUpgrade(ObjectChange { tick, .. })
-            | Line::BuildingRepair(BuildingRepair { tick, .. })
-            | Line::BuildingDestroyed(BuildingDestroyed { tick, .. })
-            | Line::TimeAdded(TimeAdded { tick, .. })
-            | Line::RoundStart(RoundStart { tick, .. })
-            | Line::RoundActive(Moment { tick })
-            | Line::SetupFinished(Moment { tick })
-            | Line::RoundWin(RoundWin { tick, .. })
-            | Line::Stalemate(Moment { tick })
-            | Line::Overtime(Moment { tick })
-            | Line::Scores(Scores { tick, .. })
-            | Line::GameOver(GameOver { tick, .. })
-            | Line::PointCaptured(PointCaptured { tick, .. })
-            | Line::CaptureBlocked(CaptureBlocked { tick, .. })
-            | Line::CaptureBroken(CaptureBroken { tick, .. })
-            | Line::KilledCapper(KilledCapper { tick, .. })
-            | Line::Flag(Flag { tick, .. })
-            | Line::MedicDeath(MedicDeath { tick, .. })
-            | Line::MedicDefended(MedicDefended { tick, .. })
-            | Line::Reflect(Reflect { tick, .. })
-            | Line::Banner(Banner { tick, .. })
-            | Line::Shot(Shot { tick, .. })
-            | Line::Explosion(Explosion { tick, .. })
-            | Line::SentryShot(SentryShot { tick, .. })
-            | Line::Airblast(Airblast { tick, .. })
-            | Line::Chat(Chat { tick, .. })
-            | Line::Heal(Heal { tick, .. })
-            | Line::BlastJump(BlastJump { tick, .. })
-            | Line::Pickup(Pickup { tick, .. })
-            | Line::Impact(Impact { tick, .. })
-            | Line::Mark(Mark { tick, .. })
-            | Line::VoteOptions(VoteOptions { tick, .. })
-            | Line::VoteCast(VoteCast { tick, .. })
-            | Line::Tournament(Tournament { tick, .. })
-            | Line::Announcer(Announcer { tick, .. })
-            | Line::TimeRemaining(TimeRemaining { tick, .. })
-            | Line::VoiceCommand(VoiceCommand { tick, .. })
-            | Line::ServerText(ServerText { tick, .. })
-            | Line::PassGet(PassGet { tick, .. })
-            | Line::PassFree(PassFree { tick, .. })
-            | Line::PassCaught(PassCaught { tick, .. })
-            | Line::PassScore(PassScore { tick, .. })
-            | Line::PassStolen(PassStolen { tick, .. })
-            | Line::PassBlocked(PassBlocked { tick, .. })
-            | Line::BallCarrierKilled(BallCarrierKilled { tick, .. })
-            | Line::RobotKilled(RobotKilled { tick, .. })
-            | Line::PointsScored(PointsScored { tick, .. })
-            | Line::SpecialScore(PlayerMoment { tick, .. })
-            | Line::TeamLeaderKilled(TeamLeaderKilled { tick, .. })
-            | Line::RocketOpen(RocketOpen { tick, .. })
-            | Line::RoundSelected(RoundSelected { tick, .. })
-            | Line::Teleported(Teleported { tick, .. })
-            | Line::Stun(Stun { tick, .. })
-            | Line::Sapped(Sapped { tick, .. })
-            | Line::BuildingRemoved(ObjectChange { tick, .. })
-            | Line::BuildingDetonated(ObjectChange { tick, .. })
-            | Line::DetStickies(PlayerMoment { tick, .. })
-            | Line::CaptureStarted(CaptureStarted { tick, .. })
-            | Line::PointLocked(PointLocked { tick, .. })
-            | Line::NpcDamage(NpcDamage { tick, .. })
-            | Line::HudText(HudText { tick, .. })
-            | Line::Hint(Hint { tick, .. })
-            | Line::VoteStarted(VoteStarted { tick, .. })
-            | Line::VotePassed(VotePassed { tick, .. })
-            | Line::VoteFailed(VoteFailed { tick, .. })
-            | Line::Upgrade(Upgrade { tick, .. }) => Some(*tick),
-        }
-    }
-
     /// Every player an event names (not those in a snapshot), in field order.
     pub fn players(&self) -> impl Iterator<Item = PlayerId> + '_ {
         let one = |id: PlayerId| [Some(id), None, None];

@@ -182,44 +182,35 @@ const PROP_BULLETS_CRIT: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_bCr
 const PROP_EXPLOSION_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TETFExplosion");
 const PROP_EXPLOSION_WEAPON: SendPropIdentifier = prop_id("DT_TETFExplosion", "m_iWeaponID");
 
-#[derive(Default)]
-pub(crate) struct Extractor {
-    gs: GameStateAnalyser,
-    /// Latest server tick seen in a `net_Tick`.
-    pub(crate) server_tick: u32,
-    events: RefCell<Vec<Line>>,
-    world_sent: Cell<bool>,
-    control_points: Vec<ControlPoint>,
-    num_control_points: usize,
+/// The per-entity maps, declared once so that forgetting an entity forgets it in each of them.
+macro_rules! per_entity {
+    ($($(#[$doc:meta])* $field:ident: $map:ty,)*) => {
+        #[derive(Default)]
+        struct Entities {
+            $($(#[$doc])* $field: $map,)*
+        }
+
+        impl Entities {
+            fn forget(&mut self, idx: u32) {
+                $(self.$field.remove(&idx);)*
+            }
+        }
+    };
+}
+
+per_entity! {
     /// Condition words per player entity: `m_nPlayerCond`, _`condition_bits`, `m_nPlayerCondEx..Ex4`.
     /// (tf-demo-parser 0.6.4's own `conditions()` decodes these wrongly.)
     conds: HashMap<u32, [u32; COND_WORDS]>,
     mediguns: HashMap<u32, Medigun>,
     flamethrowers: HashMap<u32, Flamethrower>,
     weapons: HashMap<u32, Weapon>,
-    /// Per server class id: whether its send table has an item definition index.
-    weapon_classes: Vec<Option<bool>>,
     active_weapons: HashMap<u32, u32>,
-    class_names: Vec<String>,
-    /// Seconds per tick from `ServerInfo`.
-    tick_interval: Option<f32>,
     teams: BTreeMap<u32, TeamScore>,
     timers: BTreeMap<u32, RoundTimer>,
-    /// King of the hill: each team's own timer, which runs while that team holds the point.
-    koth_timers: [Option<u32>; 2],
-    round_state: Round,
-    /// Server time the match started (`m_flMapResetTime`) and the current round went live.
-    match_start: f32,
-    round_live_since: Option<f32>,
-    /// When the live round ended (win, stalemate): its time stops there.
-    round_ended_at: Option<f32>,
-    state_transition: f32,
     /// Where each player entity last was while alive: a dead player's own position is
     /// their spectator camera, which follows teammates.
     last_alive: HashMap<u32, Pose>,
-    /// `mp_timelimit` (minutes) and `mp_winlimit`, replicated to clients as convars.
-    time_limit: Option<f32>,
-    win_limit: Option<i64>,
     /// Per medic entity, to report changes.
     medic_charge: HashMap<u32, Charge>,
     /// Payload: tf-demo-parser takes every `func_tracktrain` for a cart, but only a payload
@@ -232,6 +223,34 @@ pub(crate) struct Extractor {
     sentries: HashMap<u32, Sentry>,
     /// CTF flags and the bball ball (`item_teamflag`), by entity.
     flags: BTreeMap<u32, Flag>,
+}
+
+#[derive(Default)]
+pub(crate) struct Extractor {
+    gs: GameStateAnalyser,
+    /// Latest server tick seen in a `net_Tick`.
+    pub(crate) server_tick: u32,
+    events: RefCell<Vec<Line>>,
+    world_sent: Cell<bool>,
+    control_points: Vec<ControlPoint>,
+    num_control_points: usize,
+    /// Per server class id: whether its send table has an item definition index.
+    weapon_classes: Vec<Option<bool>>,
+    class_names: Vec<String>,
+    /// Seconds per tick from `ServerInfo`.
+    tick_interval: Option<f32>,
+    /// King of the hill: each team's own timer, which runs while that team holds the point.
+    koth_timers: [Option<u32>; 2],
+    round_state: Round,
+    /// Server time the match started (`m_flMapResetTime`) and the current round went live.
+    match_start: f32,
+    round_live_since: Option<f32>,
+    /// When the live round ended (win, stalemate): its time stops there.
+    round_ended_at: Option<f32>,
+    state_transition: f32,
+    /// `mp_timelimit` (minutes) and `mp_winlimit`, replicated to clients as convars.
+    time_limit: Option<f32>,
+    win_limit: Option<i64>,
     /// `player_spawn` arrives before the player's new position: held until the next entity update.
     pending_spawns: Vec<(u16, out::Spawn)>,
     /// The entities in each recent frame, by server tick, to find the ones a delta drops silently.
@@ -245,6 +264,8 @@ pub(crate) struct Extractor {
     carried: HashMap<u32, u32>,
     /// What each building entity is: a carried building is not sent while it is carried.
     building_kinds: HashMap<u32, BuildingKind>,
+    /// What is known about each entity, forgotten together when it goes.
+    ents: Entities,
     /// Pass time, robot and player destruction, Mann vs. Machine.
     modes: Modes,
     raw_names: detail::RawNames,
@@ -681,12 +702,12 @@ impl Extractor {
             let ent = u32::from(p.entity);
             let Some(info) = p.info.as_ref() else { continue };
             if p.class != Class::Medic || p.state != PlayerState::Alive {
-                self.medic_charge.remove(&ent);
+                self.ents.medic_charge.remove(&ent);
                 continue;
             }
             let gun = self.medigun_owned_by(ent);
             let now = Charge { charge: p.charge, releasing: gun.is_some_and(|m| m.releasing) };
-            if let Some(&before) = self.medic_charge.get(&ent) {
+            if let Some(&before) = self.ents.medic_charge.get(&ent) {
                 let charge = out::MedicCharge {
                     tick: self.server_tick,
                     medic: PlayerId(u16::from(info.user_id)),
@@ -699,7 +720,7 @@ impl Extractor {
                     events.push(Line::UberEnded(charge));
                 }
             }
-            self.medic_charge.insert(ent, now);
+            self.ents.medic_charge.insert(ent, now);
         }
         for e in events {
             self.push(e);
@@ -707,20 +728,7 @@ impl Extractor {
     }
 
     fn forget_entity(&mut self, idx: u32) {
-        self.last_alive.remove(&idx);
-        self.conds.remove(&idx);
-        self.mediguns.remove(&idx);
-        self.flamethrowers.remove(&idx);
-        self.weapons.remove(&idx);
-        self.active_weapons.remove(&idx);
-        self.teams.remove(&idx);
-        self.timers.remove(&idx);
-        self.train_watchers.remove(&idx);
-        self.parents.remove(&idx);
-        self.prop_origins.remove(&idx);
-        self.sentries.remove(&idx);
-        self.medic_charge.remove(&idx);
-        self.flags.remove(&idx);
+        self.ents.forget(idx);
         self.modes.forget(idx);
     }
 
@@ -737,7 +745,7 @@ impl Extractor {
     }
 
     fn medigun_owned_by(&self, player_ent: u32) -> Option<&Medigun> {
-        self.mediguns.values().find(|m| m.owner == Some(player_ent))
+        self.ents.mediguns.values().find(|m| m.owner == Some(player_ent))
     }
 
     /// The team of a round timer: on king of the hill each team has its own.
@@ -745,7 +753,7 @@ impl Extractor {
         match self.koth_timers.iter().position(|k| *k == Some(idx)) {
             Some(RED_SLOT) => out::Team::Red,
             Some(_) => out::Team::Blue,
-            None => self.timers.get(&idx).map_or(out::Team::Unassigned, |t| team_num(t.team)),
+            None => self.ents.timers.get(&idx).map_or(out::Team::Unassigned, |t| team_num(t.team)),
         }
     }
 
@@ -773,7 +781,7 @@ impl Extractor {
     }
 
     fn weapon_of(&self, player_ent: u32) -> Option<out::Weapon> {
-        let w = self.weapons.get(self.active_weapons.get(&player_ent)?)?;
+        let w = self.ents.weapons.get(self.ents.active_weapons.get(&player_ent)?)?;
         Some(out::Weapon { item: w.item, clip: (w.clip >= 0).then_some(w.clip) })
     }
 
@@ -790,10 +798,10 @@ impl Extractor {
 
     /// A pyro's flamethrower while it is firing.
     fn flames_of(&self, player_ent: u32) -> Option<out::Flames> {
-        let f = self
-            .flamethrowers
-            .values()
-            .find(|f| f.owner == Some(player_ent) && matches!(f.state, FLAMETHROWER_STARTING | FLAMETHROWER_FIRING))?;
+        let f =
+            self.ents.flamethrowers.values().find(|f| {
+                f.owner == Some(player_ent) && matches!(f.state, FLAMETHROWER_STARTING | FLAMETHROWER_FIRING)
+            })?;
         Some(out::Flames { crit: f.crit, hit: f.hit })
     }
 
@@ -1135,7 +1143,8 @@ impl Extractor {
         objectives.extend(self.carts());
         objectives.extend(self.flag_objectives());
         objectives.extend(self.modes.objectives(&player_at));
-        let team_score = |team: Team| self.teams.values().find(|t| t.team == team as u8).copied().unwrap_or_default();
+        let team_score =
+            |team: Team| self.ents.teams.values().find(|t| t.team == team as u8).copied().unwrap_or_default();
         let (red, blue) = (team_score(Team::Red), team_score(Team::Blue));
         out::Snapshot {
             tick: self.server_tick,
@@ -1149,11 +1158,11 @@ impl Extractor {
             win_limit: self.win_limit,
             match_time: (self.match_start > 0.0).then(|| round1((self.server_time() - self.match_start).max(0.0))),
             score: out::Score { red: red.score, blue: blue.score },
-            captures: (!self.flags.is_empty() || self.modes.passtime())
+            captures: (!self.ents.flags.is_empty() || self.modes.passtime())
                 .then_some(out::Score { red: red.captures, blue: blue.captures }),
             points: self.modes.points(&player_at),
             mvm: self.modes.mvm(),
-            timers: self.timers(),
+            timers: self.hud_timers(),
         }
     }
 
@@ -1170,8 +1179,8 @@ impl Extractor {
         let ent = u32::from(p.entity);
         let alive = alive(p);
         // Dead: where they died, or nothing if that happened before we connected.
-        let last = if alive { Some(Pose::of(p)) } else { self.last_alive.get(&ent).copied() };
-        let conds = self.conds.get(&ent);
+        let last = if alive { Some(Pose::of(p)) } else { self.ents.last_alive.get(&ent).copied() };
+        let conds = self.ents.conds.get(&ent);
         let stats = self.stats.get(&ent);
         Some(out::Player {
             id: PlayerId(u16::from(info.user_id)),
@@ -1262,7 +1271,7 @@ impl Extractor {
         if let Building::Sentry(s) = b {
             building.mini = Some(s.is_mini);
             building.building = Some(s.building);
-            if let Some(t) = self.sentries.get(&u32::from(b.entity_id())) {
+            if let Some(t) = self.ents.sentries.get(&u32::from(b.entity_id())) {
                 building.yaw = round1(t.yaw);
                 building.aim = Some(round1(t.aim()));
                 building.target = Some(t.enemy.and_then(|e| self.user_of_entity(e)));
@@ -1303,14 +1312,15 @@ impl Extractor {
         // A payload's watcher belongs to the pushing team; maps use watchers of no team for other
         // things on a track (pd_watergate's UFO).
         let mut watchers: Vec<&TrainWatcher> =
-            self.train_watchers.values().filter(|w| w.team == TEAM_RED || w.team == TEAM_BLUE).collect();
+            self.ents.train_watchers.values().filter(|w| w.team == TEAM_RED || w.team == TEAM_BLUE).collect();
         watchers.sort_by_key(|w| w.team);
         let mut out = Vec::new();
         for (i, w) in watchers.iter().enumerate() {
             // The cart model either rides on a func_tracktrain (its moveparent) or is a free
             // physics prop with its own position; without either, pair trains by order.
-            let on_train = w.glow.and_then(|g| self.parents.get(&g)).and_then(|t| carts.iter().find(|(id, _)| id == t));
-            let (id, pos) = match (on_train, w.glow.and_then(|g| self.prop_origins.get(&g).map(|p| (g, *p)))) {
+            let on_train =
+                w.glow.and_then(|g| self.ents.parents.get(&g)).and_then(|t| carts.iter().find(|(id, _)| id == t));
+            let (id, pos) = match (on_train, w.glow.and_then(|g| self.ents.prop_origins.get(&g).map(|p| (g, *p)))) {
                 (Some((id, c)), _) => (*id, c.position),
                 (None, Some(free)) => free,
                 (None, None) if carts.len() == watchers.len() => (carts[i].0, carts[i].1.position),
@@ -1331,7 +1341,8 @@ impl Extractor {
     /// The flags in play, at their carriers while carried.
     fn flag_objectives(&self) -> Vec<out::Objective> {
         let now = self.server_time();
-        self.flags
+        self.ents
+            .flags
             .iter()
             .filter(|(_, f)| !f.disabled)
             .filter_map(|(&id, f)| {
@@ -1357,9 +1368,10 @@ impl Extractor {
 
     /// The round timers the HUD shows. On king of the hill those are only the teams' own;
     /// others are left from earlier rounds.
-    fn timers(&self) -> Vec<out::Timer> {
+    fn hud_timers(&self) -> Vec<out::Timer> {
         let koth = self.koth_timers != [None; 2];
-        self.timers
+        self.ents
+            .timers
             .iter()
             .filter(|(idx, t)| t.show && !t.disabled && (!koth || self.koth_timers.contains(&Some(**idx))))
             .map(|(idx, t)| out::Timer {
@@ -1507,7 +1519,7 @@ impl Extractor {
         }
         // Flags (player destruction's pickups) and the game modes' entities go the same way.
         let gone: Vec<u32> =
-            self.flags.keys().copied().chain(self.modes.ids()).filter(|id| !frame.contains(id)).collect();
+            self.ents.flags.keys().copied().chain(self.modes.ids()).filter(|id| !frame.contains(id)).collect();
         for id in gone {
             self.forget_entity(id);
         }
@@ -1555,7 +1567,7 @@ impl Extractor {
         self.track_frame(pe);
         for p in &self.gs.state.players {
             if alive(p) {
-                self.last_alive.insert(u32::from(p.entity), Pose::of(p));
+                self.ents.last_alive.insert(u32::from(p.entity), Pose::of(p));
             }
         }
         self.medic_changes();
@@ -1582,15 +1594,15 @@ impl Extractor {
             e.props.iter().find(|p| p.identifier.names().is_some_and(|(_, n)| n.as_str() == "moveparent"))
         {
             match opt_handle(as_int(&parent.value)) {
-                None => self.parents.remove(&idx),
-                Some(p) => self.parents.insert(idx, p),
+                None => self.ents.parents.remove(&idx),
+                Some(p) => self.ents.parents.insert(idx, p),
             };
         }
         let class = state.server_classes.get(usize::from(e.server_class));
         if matches!(class.map(|c| c.name.as_str()), Some("CPhysicsProp" | "CDynamicProp" | "CPhysicsPropMultiplayer"))
             && let Some(v) = prop_vec(&e.props, PROP_ORIGIN)
         {
-            self.prop_origins.insert(idx, v);
+            self.ents.prop_origins.insert(idx, v);
         }
         // A slot taken over by an entity of another class (an implicit delete); tf-demo-parser
         // keeps the old projectile or building, and applied this update to the old projectile:
@@ -1607,8 +1619,8 @@ impl Extractor {
         if e.update_type == UpdateType::Enter {
             // A slot reused without a delete: what was there is gone (an Enter carries the full state).
             self.modes.forget(idx);
-            self.flags.remove(&idx);
-            self.sentries.remove(&idx);
+            self.ents.flags.remove(&idx);
+            self.ents.sentries.remove(&idx);
             let same = |b: &Building| {
                 matches!(
                     (b, class.name.as_str()),
@@ -1630,7 +1642,7 @@ impl Extractor {
             // The baseline only matters on Enter; later updates are deltas.
             if e.update_type == UpdateType::Enter {
                 // A reused slot may have had no Delete.
-                self.weapons.remove(&idx);
+                self.ents.weapons.remove(&idx);
                 self.on_weapon(idx, e.props(state).map(|p| (p.identifier, as_int(&p.value))));
             } else {
                 self.on_weapon(idx, e.props.iter().map(|p| (p.identifier, as_int(&p.value))));
@@ -1690,19 +1702,19 @@ impl Extractor {
     }
 
     fn weapon(&mut self, idx: u32) -> &mut Weapon {
-        self.weapons.entry(idx).or_insert(Weapon { item: 0, clip: NO_CLIP })
+        self.ents.weapons.entry(idx).or_insert(Weapon { item: 0, clip: NO_CLIP })
     }
 
     fn on_player(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        let words = self.conds.entry(idx).or_default();
+        let words = self.ents.conds.entry(idx).or_default();
         for p in props {
             if let Some(i) = PROP_CONDS.iter().position(|id| *id == p.identifier) {
                 // A bit field: the bits are wanted, not the number.
                 words[i] = as_int(&p.value) as u32;
             } else if p.identifier == PROP_ACTIVE_WEAPON {
                 match opt_handle(as_int(&p.value)) {
-                    Some(w) => self.active_weapons.insert(idx, w),
-                    None => self.active_weapons.remove(&idx),
+                    Some(w) => self.ents.active_weapons.insert(idx, w),
+                    None => self.ents.active_weapons.remove(&idx),
                 };
             } else if p.identifier == PROP_CARRYING {
                 self.stats.entry(idx).or_default().carrying = as_int(&p.value) != 0;
@@ -1773,7 +1785,7 @@ impl Extractor {
     }
 
     fn on_team(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        let t = self.teams.entry(idx).or_default();
+        let t = self.ents.teams.entry(idx).or_default();
         for p in props {
             match p.identifier {
                 PROP_TEAM_NUM | PROP_TEAM_TEAM_NUM => t.team = team_byte(as_int(&p.value)),
@@ -1785,7 +1797,7 @@ impl Extractor {
     }
 
     fn on_round_timer(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        let t = self.timers.entry(idx).or_default();
+        let t = self.ents.timers.entry(idx).or_default();
         for p in props {
             let f = as_float(&p.value);
             match p.identifier {
@@ -1802,7 +1814,7 @@ impl Extractor {
     }
 
     fn on_sentry(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        let sentry = self.sentries.entry(idx).or_default();
+        let sentry = self.ents.sentries.entry(idx).or_default();
         let mut fired = 0;
         for p in props {
             let v = as_int(&p.value);
@@ -1841,7 +1853,7 @@ impl Extractor {
     }
 
     fn on_train_watcher(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        let w = self.train_watchers.entry(idx).or_default();
+        let w = self.ents.train_watchers.entry(idx).or_default();
         for p in props {
             let v = as_int(&p.value);
             match p.identifier {
@@ -1856,7 +1868,7 @@ impl Extractor {
     }
 
     fn on_flag(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        let f = self.flags.entry(idx).or_default();
+        let f = self.ents.flags.entry(idx).or_default();
         for p in props {
             modes::placed(&mut f.at, &p);
             let v = as_int(&p.value);
@@ -1887,7 +1899,7 @@ impl Extractor {
     }
 
     fn on_medigun(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        let m = self.mediguns.entry(idx).or_default();
+        let m = self.ents.mediguns.entry(idx).or_default();
         for p in props {
             let v = as_int(&p.value);
             match p.identifier {
@@ -1902,7 +1914,7 @@ impl Extractor {
     }
 
     fn on_flamethrower(&mut self, idx: u32, props: impl Iterator<Item = SendProp>) {
-        let f = self.flamethrowers.entry(idx).or_default();
+        let f = self.ents.flamethrowers.entry(idx).or_default();
         let before = f.state;
         for p in props {
             let v = as_int(&p.value);
@@ -2131,56 +2143,6 @@ mod tests {
     }
 
     #[test]
-    fn prop_identifiers_name_known_props() {
-        // An identifier with a typo in its table or name would silently match nothing.
-        let ids = [
-            PROP_TEAM_NUM,
-            PROP_ORIGIN,
-            PROP_ROTATION,
-            PROP_TEAM_TEAM_NUM,
-            PROP_TEAM_SCORE,
-            PROP_TIMER_END_TIME,
-            PROP_TIMER_REMAINING,
-            PROP_TIMER_PAUSED,
-            PROP_TIMER_SHOW_IN_HUD,
-            PROP_TIMER_DISABLED,
-            PROP_TIMER_STATE,
-            PROP_SENTRY_POSE_PITCH,
-            PROP_SENTRY_POSE_YAW,
-            PROP_SENTRY_ENEMY,
-            PROP_SENTRY_STATE,
-            PROP_SENTRY_SHELLS,
-            PROP_WATCHER_PROGRESS,
-            PROP_WATCHER_CAPPERS,
-            PROP_WATCHER_SPEED,
-            PROP_WATCHER_GLOW,
-            PROP_ROUND_STATE,
-            PROP_MAP_RESET_TIME,
-            PROP_STATE_TRANSITION_TIME,
-            PROP_WEAPON_OWNER,
-            PROP_ACTIVE_WEAPON,
-            PROP_CLIP,
-            PROP_ITEM_DEFINITION,
-            PROP_MEDIGUN_RELEASING,
-            PROP_MEDIGUN_RESIST,
-            PROP_MEDIGUN_TARGET,
-            PROP_FLAMETHROWER_STATE,
-            PROP_FLAMETHROWER_CRIT,
-            PROP_FLAMETHROWER_HIT,
-            PROP_BULLETS_PLAYER,
-            PROP_BULLETS_ORIGIN,
-            PROP_BULLETS_PITCH,
-            PROP_BULLETS_YAW,
-            PROP_BULLETS_WEAPON,
-            PROP_BULLETS_CRIT,
-            PROP_EXPLOSION_WEAPON,
-        ];
-        for id in ids.iter().chain(&PROP_CONDS).chain(&PROP_EXPLOSION_ORIGIN) {
-            assert!(id.names().is_some(), "{id:?}");
-        }
-    }
-
-    #[test]
     fn team_numbers_out_of_range_are_no_team() {
         assert_eq!(team_num(2u8), out::Team::Red);
         assert_eq!(team_num(3u16), out::Team::Blue);
@@ -2190,9 +2152,9 @@ mod tests {
     #[test]
     fn a_reused_entity_slot_forgets_the_medic_charge() {
         let mut x = Extractor::default();
-        x.medic_charge.insert(5, Charge { charge: 100, releasing: true });
+        x.ents.medic_charge.insert(5, Charge { charge: 100, releasing: true });
         x.forget_entity(5);
-        assert!(x.medic_charge.is_empty());
+        assert!(x.ents.medic_charge.is_empty());
     }
 }
 
@@ -2269,7 +2231,7 @@ mod koth_tests {
         let mut x = Extractor::default();
         let shown = RoundTimer { show: true, remaining: 180.0, paused: true, ..Default::default() };
         for idx in [5, 6, 7] {
-            x.timers.insert(idx, shown.clone());
+            x.ents.timers.insert(idx, shown.clone());
         }
         x.koth_timers = [Some(6), Some(5)];
         let teams: Vec<out::Team> = x.snapshot().timers.iter().map(|t| t.team).collect();
@@ -2287,8 +2249,8 @@ mod flag_tests {
     fn flags_the_game_does_not_draw_are_not_reported_unless_carried() {
         let mut x = Extractor::default();
         // pd_watergate keeps two hidden power supply flags in the teams' bases.
-        x.flags.insert(5, Flag { at: Placed { team: 2, ..Placed::default() }, hidden: true, ..Flag::default() });
-        x.flags.insert(6, Flag { points: 3, ..Flag::default() });
+        x.ents.flags.insert(5, Flag { at: Placed { team: 2, ..Placed::default() }, hidden: true, ..Flag::default() });
+        x.ents.flags.insert(6, Flag { points: 3, ..Flag::default() });
         let flags = |x: &Extractor| -> Vec<u32> {
             x.snapshot()
                 .objectives
@@ -2380,11 +2342,11 @@ mod frame_tests {
         frame(&mut x, 100, None, vec![]);
         // A robot destruction core and a player destruction bottle, dropped and picked up since 100.
         x.modes.entity("CBonusPack", 12, std::iter::empty());
-        x.flags.insert(13, Flag::default());
+        x.ents.flags.insert(13, Flag::default());
         frame(&mut x, 101, Some(100), vec![update(12, UpdateType::Preserve), update(13, UpdateType::Preserve)]);
         assert_eq!(x.modes.objectives(&|_| None).len(), 1);
         frame(&mut x, 102, Some(100), vec![]);
-        assert!(x.modes.objectives(&|_| None).is_empty() && x.flags.is_empty());
+        assert!(x.modes.objectives(&|_| None).is_empty() && x.ents.flags.is_empty());
     }
 
     #[test]
@@ -2419,13 +2381,13 @@ mod medic_tests {
             team: Team::Red,
         });
         x.gs.state.players.push(p);
-        x.mediguns.insert(9, Medigun { owner: Some(5), item: 35, releasing, ..Default::default() });
+        x.ents.mediguns.insert(9, Medigun { owner: Some(5), item: 35, releasing, ..Default::default() });
         x
     }
 
     fn step(x: &mut Extractor, charge: u8, releasing: bool) -> Vec<Line> {
         x.gs.state.players[0].charge = charge;
-        x.mediguns.get_mut(&9).unwrap().releasing = releasing;
+        x.ents.mediguns.get_mut(&9).unwrap().releasing = releasing;
         x.medic_changes();
         x.drain()
     }

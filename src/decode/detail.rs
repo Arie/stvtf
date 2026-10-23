@@ -2,7 +2,7 @@
 //! user messages turned into lines.
 
 use super::extract::{building_kind, opt_user, strip_colors, team_num};
-use super::props::{origin_parts, prop, prop_vec};
+use super::props::{origin_parts, prop, prop_id, prop_vec};
 use crate::output::{
     Announcer, BallCarrierKilled, BlastJump, CaptureBroken, CaptureStarted, ChatColor, Heal, HealSource, Hint, HudText,
     Impact, ImpactKind, JumpKind, JumpPhase, KilledCapper, Line, Mark, MedicDefended, NpcDamage, ObjectChange,
@@ -57,9 +57,9 @@ fn heal(
 
 const BLOOD_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TETFBlood");
 const SPARKS_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TEParticleSystem");
-const RICOCHET_POS: SendPropIdentifier = SendPropIdentifier::new("DT_TEMetalSparks", "m_vecPos");
-const WORLD_DECAL_ORIGIN: SendPropIdentifier = SendPropIdentifier::new("DT_TEWorldDecal", "m_vecOrigin");
-const DECAL_ORIGIN: SendPropIdentifier = SendPropIdentifier::new("DT_TEDecal", "m_vecOrigin");
+const RICOCHET_POS: SendPropIdentifier = prop_id("DT_TEMetalSparks", "m_vecPos");
+const WORLD_DECAL_ORIGIN: SendPropIdentifier = prop_id("DT_TEWorldDecal", "m_vecOrigin");
+const DECAL_ORIGIN: SendPropIdentifier = prop_id("DT_TEDecal", "m_vecOrigin");
 
 fn vector(props: &[SendProp], id: SendPropIdentifier) -> Option<[f32; 3]> {
     prop_vec(props, id).map(|v| [v.x, v.y, v.z])

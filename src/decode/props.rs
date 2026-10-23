@@ -98,6 +98,31 @@ mod tests {
         assert_eq!(opt_handle(0), None);
     }
 
+    /// Every `prop_id("table", "name")` and `origin_parts("table")` in the decoders: an identifier
+    /// with a typo in its table or name would silently match nothing.
+    #[test]
+    fn every_prop_identifier_names_a_known_prop() {
+        let sources = [include_str!("extract.rs"), include_str!("modes.rs"), include_str!("detail.rs")];
+        let quoted = |args: &str| -> Vec<String> { args.split('"').skip(1).step_by(2).map(str::to_string).collect() };
+        let mut checked = 0;
+        for source in sources {
+            for call in source.split("prop_id(").skip(1).filter(|c| c.starts_with('"')) {
+                let [table, name] = &quoted(&call[..call.find(')').unwrap()])[..] else { panic!("prop_id({call:.40}") };
+                assert!(prop_id(table, name).names().is_some(), "{table}.{name}");
+                checked += 1;
+            }
+            for call in source.split("origin_parts(").skip(1).filter(|c| c.starts_with('"')) {
+                let [table] = &quoted(&call[..call.find(')').unwrap()])[..] else { panic!("origin_parts({call:.40}") };
+                assert!(origin_parts(table).iter().all(|id| id.names().is_some()), "{table}");
+                checked += 1;
+            }
+        }
+        for id in [PROP_TEAM_NUM, PROP_ORIGIN, PROP_EFFECTS] {
+            assert!(id.names().is_some(), "{id:?}");
+        }
+        assert!(checked >= 70, "found only {checked}");
+    }
+
     #[test]
     fn counts_saturate() {
         assert_eq!(saturating_u16(-3), 0);
