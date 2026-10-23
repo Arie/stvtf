@@ -952,6 +952,15 @@ pub enum Objective {
         /// Maximum health.
         max_hp: u16,
     },
+    /// A robot destruction core, dropped by a destroyed robot until a player collects it.
+    Core {
+        /// Entity index.
+        id: u32,
+        /// Position.
+        pos: Position,
+        /// The team of the robot that dropped it.
+        team: Team,
+    },
     /// A Mann vs. Machine tank.
     Tank {
         /// Entity index.
@@ -2339,12 +2348,14 @@ mod tests {
             Objective::Goal { id: 10, pos: [0.0, -1758.1, -416.5], team: Team::Blue },
             Objective::Robot { id: 11, pos: [0.0; 3], team: Team::Red, hp: 70, max_hp: 330 },
             Objective::Tank { id: 12, pos: [0.0; 3], health: 0.99 },
+            Objective::Core { id: 13, pos: [0.0; 3], team: Team::Blue },
         ];
         let expected = json!([
             {"kind": "ball", "id": 9, "pos": [1.0, 2.0, 3.0], "team": "blue", "carrier": 4},
             {"kind": "goal", "id": 10, "pos": [0.0, -1758.1, -416.5], "team": "blue"},
             {"kind": "robot", "id": 11, "pos": [0.0, 0.0, 0.0], "team": "red", "hp": 70, "max_hp": 330},
             {"kind": "tank", "id": 12, "pos": [0.0, 0.0, 0.0], "health": 0.99},
+            {"kind": "core", "id": 13, "pos": [0.0, 0.0, 0.0], "team": "blue"},
         ]);
         assert_eq!(s(&objectives), expected);
         assert_eq!(serde_json::from_value::<Vec<Objective>>(expected).unwrap(), objectives);

@@ -2,6 +2,7 @@
 //! plus discrete events (kills, damage, shots, explosions, ubers, rounds, chat...).
 
 use super::detail;
+use super::modes::Modes;
 use crate::output::{
     self as out, Airblast, BannerKind, BuildingKind, ChatColor, ChatKind, ChatPart, Condition, Line, MedigunKind,
     PlayerId, Position, ProjectileKind, Resist, Round, Ubered,
@@ -109,6 +110,7 @@ const PROP_OWNER_ENTITY: SendPropIdentifier = prop_id("DT_BaseEntity", "m_hOwner
 const PROP_FLAG_STATUS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nFlagStatus");
 const PROP_FLAG_DISABLED: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_bDisabled");
 const PROP_FLAG_RESET_TIME: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_flResetTime");
+const PROP_FLAG_POINTS: SendPropIdentifier = prop_id("DT_CaptureFlag", "m_nPointValue");
 const PROP_ROUND_STATE: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_iRoundState");
 const PROP_CARRYING: SendPropIdentifier = prop_id("DT_TFPlayerShared", "m_bCarryingObject");
 const PROP_CARRIED: SendPropIdentifier = prop_id("DT_TFPlayerShared", "m_hCarriedObject");
@@ -204,6 +206,8 @@ pub(crate) struct Extractor {
     carried: HashMap<u32, u32>,
     /// What each building entity is: a carried building is not sent while it is carried.
     building_kinds: HashMap<u32, BuildingKind>,
+    /// Pass time, robot and player destruction, Mann vs. Machine.
+    modes: Modes,
 }
 
 /// A player's line on the scoreboard. Points, kills and deaths are the server's match totals;
@@ -276,6 +280,8 @@ struct Flag {
     carrier: Option<u32>,
     /// Server time a dropped flag goes home.
     reset_time: f32,
+    /// What it is worth: a robot destruction core's points, a player destruction pickup's bottles.
+    points: i64,
 }
 
 #[derive(Default, Clone)]
@@ -506,12 +512,12 @@ fn builder_entity(builder: UserId) -> u32 {
 }
 
 /// The entity a handle prop points at; none for the invalid handle (and 0, the world).
-fn opt_handle(handle: i64) -> Option<u32> {
+pub(crate) fn opt_handle(handle: i64) -> Option<u32> {
     (handle != INVALID_EHANDLE && handle != 0).then(|| handle_entity(handle))
 }
 
 /// A team number prop; out of range values are no team.
-fn team_byte(v: i64) -> u8 {
+pub(crate) fn team_byte(v: i64) -> u8 {
     u8::try_from(v).unwrap_or(0)
 }
 
@@ -551,7 +557,7 @@ fn class_num(n: u16) -> out::Class {
 }
 
 /// A position as written out, to a tenth of a unit.
-fn xyz(v: Vector) -> Position {
+pub(crate) fn xyz(v: Vector) -> Position {
     [round1(v.x), round1(v.y), round1(v.z)]
 }
 
@@ -564,7 +570,7 @@ pub(crate) fn round1(f: f32) -> f64 {
 }
 
 /// A prop value as a number, whichever number type the table gave it; 0 otherwise.
-fn as_int(v: &SendPropValue) -> i64 {
+pub(crate) fn as_int(v: &SendPropValue) -> i64 {
     match v {
         SendPropValue::Integer(i) => *i,
         SendPropValue::Float(f) => *f as i64,
@@ -572,7 +578,7 @@ fn as_int(v: &SendPropValue) -> i64 {
     }
 }
 
-fn as_float(v: &SendPropValue) -> f32 {
+pub(crate) fn as_float(v: &SendPropValue) -> f32 {
     match v {
         SendPropValue::Float(f) => *f,
         SendPropValue::Integer(i) => *i as f32,
@@ -684,6 +690,7 @@ impl Extractor {
         self.sentries.remove(&idx);
         self.medic_charge.remove(&idx);
         self.flags.remove(&idx);
+        self.modes.forget(idx);
     }
 
     fn entity_of_user(&self, user_id: u16) -> Option<u32> {
@@ -1268,9 +1275,14 @@ impl Extractor {
                 },
                 carrier: holder.and_then(|p| p.info.as_ref()).map(|i| PlayerId(u16::from(i.user_id))),
                 returns_in: (f.status == 2 && f.reset_time > now).then(|| round1(f.reset_time - now)),
-                points: None,
+                points: (f.points != 0).then_some(f.points),
             });
         }
+        let player_at = |ent: u32| {
+            let p = gs.players.iter().find(|p| u32::from(p.entity) == ent)?;
+            Some((PlayerId(u16::from(p.info.as_ref()?.user_id)), p.position))
+        };
+        objectives.extend(self.modes.objectives(&player_at));
         let score = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.score);
         let captures = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.captures);
         out::Snapshot {
@@ -1286,10 +1298,10 @@ impl Extractor {
             match_time: (self.match_start > 0.0)
                 .then(|| round1((self.server_tick as f32 * interval - self.match_start).max(0.0))),
             score: out::Score { red: score(Team::Red), blue: score(Team::Blue) },
-            captures: (!self.flags.is_empty())
+            captures: (!self.flags.is_empty() || self.modes.passtime())
                 .then(|| out::Score { red: captures(Team::Red), blue: captures(Team::Blue) }),
-            points: None,
-            mvm: None,
+            points: self.modes.points(&player_at),
+            mvm: self.modes.mvm(),
             timers: self
                 .timers
                 .iter()
@@ -1571,7 +1583,7 @@ impl Extractor {
             "CWeaponMedigun" => self.on_medigun(idx, props),
             "CTFFlameThrower" => self.on_flamethrower(idx, props),
             "CTFObjectiveResource" => self.on_objective_resource(props),
-            _ => {}
+            other => self.modes.entity(other, idx, props),
         }
     }
 
@@ -1783,6 +1795,7 @@ impl Extractor {
                 PROP_FLAG_DISABLED => f.disabled = v != 0,
                 PROP_OWNER_ENTITY => f.carrier = opt_handle(v),
                 PROP_FLAG_RESET_TIME => f.reset_time = as_float(&p.value),
+                PROP_FLAG_POINTS => f.points = v,
                 _ => {}
             }
         }
@@ -1844,6 +1857,7 @@ impl Extractor {
         props.sort_by_key(|p| p.identifier.names().is_none_or(|(t, _)| t.as_str() != "m_iCappingTeam"));
         for p in &props {
             self.objective_prop(p);
+            self.modes.objective_prop(p);
         }
     }
 

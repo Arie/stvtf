@@ -8,6 +8,7 @@
 
 mod detail;
 mod extract;
+mod modes;
 
 use crate::net::messages::Signon;
 use crate::output::Line;

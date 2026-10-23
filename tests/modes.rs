@@ -1,0 +1,155 @@
+//! The non-standard game modes: pass time, robot and player destruction, special delivery,
+//! Mann vs. Machine and territorial control, each from the start of a match on demos.tf.
+
+mod common;
+
+use common::{dist, of};
+use std::sync::LazyLock;
+use stvtf::Line;
+use stvtf::output::{Objective, PlayerId, Position, Snapshot, Team};
+
+static PASS: LazyLock<Vec<Line>> = LazyLock::new(|| common::demo("pass_stadium.dem", 20.0));
+static RD: LazyLock<Vec<Line>> = LazyLock::new(|| common::demo("rd_asteroid.dem", 20.0));
+static PD: LazyLock<Vec<Line>> = LazyLock::new(|| common::demo("pd_watergate.dem", 20.0));
+static MVM: LazyLock<Vec<Line>> = LazyLock::new(|| common::demo("mvm_crossing.dem", 5.0));
+
+fn player_pos(snapshot: &Snapshot, id: PlayerId) -> Option<Position> {
+    snapshot.players.iter().find(|p| p.id == id).and_then(|p| p.pos)
+}
+
+/// The ball of each snapshot that has one: position, team, carrier.
+fn balls(lines: &[Line]) -> Vec<(&Snapshot, Position, Team, Option<PlayerId>)> {
+    of!(lines, Snapshot)
+        .filter_map(|s| {
+            let mut balls = s.objectives.iter().filter_map(|o| match *o {
+                Objective::Ball { pos, team, carrier, .. } => Some((s, pos, team, carrier)),
+                _ => None,
+            });
+            let ball = balls.next();
+            assert!(balls.next().is_none(), "one ball at tick {}", s.tick);
+            ball
+        })
+        .collect()
+}
+
+#[test]
+fn the_pass_time_ball_moves_and_is_carried_by_players() {
+    let balls = balls(&PASS);
+    assert!(balls.len() > 500, "{} snapshots with a ball", balls.len());
+    let carried: Vec<_> = balls.iter().filter(|b| b.3.is_some()).collect();
+    assert!(carried.len() > 100, "{} snapshots with the ball carried", carried.len());
+    for (s, pos, team, carrier) in &carried {
+        let id = carrier.unwrap();
+        let player = s.players.iter().find(|p| p.id == id).expect("the carrier is a player");
+        assert_eq!(*team, player.team, "the ball takes its carrier's team at tick {}", s.tick);
+        assert_eq!(Some(*pos), player.pos, "a carried ball is where its carrier is");
+    }
+    let loose: Vec<Position> = balls.iter().filter(|b| b.3.is_none()).map(|b| b.1).collect();
+    let spread = loose.iter().map(|p| dist(*p, loose[0])).fold(0.0, f64::max);
+    assert!(spread > 500.0, "a loose ball flies about: {spread}");
+}
+
+#[test]
+fn pass_time_has_a_goal_for_each_team() {
+    let s = of!(PASS, Snapshot).last().unwrap();
+    let goals: Vec<Team> = s
+        .objectives
+        .iter()
+        .filter_map(|o| match o {
+            Objective::Goal { team, .. } => Some(*team),
+            _ => None,
+        })
+        .collect();
+    assert!(goals.contains(&Team::Red) && goals.contains(&Team::Blue), "{goals:?}");
+}
+
+#[test]
+fn pass_time_counts_goals_as_captures() {
+    let first = of!(PASS, Snapshot).find_map(|s| s.captures.as_ref()).unwrap();
+    assert_eq!((first.red, first.blue), (0, 0));
+    let last = of!(PASS, Snapshot).last().unwrap();
+    let goals = last.captures.as_ref().map(|c| c.red + c.blue);
+    assert!(goals.is_some_and(|g| g > 0), "{goals:?}");
+}
+
+#[test]
+fn robot_destruction_has_robots_and_points() {
+    let snapshots: Vec<&Snapshot> = of!(RD, Snapshot).collect();
+    let robots: Vec<(u16, u16, Team)> = snapshots
+        .iter()
+        .flat_map(|s| &s.objectives)
+        .filter_map(|o| match *o {
+            Objective::Robot { hp, max_hp, team, .. } => Some((hp, max_hp, team)),
+            _ => None,
+        })
+        .collect();
+    assert!(robots.len() > 1000);
+    assert!(robots.iter().all(|&(hp, max, _)| hp <= max && max > 0));
+    assert!(robots.iter().any(|r| r.2 == Team::Red) && robots.iter().any(|r| r.2 == Team::Blue));
+    assert!(robots.iter().any(|r| r.0 < r.1), "robots get hurt");
+    let points: Vec<_> = snapshots.iter().skip_while(|s| s.points.is_none()).map(|s| s.points.as_ref()).collect();
+    assert!(points.len() + 1 >= snapshots.len(), "the points from the logic's first update on");
+    let points: Vec<_> = points.into_iter().map(Option::unwrap).collect();
+    let last = points.last().unwrap();
+    assert!(last.red + last.blue > 0, "points are scored");
+    let cores: Vec<Team> = snapshots
+        .iter()
+        .flat_map(|s| &s.objectives)
+        .filter_map(|o| match o {
+            Objective::Core { team, .. } => Some(*team),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !cores.is_empty() && cores.iter().all(|t| matches!(t, Team::Red | Team::Blue)),
+        "destroyed robots drop cores"
+    );
+}
+
+#[test]
+fn player_destruction_has_points_leaders_and_bottles() {
+    let snapshots: Vec<&Snapshot> = of!(PD, Snapshot).collect();
+    let last = snapshots.last().unwrap().points.as_ref().unwrap();
+    assert!(last.red + last.blue > 0 && last.max.is_some_and(|m| m > 0), "{last:?}");
+    let with_leader = |pick: fn(&stvtf::output::Points) -> Option<PlayerId>| {
+        snapshots
+            .iter()
+            .filter(|s| s.points.as_ref().and_then(pick).is_some_and(|l| player_pos(s, l).is_some()))
+            .count()
+    };
+    // In this cut only red has a leader.
+    assert!(with_leader(|p| p.red_leader) > 100);
+    let bottles = snapshots
+        .iter()
+        .flat_map(|s| &s.objectives)
+        .filter(|o| matches!(o, Objective::Flag { points: Some(p), .. } if *p > 0))
+        .count();
+    assert!(bottles > 0);
+}
+
+#[test]
+fn mvm_has_its_wave_and_a_tank() {
+    let snapshots: Vec<&Snapshot> = of!(MVM, Snapshot).collect();
+    let waves: Vec<_> = snapshots.iter().skip_while(|s| s.mvm.is_none()).map(|s| s.mvm.as_ref()).collect();
+    assert!(waves.len() + 1 >= snapshots.len(), "the wave from the objective resource's first update on");
+    let waves: Vec<_> = waves.into_iter().map(Option::unwrap).collect();
+    assert!(waves.iter().all(|w| w.waves == 5 && (1..=5).contains(&w.wave)));
+    assert!(waves.iter().any(|w| w.between_waves) && waves.iter().any(|w| !w.between_waves));
+    let tanks: Vec<f64> = snapshots
+        .iter()
+        .flat_map(|s| &s.objectives)
+        .filter_map(|o| match *o {
+            Objective::Tank { health, .. } => Some(health),
+            _ => None,
+        })
+        .collect();
+    assert!(!tanks.is_empty() && tanks.iter().all(|h| (0.0..=1.0).contains(h)), "{tanks:?}");
+}
+
+#[test]
+fn mode_fields_only_where_the_mode_has_them() {
+    let s = of!(PASS, Snapshot).last().unwrap();
+    assert!(s.points.is_none() && s.mvm.is_none());
+    let rd = of!(RD, Snapshot).last().unwrap();
+    assert!(rd.mvm.is_none() && rd.captures.is_some(), "robot destruction has flags (cores)");
+}
