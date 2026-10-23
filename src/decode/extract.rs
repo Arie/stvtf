@@ -1451,6 +1451,12 @@ impl Extractor {
             self.gs.state.remove_building(id);
             self.forget_entity(u32::from(id));
         }
+        // Flags (player destruction's pickups) and the game modes' entities go the same way.
+        let gone: Vec<u32> =
+            self.flags.keys().copied().chain(self.modes.ids()).filter(|id| !frame.contains(id)).collect();
+        for id in gone {
+            self.forget_entity(id);
+        }
         // A later delta never comes from a frame older than this one's base.
         if let Some(t) = pe.delta {
             self.frames.retain(|(tick, _)| *tick >= u32::from(t));
@@ -1546,6 +1552,9 @@ impl Extractor {
         }
         let Some(class) = class else { return };
         if e.update_type == UpdateType::Enter {
+            // A slot reused without a delete: what was there is gone (an Enter carries the full state).
+            self.modes.forget(idx);
+            self.flags.remove(&idx);
             self.sentries.remove(&idx);
             let same = |b: &Building| {
                 matches!(
@@ -2308,6 +2317,19 @@ mod frame_tests {
         assert_eq!(shown(&x), [10]);
         frame(&mut x, 103, Some(102), vec![]);
         assert_eq!(shown(&x), [10]);
+    }
+
+    #[test]
+    fn game_mode_entities_and_flags_that_went_since_the_base_frame_are_gone() {
+        let mut x = Extractor::default();
+        frame(&mut x, 100, None, vec![]);
+        // A robot destruction core and a player destruction bottle, dropped and picked up since 100.
+        x.modes.entity("CBonusPack", 12, std::iter::empty());
+        x.flags.insert(13, Flag::default());
+        frame(&mut x, 101, Some(100), vec![update(12, UpdateType::Preserve), update(13, UpdateType::Preserve)]);
+        assert_eq!(x.modes.objectives(&|_| None).len(), 1);
+        frame(&mut x, 102, Some(100), vec![]);
+        assert!(x.modes.objectives(&|_| None).is_empty() && x.flags.is_empty());
     }
 
     #[test]

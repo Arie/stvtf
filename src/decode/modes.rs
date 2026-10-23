@@ -87,7 +87,8 @@ pub(crate) struct Modes {
     /// Robot destruction cores (`CBonusPack`).
     cores: BTreeMap<u32, Placed>,
     tanks: BTreeMap<u32, Tank>,
-    logic: Option<Logic>,
+    /// The robot or player destruction logic, and its entity.
+    logic: Option<(u32, Logic)>,
     mvm: MvmState,
 }
 
@@ -151,7 +152,7 @@ impl Modes {
                 }
             }
             "CTFRobotDestructionLogic" | "CTFPlayerDestructionLogic" => {
-                let logic = self.logic.get_or_insert_default();
+                let logic = &mut self.logic.get_or_insert((idx, Logic::default())).1;
                 for p in props {
                     let v = as_int(&p.value);
                     match p.identifier {
@@ -181,12 +182,26 @@ impl Modes {
         }
     }
 
+    /// The entities followed here.
+    pub(crate) fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.balls
+            .keys()
+            .chain(self.goals.keys())
+            .chain(self.robots.keys())
+            .chain(self.cores.keys())
+            .chain(self.tanks.keys())
+            .copied()
+    }
+
     pub(crate) fn forget(&mut self, idx: u32) {
         self.balls.remove(&idx);
         self.goals.remove(&idx);
         self.robots.remove(&idx);
         self.cores.remove(&idx);
         self.tanks.remove(&idx);
+        if self.logic.as_ref().is_some_and(|(id, _)| *id == idx) {
+            self.logic = None;
+        }
     }
 
     /// A pass time map, where goals are counted as flag captures.
@@ -195,16 +210,19 @@ impl Modes {
     }
 
     pub(crate) fn objectives(&self, player: PlayerAt<'_>) -> Vec<Objective> {
-        // The ball is not drawn while carried (the carrier's gun shows it) or between rounds.
-        let balls = self.balls.iter().filter(|(_, b)| !b.hidden || b.carrier.is_some()).map(|(&id, b)| {
+        let balls = self.balls.iter().filter_map(|(&id, b)| {
             // A carried ball is attached to its carrier, its own origin relative to them.
             let carrier = b.carrier.and_then(player);
-            Objective::Ball {
+            // The ball is not drawn while carried (the carrier's gun shows it) or between rounds.
+            if b.hidden && carrier.is_none() {
+                return None;
+            }
+            Some(Objective::Ball {
                 id,
                 pos: xyz(carrier.map_or(b.at.pos, |c| c.1)),
                 team: team_num(b.at.team),
                 carrier: carrier.map(|c| c.0),
-            }
+            })
         });
         let goals = self.goals.iter().map(|(&id, g)| Objective::Goal { id, pos: xyz(g.pos), team: team_num(g.team) });
         let robots = self.robots.iter().map(|(&id, r)| Objective::Robot {
@@ -224,7 +242,7 @@ impl Modes {
     }
 
     pub(crate) fn points(&self, player: PlayerAt<'_>) -> Option<Points> {
-        let logic = self.logic.as_ref()?;
+        let (_, logic) = self.logic.as_ref()?;
         let leader = |team: usize| logic.leaders[team].and_then(player).map(|l| l.0);
         Some(Points {
             red: logic.red,

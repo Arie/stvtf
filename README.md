@@ -153,8 +153,8 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 - Flags are CTF intelligence briefcases (`team` red or blue) and neutral ones such as the bball
   ball (`team` none). `status` is `home`, `carried` (`pos` is then the carrier's) or `dropped`,
   with `returns_in` seconds until it goes home. Maps with several flag spawns list only the
-  enabled ones. Where the mode gives a flag a value, it has `points`: a robot destruction
-  reactor's stolen points, the bottles a player destruction pickup holds.
+  enabled ones. Where the mode gives a flag a value, it has `points` (absent for 0): the points a
+  robot destruction reactor holds to be stolen, the bottles a player destruction pickup holds.
 - Game modes add objectives:
   - pass time: the `ball` (`{"kind": "ball", "id", "pos", "team", "carrier"}`, `team` none
     while neutral, `pos` the carrier's while carried; absent while it waits to respawn) and the
@@ -231,7 +231,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `npc_damage` | `id` (entity), `attacker` (null for none, such as a sapper's drain), `amount`, `health` (left), `crit`, `weapon_id`, `boss`: damage to a building, a tank, a robot or a boss |
 | `hud_text` | `channel`, `pos` (`[x, y]` on the screen, 0 → 1, -1 centred), `color`, `hold` (seconds), `text`: a map's or plugin's HUD text (`game_text`) |
 | `hint` | `text`: a hint shown on the HUD |
-| `vote_started` | `team` (`none` for everyone), `caller`, `issue` (`#TF_vote_nextlevel`, …), `details`, `yes_no` |
+| `vote_started` | `team` (`none` for everyone), `caller`, `issue` (`#TF_vote_nextlevel`, …), `details`, `yes_no`, `target` (the player a kick vote is about, or null) |
 | `vote_passed` | `team`, `issue`, `details` |
 | `vote_failed` | `team`, `reason` (TF2's `vote_create_failed_t`) |
 | `pass_get`, `pass_free` | pass time: `player` got the ball / lost it (`attacker`: who knocked it loose, or null) |

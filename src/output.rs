@@ -533,7 +533,7 @@ impl Line {
             Line::Sapped(sa) => ([Some(sa.player), Some(sa.owner), None], &[]),
             Line::CaptureStarted(c) => ([None; 3], &c.cappers),
             Line::NpcDamage(n) => ([n.attacker, None, None], &[]),
-            Line::VoteStarted(v) => ([v.caller, None, None], &[]),
+            Line::VoteStarted(v) => ([v.caller, v.target, None], &[]),
             Line::Kill(k) => ([Some(k.victim), k.attacker, k.assister], &[]),
             Line::Damage(d) => ([Some(d.victim), d.attacker, None], &[]),
             Line::Uber(u) => ([Some(u.medic), u.target, None], &[]),
@@ -914,8 +914,8 @@ pub enum Objective {
         carrier: Option<PlayerId>,
         /// Seconds until a dropped flag returns.
         returns_in: Option<f64>,
-        /// What it is worth, when the mode counts that: the points of a robot destruction core,
-        /// the bottles a player destruction pickup holds.
+        /// What it is worth, when the mode counts that and it is not 0: the points a robot
+        /// destruction reactor holds to be stolen, the bottles a player destruction pickup holds.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         points: Option<i64>,
     },
@@ -1830,6 +1830,8 @@ pub struct VoteStarted {
     pub details: String,
     /// A yes/no vote, not a choice between options.
     pub yes_no: bool,
+    /// The player a kick vote is about.
+    pub target: Option<PlayerId>,
 }
 
 /// A vote passed.
@@ -2307,9 +2309,10 @@ mod tests {
                     issue: "#TF_vote_nextlevel".into(),
                     details: "pl_goldrush".into(),
                     yes_no: true,
+                    target: None,
                 }),
                 json!({"type": "vote_started", "tick": 1, "team": "none", "caller": 3,
-                       "issue": "#TF_vote_nextlevel", "details": "pl_goldrush", "yes_no": true}),
+                       "issue": "#TF_vote_nextlevel", "details": "pl_goldrush", "yes_no": true, "target": null}),
             ),
             (
                 Line::VotePassed(VotePassed {

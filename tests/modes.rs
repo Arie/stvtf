@@ -176,6 +176,7 @@ fn pass_time_events_name_the_players_with_the_ball() {
     for free in of!(PASS, PassFree) {
         assert!(players.contains(&free.player) && free.attacker.is_none_or(|a| players.contains(&a)));
     }
+    assert_eq!(of!(PASS, BallCarrierKilled).count(), 3);
     for killed in of!(PASS, BallCarrierKilled) {
         let kill = of!(PASS, Kill).find(|k| k.tick == killed.tick && k.victim == killed.victim);
         assert!(kill.is_some_and(|k| k.attacker == killed.attacker), "ball_carrier_killed at {}", killed.tick);
@@ -193,13 +194,11 @@ fn pass_time_goals_add_up_to_the_captures() {
     let last = of!(PASS, Snapshot).last().unwrap().captures.clone().unwrap();
     assert_eq!(scores.iter().map(|s| i64::from(s.points)).sum::<i64>(), last.red + last.blue);
     for score in scores {
-        // The scorer had the ball just before.
-        let before = of!(PASS, Snapshot).filter(|s| s.tick < score.tick).next_back().unwrap();
-        let ball = before.objectives.iter().find_map(|o| match o {
-            Objective::Ball { carrier, .. } => Some(*carrier),
-            _ => None,
+        // The scorer carried the ball in the 10 seconds before (then threw or ran it in).
+        let carried = of!(PASS, Snapshot).filter(|s| s.tick < score.tick && s.tick + 667 > score.tick).any(|s| {
+            s.objectives.iter().any(|o| matches!(o, Objective::Ball { carrier: Some(c), .. } if *c == score.scorer))
         });
-        assert!(ball.is_some(), "a ball before the goal at {}", score.tick);
+        assert!(carried, "the scorer had the ball before the goal at {}", score.tick);
     }
 }
 
@@ -215,6 +214,7 @@ fn destruction_events_name_players_of_the_match() {
     let players = known(&PD);
     let special: Vec<_> = of!(PD, SpecialScore).collect();
     assert!(special.len() == 2 && special.iter().all(|s| players.contains(&s.player)));
+    assert_eq!(of!(PD, TeamLeaderKilled).count(), 1);
     for leader in of!(PD, TeamLeaderKilled) {
         let kill = of!(PD, Kill).find(|k| k.tick == leader.tick && k.victim == leader.victim);
         assert!(kill.is_some_and(|k| k.attacker == leader.killer), "team_leader_killed at {}", leader.tick);

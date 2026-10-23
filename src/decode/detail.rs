@@ -398,14 +398,16 @@ fn raw_user_message(kind: u8, data: &mut Stream<'_>, look: &Lookup<'_>) -> Optio
                 text,
             }))
         }
-        // team, vote index, the caller's entity, issue, details, yes/no.
+        // team, vote index, the caller's entity, issue, details, a one-bit yes/no flag and the
+        // target's entity (none from servers that predate it).
         USER_MESSAGE_VOTE_START => {
             let team = team_num(read::<u8>(data)?);
             let _vote = read::<u32>(data)?;
             let caller = (look.user_of_entity)(u32::from(read::<u8>(data)?));
             let (issue, details) = (string(data)?, string(data)?);
-            let yes_no = read::<u8>(data)? != 0;
-            Some(Line::VoteStarted(VoteStarted { tick, team, caller, issue, details, yes_no }))
+            let yes_no = read::<bool>(data)?;
+            let target = read::<u8>(data).and_then(|e| (look.user_of_entity)(u32::from(e)));
+            Some(Line::VoteStarted(VoteStarted { tick, team, caller, issue, details, yes_no, target }))
         }
         // team, vote index, issue, details.
         USER_MESSAGE_VOTE_PASS => {
@@ -475,16 +477,19 @@ mod tests {
             }))
         );
         let mut vote = hex("00 00 00 00 00 0a");
-        vote.extend(b"#TF_vote_nextlevel\0pl_goldrush\0\x01");
+        // A one-bit yes/no flag, then the target's entity (10) in the next 8 bits.
+        vote.extend(b"#TF_vote_kick_player_other\0Totally Not A Bot\0");
+        vote.extend([0x01 | 10 << 1, 0]);
         assert_eq!(
             read_raw(USER_MESSAGE_VOTE_START, &vote),
             Some(Line::VoteStarted(VoteStarted {
                 tick: 3,
                 team: crate::output::Team::Unassigned,
                 caller: Some(PlayerId(12)),
-                issue: "#TF_vote_nextlevel".into(),
-                details: "pl_goldrush".into(),
+                issue: "#TF_vote_kick_player_other".into(),
+                details: "Totally Not A Bot".into(),
                 yes_no: true,
+                target: Some(PlayerId(12)),
             }))
         );
         assert_eq!(
@@ -495,6 +500,34 @@ mod tests {
             read_raw(USER_MESSAGE_HINT_TEXT, b"Votes: 0/8\0"),
             Some(Line::Hint(Hint { tick: 3, text: "Votes: 0/8".into() }))
         );
+    }
+
+    fn raw(names: &[&str], values: Vec<GameEventValue>) -> Option<Line> {
+        let user = |ent: u32| (ent < 10).then_some(PlayerId(100 + ent as u16));
+        let class = |_| None;
+        let mut raw_names = RawNames::new();
+        raw_names.insert("killed_ball_carrier".into(), names.iter().map(ToString::to_string).collect());
+        let look = Lookup { user_of_entity: &user, class_of_user: &class, tick: 3, raw_names: &raw_names };
+        let event = RawGameEvent { event_type: GameEventType::Unknown("killed_ball_carrier".into()), values };
+        raw_event(&event, &look)
+    }
+
+    #[test]
+    fn raw_events_are_read_by_their_field_names() {
+        let short = GameEventValue::Short;
+        let killed = |attacker, assister| {
+            Some(Line::BallCarrierKilled(BallCarrierKilled { tick: 3, attacker, victim: PlayerId(106), assister }))
+        };
+        let names = ["attacker", "victim", "assister"];
+        assert_eq!(raw(&names, vec![short(3), short(6), short(65535)]), killed(Some(PlayerId(103)), None));
+        // In whatever order the demo's event list gives them.
+        let names = ["victim", "assister", "attacker"];
+        assert_eq!(raw(&names, vec![short(6), short(4), short(3)]), killed(Some(PlayerId(103)), Some(PlayerId(104))));
+        // A missing or unreadable victim gives no line; a missing attacker is nobody.
+        assert_eq!(raw(&["attacker", "victim"], vec![short(3)]), None);
+        assert_eq!(raw(&["victim"], vec![GameEventValue::Float(6.0)]), None);
+        assert_eq!(raw(&["victim"], vec![short(6)]), killed(None, None));
+        assert_eq!(raw(&[], vec![short(3), short(6)]), None);
     }
 
     #[test]
