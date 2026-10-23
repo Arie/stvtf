@@ -126,12 +126,21 @@ fn score_method(method: u16) -> ScoreMethod {
     }
 }
 
-#[expect(clippy::too_many_lines, reason = "one arm per event")]
+/// A game event the extractor does not turn into a line itself.
 pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
+    heal_event(event, look)
+        .or_else(|| movement_event(event, look))
+        .or_else(|| objective_event(event, look))
+        .or_else(|| match_event(event, look))
+        .or_else(|| building_event(event, look))
+        .or_else(|| pass_time_event(event, look))
+        .or_else(|| destruction_event(event, look))
+}
+
+/// Heals: medigun, dispenser, crossbow and on-hit.
+fn heal_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
     let tick = look.tick;
     let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
-    // Pass time names players by entity index.
-    let ent = |ent: u16| (ent != NO_ENTITY).then(|| (look.user_of_entity)(u32::from(ent))).flatten();
     match event {
         GameEvent::PlayerHealed(h) => {
             // The event doesn't say what healed: infer it from the healer's class.
@@ -148,14 +157,46 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
             heal(tick, user(c.target), user(c.healer), i64::from(c.amount), HealSource::Crossbow)
         }
         GameEvent::PlayerHealOnHit(h) => heal(tick, user(h.ent_index), None, i64::from(h.amount), HealSource::OnHit),
+        _ => None,
+    }
+}
+
+/// Blast jumps, rocket packs, teleports, stuns and pickups.
+fn movement_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
+    match event {
         GameEvent::RocketJump(j) => Some(jump(tick, j.user_id, JumpKind::Rocket, JumpPhase::Start)),
         GameEvent::RocketJumpLanded(j) => Some(jump(tick, j.user_id, JumpKind::Rocket, JumpPhase::Land)),
         GameEvent::StickyJump(j) => Some(jump(tick, j.user_id, JumpKind::Sticky, JumpPhase::Start)),
         GameEvent::StickyJumpLanded(j) => Some(jump(tick, j.user_id, JumpKind::Sticky, JumpPhase::Land)),
+        GameEvent::RocketPackLaunch(j) => Some(jump(tick, j.user_id, JumpKind::RocketPack, JumpPhase::Start)),
+        GameEvent::RocketPackLanded(j) => Some(jump(tick, j.user_id, JumpKind::RocketPack, JumpPhase::Land)),
+        GameEvent::PlayerTeleported(t) => Some(Line::Teleported(Teleported {
+            tick,
+            player: PlayerId(t.user_id),
+            builder: opt_user(t.builder_id),
+            dist: round1(t.dist),
+        })),
+        GameEvent::PlayerStunned(st) => Some(Line::Stun(Stun {
+            tick,
+            stunner: opt_user(st.stunner),
+            victim: PlayerId(st.victim),
+            capping: st.victim_capping,
+            big: st.big_stun,
+        })),
         GameEvent::ItemPickup(i) => {
             let (item, size) = pickup(i.item.as_ref())?;
             Some(Line::Pickup(Pickup { tick, player: PlayerId(i.user_id), item, size }))
         }
+        _ => None,
+    }
+}
+
+/// Control points: captures started, broken and locked, and their defenders.
+fn objective_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
+    let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
+    match event {
         GameEvent::TeamPlayCaptureBroken(b) => {
             Some(Line::CaptureBroken(CaptureBroken { tick, point: b.cp, name: b.cp_name.to_string() }))
         }
@@ -170,6 +211,29 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
         GameEvent::MedicDefended(m) => {
             Some(Line::MedicDefended(MedicDefended { tick, player: PlayerId(m.user_id), medic: PlayerId(m.medic) }))
         }
+        // `cappers` holds the cappers' entity indexes as characters, as for `point_captured`.
+        GameEvent::TeamPlayPointStartCapture(c) => Some(Line::CaptureStarted(CaptureStarted {
+            tick,
+            point: c.cp,
+            name: c.cp_name.to_string(),
+            team: team_num(c.cap_team),
+            owner: team_num(c.team),
+            cappers: c.cappers.as_bytes().iter().map(|&e| user(e)).collect(),
+        })),
+        GameEvent::TeamPlayPointLocked(l) => {
+            Some(Line::PointLocked(PointLocked { tick, point: l.cp, name: l.cp_name.to_string(), locked: true }))
+        }
+        GameEvent::TeamPlayPointUnlocked(l) => {
+            Some(Line::PointLocked(PointLocked { tick, point: l.cp, name: l.cp_name.to_string(), locked: false }))
+        }
+        _ => None,
+    }
+}
+
+/// Votes, tournament mode, the announcer and the match clock.
+fn match_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
+    match event {
         GameEvent::VoteOptions(v) => {
             let all = [&v.option_1, &v.option_2, &v.option_3, &v.option_4, &v.option_5];
             let options = all.iter().take(usize::from(v.count)).map(ToString::to_string).collect();
@@ -193,6 +257,47 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
             Some(Line::TimeRemaining(TimeRemaining { tick, seconds: u32::from(t.seconds) }))
         }
         GameEvent::TfMapTimeRemaining(t) => Some(Line::TimeRemaining(TimeRemaining { tick, seconds: t.seconds })),
+        GameEvent::TeamPlayRoundSelected(r) => {
+            Some(Line::RoundSelected(RoundSelected { tick, round: r.round.to_string() }))
+        }
+        _ => None,
+    }
+}
+
+/// Buildings sapped, removed and detonated, and stickies set off.
+fn building_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
+    match event {
+        GameEvent::PlayerSappedObject(sa) => Some(Line::Sapped(Sapped {
+            tick,
+            player: PlayerId(sa.user_id),
+            owner: PlayerId(sa.owner_id),
+            object: building_kind(u16::from(sa.object)),
+            sapper: sa.sapper_id,
+        })),
+        GameEvent::ObjectRemoved(o) => Some(Line::BuildingRemoved(ObjectChange {
+            tick,
+            player: PlayerId(o.user_id),
+            object: building_kind(o.object_type),
+            id: o.index,
+        })),
+        GameEvent::ObjectDetonated(o) => Some(Line::BuildingDetonated(ObjectChange {
+            tick,
+            player: PlayerId(o.user_id),
+            object: building_kind(o.object_type),
+            id: o.index,
+        })),
+        GameEvent::DemomanDetStickies(d) => Some(Line::DetStickies(PlayerMoment { tick, player: PlayerId(d.player) })),
+        _ => None,
+    }
+}
+
+/// Pass time: the ball passed, caught, stolen and scored.
+fn pass_time_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
+    // Pass time names players by entity index.
+    let ent = |ent: u16| (ent != NO_ENTITY).then(|| (look.user_of_entity)(u32::from(ent))).flatten();
+    match event {
         GameEvent::PassGet(g) => Some(Line::PassGet(PassGet { tick, player: ent(g.owner)? })),
         GameEvent::PassFree(f) => {
             Some(Line::PassFree(PassFree { tick, player: ent(f.owner)?, attacker: ent(f.attacker) }))
@@ -217,6 +322,15 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
             Some(Line::PassBlocked(PassBlocked { tick, owner: ent(b.owner)?, blocker: ent(b.blocker)? }))
         }
         GameEvent::Unknown(raw) => raw_event(raw, look),
+        _ => None,
+    }
+}
+
+/// Robot and player destruction, Doomsday and Mann vs. Machine.
+fn destruction_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
+    let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
+    match event {
         GameEvent::RdRobotKilled(r) => {
             Some(Line::RobotKilled(RobotKilled { tick, attacker: opt_user(r.attacker), weapon: r.weapon.to_string() }))
         }
@@ -232,59 +346,6 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
             Some(Line::TeamLeaderKilled(TeamLeaderKilled { tick, killer: user(k.killer), victim: user(k.victim)? }))
         }
         GameEvent::DoomsdayRocketOpen(r) => Some(Line::RocketOpen(RocketOpen { tick, team: team_num(r.team) })),
-        GameEvent::TeamPlayRoundSelected(r) => {
-            Some(Line::RoundSelected(RoundSelected { tick, round: r.round.to_string() }))
-        }
-        GameEvent::PlayerTeleported(t) => Some(Line::Teleported(Teleported {
-            tick,
-            player: PlayerId(t.user_id),
-            builder: opt_user(t.builder_id),
-            dist: round1(t.dist),
-        })),
-        GameEvent::PlayerStunned(st) => Some(Line::Stun(Stun {
-            tick,
-            stunner: opt_user(st.stunner),
-            victim: PlayerId(st.victim),
-            capping: st.victim_capping,
-            big: st.big_stun,
-        })),
-        GameEvent::PlayerSappedObject(sa) => Some(Line::Sapped(Sapped {
-            tick,
-            player: PlayerId(sa.user_id),
-            owner: PlayerId(sa.owner_id),
-            object: building_kind(u16::from(sa.object)),
-            sapper: sa.sapper_id,
-        })),
-        GameEvent::ObjectRemoved(o) => Some(Line::BuildingRemoved(ObjectChange {
-            tick,
-            player: PlayerId(o.user_id),
-            object: building_kind(o.object_type),
-            id: o.index,
-        })),
-        GameEvent::ObjectDetonated(o) => Some(Line::BuildingDetonated(ObjectChange {
-            tick,
-            player: PlayerId(o.user_id),
-            object: building_kind(o.object_type),
-            id: o.index,
-        })),
-        GameEvent::DemomanDetStickies(d) => Some(Line::DetStickies(PlayerMoment { tick, player: PlayerId(d.player) })),
-        // `cappers` holds the cappers' entity indexes as characters, as for `point_captured`.
-        GameEvent::TeamPlayPointStartCapture(c) => Some(Line::CaptureStarted(CaptureStarted {
-            tick,
-            point: c.cp,
-            name: c.cp_name.to_string(),
-            team: team_num(c.cap_team),
-            owner: team_num(c.team),
-            cappers: c.cappers.as_bytes().iter().map(|&e| user(e)).collect(),
-        })),
-        GameEvent::TeamPlayPointLocked(l) => {
-            Some(Line::PointLocked(PointLocked { tick, point: l.cp, name: l.cp_name.to_string(), locked: true }))
-        }
-        GameEvent::TeamPlayPointUnlocked(l) => {
-            Some(Line::PointLocked(PointLocked { tick, point: l.cp, name: l.cp_name.to_string(), locked: false }))
-        }
-        GameEvent::RocketPackLaunch(j) => Some(jump(tick, j.user_id, JumpKind::RocketPack, JumpPhase::Start)),
-        GameEvent::RocketPackLanded(j) => Some(jump(tick, j.user_id, JumpKind::RocketPack, JumpPhase::Land)),
         GameEvent::NpcHurt(n) => Some(Line::NpcDamage(NpcDamage {
             tick,
             id: n.ent_index,

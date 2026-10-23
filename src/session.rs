@@ -337,6 +337,67 @@ impl<'o> Session<'o> {
             self.send(None, Some(&body));
         }
     }
+    /// Feeds the streams held since signon restarted into the new map's decoder. False when
+    /// signon restarted once more: the rest is held again, for the map after this one.
+    fn replay_streams(&mut self, streams: Vec<BitBuf>, dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Line)) -> bool {
+        let mut rest = streams.into_iter();
+        for bits in rest.by_ref() {
+            let life = dec.feed(bits.bytes(), bits.nbits());
+            self.lifecycle(life, emit);
+            if let Some(next_map) = &mut self.remap {
+                next_map.push(bits);
+                break;
+            }
+        }
+        for line in dec.take_output() {
+            emit(line);
+        }
+        match &mut self.remap {
+            Some(next_map) => {
+                next_map.extend(rest);
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// Follows the current map until the session stops or breaks, or None when the map changes.
+    fn follow(
+        &mut self,
+        dec: &mut Decoder<'_>,
+        first: Option<&[u8]>,
+        next: &mut dyn FnMut() -> Result<Next>,
+        emit: &mut dyn FnMut(Line),
+    ) -> Result<Option<End>> {
+        if let Some(p) = first {
+            self.datagram(p, dec, emit);
+        }
+        loop {
+            match next()? {
+                Next::Datagram(d) => self.datagram(&d, dec, emit),
+                Next::Idle => {}
+                Next::Failed(why) => self.break_with(why, None),
+                Next::Stop => return Ok(Some(End::Stopped)),
+            }
+            if self.sock.is_some() {
+                self.poll(emit);
+            }
+            if dec.panicked() {
+                self.break_with("decoder failed".to_string(), None);
+            } else if dec.bytes() > self.opt.max_decoder_bytes {
+                self.break_with(
+                    format!("decoder holds over {} MiB for this map", self.opt.max_decoder_bytes >> 20),
+                    None,
+                );
+            }
+            if let Some((reason, fatal)) = self.broke.take() {
+                return Ok(Some(End::Broken(Broken { reason, fatal, streamed: self.reached_full })));
+            }
+            if self.remap.is_some() {
+                return Ok(None);
+            }
+        }
+    }
 }
 
 enum Next {
@@ -362,58 +423,15 @@ fn drive(
 ) -> Result<Outcome> {
     let mut decode_errors = 0;
     let mut first = first;
-    let end = 'maps: loop {
+    let end = loop {
         // One decoder (and arena) per map; the netchannel state survives map changes.
         let arena = Arena::new();
         let mut dec = Decoder::new(&arena, tables, s.opt.snapshot_hz)?;
-        if let Some(streams) = s.remap.take() {
-            let mut rest = streams.into_iter();
-            for bits in rest.by_ref() {
-                let life = dec.feed(bits.bytes(), bits.nbits());
-                s.lifecycle(life, emit);
-                if let Some(next_map) = &mut s.remap {
-                    // Signon restarted again: the rest belongs to the map after this one.
-                    next_map.push(bits);
-                    break;
-                }
-            }
-            for line in dec.take_output() {
-                emit(line);
-            }
-            if let Some(next_map) = &mut s.remap {
-                next_map.extend(rest);
-                decode_errors += dec.parse_errors();
-                continue 'maps;
-            }
-        }
-        if let Some(p) = first.take() {
-            s.datagram(p, &mut dec, emit);
-        }
-        let end = loop {
-            match next()? {
-                Next::Datagram(d) => s.datagram(&d, &mut dec, emit),
-                Next::Idle => {}
-                Next::Failed(why) => s.break_with(why, None),
-                Next::Stop => break Some(End::Stopped),
-            }
-            if s.sock.is_some() {
-                s.poll(emit);
-            }
-            if dec.panicked() {
-                s.break_with("decoder failed".to_string(), None);
-            } else if dec.bytes() > s.opt.max_decoder_bytes {
-                s.break_with(format!("decoder holds over {} MiB for this map", s.opt.max_decoder_bytes >> 20), None);
-            }
-            if let Some((reason, fatal)) = s.broke.take() {
-                break Some(End::Broken(Broken { reason, fatal, streamed: s.reached_full }));
-            }
-            if s.remap.is_some() {
-                break None;
-            }
-        };
+        let replayed = s.remap.take().is_none_or(|streams| s.replay_streams(streams, &mut dec, emit));
+        let end = if replayed { s.follow(&mut dec, first.take(), next, emit)? } else { None };
         decode_errors += dec.parse_errors();
         if let Some(end) = end {
-            break 'maps end;
+            break end;
         }
     };
     Ok(Outcome { end, decode_errors })
