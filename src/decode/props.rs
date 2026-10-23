@@ -20,6 +20,10 @@ pub(crate) const PROP_EFFECTS: SendPropIdentifier = prop_id("DT_BaseEntity", "m_
 /// `m_fEffects`: not drawn.
 pub(crate) const EF_NODRAW: i64 = 0x20;
 
+/// Where each team is in this crate's own `[red, blue]` pairs.
+pub(crate) const RED_SLOT: usize = 0;
+pub(crate) const BLUE_SLOT: usize = 1;
+
 /// The handle value of "no entity".
 pub(crate) const INVALID_EHANDLE: i64 = 0x1f_ffff;
 /// Entity handles carry the entity index in their low 11 bits.

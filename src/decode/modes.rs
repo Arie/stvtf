@@ -4,8 +4,8 @@
 
 use super::extract::{team_num, xyz};
 use super::props::{
-    EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, as_float, as_int, opt_handle, prop_id, saturating_u16,
-    team_byte,
+    BLUE_SLOT, EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, RED_SLOT, as_float, as_int, opt_handle, prop_id,
+    saturating_u16, team_byte,
 };
 use crate::output::{Mvm, MvmClass, Objective, PlayerId, Points, round3};
 use std::collections::BTreeMap;
@@ -195,8 +195,8 @@ impl Modes {
                         PROP_RED_SCORE => logic.red = v,
                         PROP_BLUE_SCORE => logic.blue = v,
                         PROP_MAX_POINTS => logic.max = v,
-                        PROP_RED_LEADER => logic.leaders[0] = opt_handle(v),
-                        PROP_BLUE_LEADER => logic.leaders[1] = opt_handle(v),
+                        PROP_RED_LEADER => logic.leaders[RED_SLOT] = opt_handle(v),
+                        PROP_BLUE_LEADER => logic.leaders[BLUE_SLOT] = opt_handle(v),
                         _ => {}
                     }
                 }
@@ -321,8 +321,8 @@ impl Modes {
             red: logic.red,
             blue: logic.blue,
             max: (logic.max > 0).then_some(logic.max),
-            red_leader: leader(0),
-            blue_leader: leader(1),
+            red_leader: leader(RED_SLOT),
+            blue_leader: leader(BLUE_SLOT),
         })
     }
 

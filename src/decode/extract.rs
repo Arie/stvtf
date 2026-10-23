@@ -4,8 +4,8 @@
 use super::detail;
 use super::modes::{self, Modes, Placed};
 use super::props::{
-    EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, as_float, as_int, handle_entity, opt_handle, origin_parts,
-    prop_f, prop_i, prop_id, prop_vec, team_byte,
+    BLUE_SLOT, EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, RED_SLOT, as_float, as_int, handle_entity,
+    opt_handle, origin_parts, prop_f, prop_i, prop_id, prop_vec, team_byte,
 };
 use crate::output::{
     self as out, Airblast, BannerKind, BuildingKind, ChatColor, ChatKind, ChatPart, Condition, Line, MedigunKind,
@@ -281,6 +281,17 @@ struct Pose {
     pos: Vector,
     yaw: f32,
     pitch: f32,
+}
+
+impl Pose {
+    fn of(p: &Player) -> Self {
+        Pose { pos: p.position, yaw: p.view_angle, pitch: p.pitch_angle }
+    }
+}
+
+/// A player's user id, once their info is known.
+fn player_id(p: &Player) -> Option<PlayerId> {
+    p.info.as_ref().map(|i| PlayerId(u16::from(i.user_id)))
 }
 
 /// A medic's charge and whether it was being released.
@@ -622,7 +633,7 @@ impl Extractor {
     /// While running, the last state transition is when the round went live; a win or
     /// stalemate stops its clock and the next pre-round clears it.
     fn track_round_time(&mut self) {
-        let now = self.server_tick as f32 * self.interval();
+        let now = self.server_time();
         match self.round_state {
             Round::Running => (self.round_live_since, self.round_ended_at) = (Some(self.state_transition), None),
             Round::Preround => (self.round_live_since, self.round_ended_at) = (None, None),
@@ -634,13 +645,17 @@ impl Extractor {
     /// Seconds left of `mp_timelimit`, which counts from the start of the match.
     fn time_left(&self) -> Option<f32> {
         let limit = self.time_limit?;
-        (self.match_start > 0.0).then(|| {
-            (limit * SECONDS_PER_MINUTE - (self.server_tick as f32 * self.interval() - self.match_start)).max(0.0)
-        })
+        (self.match_start > 0.0)
+            .then(|| (limit * SECONDS_PER_MINUTE - (self.server_time() - self.match_start)).max(0.0))
+    }
+
+    /// Server time at the latest tick, in seconds: what the game's own times count in.
+    fn server_time(&self) -> f32 {
+        self.server_tick as f32 * self.interval()
     }
 
     fn round_time(&self) -> Option<f32> {
-        let now = self.server_tick as f32 * self.interval();
+        let now = self.server_time();
         self.round_live_since.map(|t| (self.round_ended_at.unwrap_or(now) - t).max(0.0))
     }
 
@@ -654,7 +669,7 @@ impl Extractor {
                 self.medic_charge.remove(&ent);
                 continue;
             }
-            let gun = self.mediguns.values().find(|m| m.owner == Some(ent));
+            let gun = self.medigun_owned_by(ent);
             let now = Charge { charge: p.charge, releasing: gun.is_some_and(|m| m.releasing) };
             if let Some(&before) = self.medic_charge.get(&ent) {
                 let charge = out::MedicCharge {
@@ -694,12 +709,52 @@ impl Extractor {
         self.modes.forget(idx);
     }
 
+    fn player_by_user(&self, user_id: u16) -> Option<&Player> {
+        self.state().players.iter().find(|p| p.info.as_ref().is_some_and(|i| u16::from(i.user_id) == user_id))
+    }
+
+    fn player_by_entity(&self, ent: u32) -> Option<&Player> {
+        self.state().players.iter().find(|p| u32::from(p.entity) == ent)
+    }
+
     fn entity_of_user(&self, user_id: u16) -> Option<u32> {
-        self.state()
-            .players
-            .iter()
-            .find(|p| p.info.as_ref().is_some_and(|i| u16::from(i.user_id) == user_id))
-            .map(|p| u32::from(p.entity))
+        self.player_by_user(user_id).map(|p| u32::from(p.entity))
+    }
+
+    fn medigun_owned_by(&self, player_ent: u32) -> Option<&Medigun> {
+        self.mediguns.values().find(|m| m.owner == Some(player_ent))
+    }
+
+    /// The team of a round timer: on king of the hill each team has its own.
+    fn timer_team(&self, idx: u32) -> out::Team {
+        match self.koth_timers.iter().position(|k| *k == Some(idx)) {
+            Some(RED_SLOT) => out::Team::Red,
+            Some(_) => out::Team::Blue,
+            None => self.timers.get(&idx).map_or(out::Team::Unassigned, |t| team_num(t.team)),
+        }
+    }
+
+    /// Runs `f` with what the detail lines look up in the extractor.
+    fn with_lookup<R>(&self, f: impl FnOnce(&detail::Lookup<'_>) -> R) -> R {
+        let user_of_entity = |ent: u32| self.user_of_entity(ent);
+        let class_of_user = |id: u16| self.player_by_user(id).map(|p| p.class);
+        f(&detail::Lookup {
+            user_of_entity: &user_of_entity,
+            class_of_user: &class_of_user,
+            tick: self.server_tick,
+            raw_names: &self.raw_names,
+        })
+    }
+
+    /// The control point at `index`, made when not seen yet; its progress rolled forward to now.
+    fn control_point_mut(&mut self, index: usize) -> &mut ControlPoint {
+        if self.control_points.len() <= index {
+            self.control_points.resize(index + 1, ControlPoint::default());
+        }
+        let (tick, interval) = (self.server_tick, self.interval());
+        let cp = &mut self.control_points[index];
+        cp.advance(tick, interval);
+        cp
     }
 
     fn weapon_of(&self, player_ent: u32) -> Option<out::Weapon> {
@@ -708,7 +763,7 @@ impl Extractor {
     }
 
     fn medigun_of(&self, player_ent: u32) -> Option<out::Medigun> {
-        let m = self.mediguns.values().find(|m| m.owner == Some(player_ent))?;
+        let m = self.medigun_owned_by(player_ent)?;
         let kind = medigun_kind(m.item);
         Some(out::Medigun {
             kind,
@@ -738,20 +793,11 @@ impl Extractor {
     }
 
     fn user_pos(&self, user_id: u16) -> Option<Position> {
-        self.state()
-            .players
-            .iter()
-            .find(|p| p.info.as_ref().is_some_and(|i| u16::from(i.user_id) == user_id))
-            .map(|p| xyz(p.position))
+        self.player_by_user(user_id).map(|p| xyz(p.position))
     }
 
     fn user_of_entity(&self, ent: u32) -> Option<PlayerId> {
-        self.state()
-            .players
-            .iter()
-            .find(|p| u32::from(p.entity) == ent)
-            .and_then(|p| p.info.as_ref())
-            .map(|i| PlayerId(u16::from(i.user_id)))
+        self.player_by_entity(ent).and_then(player_id)
     }
 
     /// One prop of `CTFObjectiveResource`. Its per point arrays come as elements named
@@ -783,12 +829,7 @@ impl Extractor {
             if team >= MAX_TEAMS {
                 return;
             }
-            if self.control_points.len() <= point {
-                self.control_points.resize(point + 1, ControlPoint::default());
-            }
-            let (tick, interval) = (self.server_tick, self.interval());
-            let cp = &mut self.control_points[point];
-            cp.advance(tick, interval);
+            let cp = self.control_point_mut(point);
             match &p.value {
                 SendPropValue::Float(f) if table.as_str() == "m_flTeamCapTime" => cp.cap_time[team] = *f,
                 SendPropValue::Integer(i) => cp.members[team] = u8::try_from((*i).max(0)).unwrap_or(u8::MAX),
@@ -799,12 +840,7 @@ impl Extractor {
         if idx >= MAX_CONTROL_POINTS {
             return;
         }
-        let (tick, interval) = (self.server_tick, self.interval());
-        if self.control_points.len() <= idx {
-            self.control_points.resize(idx + 1, ControlPoint::default());
-        }
-        let cp = &mut self.control_points[idx];
-        cp.advance(tick, interval);
+        let cp = self.control_point_mut(idx);
         let int = as_int(&p.value);
         match table.as_str() {
             "m_vCPPositions" => {
@@ -887,7 +923,7 @@ impl Extractor {
                 target: opt_user(c.target_id),
                 medigun: self
                     .entity_of_user(c.user_id)
-                    .and_then(|e| self.mediguns.values().find(|m| m.owner == Some(e)))
+                    .and_then(|e| self.medigun_owned_by(e))
                     .map(|m| medigun_kind(m.item)),
             })),
             GameEvent::PlayerTeam(t) => self.push(Line::TeamChange(out::TeamChange {
@@ -929,12 +965,7 @@ impl Extractor {
                 self.push(Line::BuildingRepair(out::BuildingRepair { tick, id: b.building, amount: b.amount }));
             }
             GameEvent::TeamPlayTimerTimeAdded(t) => {
-                let idx = u32::from(t.timer);
-                let team = match self.koth_timers.iter().position(|k| *k == Some(idx)) {
-                    Some(0) => out::Team::Red,
-                    Some(_) => out::Team::Blue,
-                    None => self.timers.get(&idx).map_or(out::Team::Unassigned, |t| team_num(t.team)),
-                };
+                let team = self.timer_team(u32::from(t.timer));
                 self.push(Line::TimeAdded(out::TimeAdded { tick, team, seconds: t.seconds_added }));
             }
             GameEvent::ObjectDestroyed(o) => self.push(Line::BuildingDestroyed(out::BuildingDestroyed {
@@ -1026,19 +1057,7 @@ impl Extractor {
             }
             GameEvent::TfGameOver(g) => self.push(Line::GameOver(out::GameOver { tick, reason: g.reason.to_string() })),
             _ => {
-                let class_of_user = |id: u16| {
-                    let state = self.state();
-                    let p = state.players.iter().find(|p| p.info.as_ref().is_some_and(|i| u16::from(i.user_id) == id));
-                    p.map(|p| p.class)
-                };
-                let user_of_entity = |ent: u32| self.user_of_entity(ent);
-                let look = detail::Lookup {
-                    user_of_entity: &user_of_entity,
-                    class_of_user: &class_of_user,
-                    tick,
-                    raw_names: &self.raw_names,
-                };
-                if let Some(line) = detail::game_event(event, &look) {
+                if let Some(line) = self.with_lookup(|look| detail::game_event(event, look)) {
                     self.push(line);
                 }
             }
@@ -1114,11 +1133,7 @@ impl Extractor {
                 let ent = u32::from(p.entity);
                 let alive = alive(p);
                 // Dead: where they died, or nothing if that happened before we connected.
-                let last = if alive {
-                    Some(Pose { pos: p.position, yaw: p.view_angle, pitch: p.pitch_angle })
-                } else {
-                    self.last_alive.get(&ent).copied()
-                };
+                let last = if alive { Some(Pose::of(p)) } else { self.last_alive.get(&ent).copied() };
                 let conds = self.conds.get(&ent);
                 Some(out::Player {
                     id: PlayerId(u16::from(info.user_id)),
@@ -1144,7 +1159,7 @@ impl Extractor {
                         .stats
                         .get(&ent)
                         .filter(|_| !alive)
-                        .map(|st| st.respawn_at - self.server_tick as f32 * interval)
+                        .map(|st| st.respawn_at - self.server_time())
                         .map(round1)
                         .filter(|left| *left > 0.0),
                     score: self.stats.get(&ent).map(|st| out::PlayerScore {
@@ -1178,8 +1193,7 @@ impl Extractor {
                     .players
                     .iter()
                     .find(|p| pr.launcher.0 != 0 && p.weapons.contains(&pr.launcher))
-                    .and_then(|p| p.info.as_ref())
-                    .map(|i| PlayerId(u16::from(i.user_id))),
+                    .and_then(player_id),
                 crit: pr.critical,
             })
             .collect();
@@ -1270,13 +1284,11 @@ impl Extractor {
                 speed: w.speed,
             });
         }
-        let now = self.server_tick as f32 * interval;
+        let now = self.server_time();
         for (&id, f) in self.flags.iter().filter(|(_, f)| !f.disabled) {
             // A carried flag is attached to its carrier, its own origin relative to them.
-            let holder = gs
-                .players
-                .iter()
-                .find(|p| f.status == out::FlagStatus::Carried && Some(u32::from(p.entity)) == f.carrier);
+            let holder =
+                f.carrier.filter(|_| f.status == out::FlagStatus::Carried).and_then(|c| self.player_by_entity(c));
             if f.hidden && holder.is_none() {
                 continue;
             }
@@ -1285,19 +1297,19 @@ impl Extractor {
                 pos: xyz(holder.map_or(f.at.pos, |p| p.position)),
                 team: team_num(f.at.team),
                 status: f.status,
-                carrier: holder.and_then(|p| p.info.as_ref()).map(|i| PlayerId(u16::from(i.user_id))),
+                carrier: holder.and_then(player_id),
                 returns_in: (f.status == out::FlagStatus::Dropped && f.reset_time > now)
                     .then(|| round1(f.reset_time - now)),
                 points: (f.points != 0).then_some(f.points),
             });
         }
         let player_at = |ent: u32| {
-            let p = gs.players.iter().find(|p| u32::from(p.entity) == ent)?;
-            Some((PlayerId(u16::from(p.info.as_ref()?.user_id)), p.position))
+            let p = self.player_by_entity(ent)?;
+            Some((player_id(p)?, p.position))
         };
         objectives.extend(self.modes.objectives(&player_at));
-        let score = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.score);
-        let captures = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.captures);
+        let team_score = |team: Team| self.teams.values().find(|t| t.team == team as u8).copied().unwrap_or_default();
+        let (red, blue) = (team_score(Team::Red), team_score(Team::Blue));
         out::Snapshot {
             tick: self.server_tick,
             players,
@@ -1308,11 +1320,10 @@ impl Extractor {
             round_time: self.round_time().map(round1),
             time_left: self.time_left().map(round1),
             win_limit: self.win_limit,
-            match_time: (self.match_start > 0.0)
-                .then(|| round1((self.server_tick as f32 * interval - self.match_start).max(0.0))),
-            score: out::Score { red: score(Team::Red), blue: score(Team::Blue) },
+            match_time: (self.match_start > 0.0).then(|| round1((self.server_time() - self.match_start).max(0.0))),
+            score: out::Score { red: red.score, blue: blue.score },
             captures: (!self.flags.is_empty() || self.modes.passtime())
-                .then(|| out::Score { red: captures(Team::Red), blue: captures(Team::Blue) }),
+                .then_some(out::Score { red: red.captures, blue: blue.captures }),
             points: self.modes.points(&player_at),
             mvm: self.modes.mvm(),
             timers: self
@@ -1323,11 +1334,7 @@ impl Extractor {
                     t.show && !t.disabled && (self.koth_timers == [None; 2] || self.koth_timers.contains(&Some(**idx)))
                 })
                 .map(|(idx, t)| out::Timer {
-                    team: match self.koth_timers.iter().position(|k| *k == Some(*idx)) {
-                        Some(0) => out::Team::Red,
-                        Some(_) => out::Team::Blue,
-                        None => team_num(t.team),
-                    },
+                    team: self.timer_team(*idx),
                     remaining: round1(t.remaining_at(self.server_tick, interval)),
                     paused: t.paused,
                     setup: t.setup,
@@ -1497,8 +1504,7 @@ impl Extractor {
         self.track_frame(pe);
         for p in &self.gs.state.players {
             if alive(p) {
-                self.last_alive
-                    .insert(u32::from(p.entity), Pose { pos: p.position, yaw: p.view_angle, pitch: p.pitch_angle });
+                self.last_alive.insert(u32::from(p.entity), Pose::of(p));
             }
         }
         self.medic_changes();
@@ -1819,8 +1825,8 @@ impl Extractor {
         for p in props {
             match p.identifier {
                 PROP_ROUND_STATE => self.round_state = round_from_raw(as_int(&p.value)),
-                PROP_RED_KOTH_TIMER => self.koth_timers[0] = opt_handle(as_int(&p.value)),
-                PROP_BLUE_KOTH_TIMER => self.koth_timers[1] = opt_handle(as_int(&p.value)),
+                PROP_RED_KOTH_TIMER => self.koth_timers[RED_SLOT] = opt_handle(as_int(&p.value)),
+                PROP_BLUE_KOTH_TIMER => self.koth_timers[BLUE_SLOT] = opt_handle(as_int(&p.value)),
                 PROP_MAP_RESET_TIME => self.match_start = as_float(&p.value),
                 PROP_STATE_TRANSITION_TIME => self.state_transition = as_float(&p.value),
                 _ => {}
@@ -1956,15 +1962,7 @@ impl Extractor {
                 }));
             }
             _ => {
-                let class_of_user = |_| None;
-                let user_of_entity = |ent: u32| self.user_of_entity(ent);
-                let look = detail::Lookup {
-                    user_of_entity: &user_of_entity,
-                    class_of_user: &class_of_user,
-                    tick: self.server_tick,
-                    raw_names: &self.raw_names,
-                };
-                if let Some(line) = detail::user_message(message, &look) {
+                if let Some(line) = self.with_lookup(|look| detail::user_message(message, look)) {
                     self.push(line);
                 }
             }
