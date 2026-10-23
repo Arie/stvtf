@@ -267,8 +267,8 @@ pub struct Condition(u8);
 
 impl Condition {
     /// The condition with this number, if TF2 uses it.
-    pub fn from_number(n: usize) -> Option<Condition> {
-        CONDITION_NAMES.get(n).filter(|name| !name.is_empty()).map(|_| Condition(n as u8))
+    pub fn from_number(n: u8) -> Option<Condition> {
+        CONDITION_NAMES.get(usize::from(n)).filter(|name| !name.is_empty()).map(|_| Condition(n))
     }
 
     /// TF2's number for it.
@@ -279,6 +279,12 @@ impl Condition {
     /// Its name, as tf-demo-parser's `PlayerCondition` spells it.
     pub fn name(self) -> &'static str {
         CONDITION_NAMES[usize::from(self.0)]
+    }
+}
+
+impl fmt::Display for Condition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
     }
 }
 
@@ -294,7 +300,8 @@ impl<'de> Deserialize<'de> for Condition {
         CONDITION_NAMES
             .iter()
             .position(|n| !n.is_empty() && *n == name)
-            .map(|n| Condition(n as u8))
+            .and_then(|n| u8::try_from(n).ok())
+            .map(Condition)
             .ok_or_else(|| de::Error::custom(format_args!("unknown condition {name:?}")))
     }
 }
@@ -425,9 +432,9 @@ impl Line {
     }
 
     /// Every player an event names (not those in a snapshot), in field order.
-    pub fn players(&self) -> Vec<PlayerId> {
-        let some = |ids: &[Option<PlayerId>]| ids.iter().flatten().copied().collect();
-        match self {
+    pub fn players(&self) -> impl Iterator<Item = PlayerId> + '_ {
+        let one = |id: PlayerId| [Some(id), None, None];
+        let (ids, more): ([Option<PlayerId>; 3], &[Option<PlayerId>]) = match self {
             Line::Status(_)
             | Line::Server(_)
             | Line::World(_)
@@ -449,11 +456,11 @@ impl Line {
             | Line::VoteOptions(_)
             | Line::Announcer(_)
             | Line::TimeRemaining(_)
-            | Line::ServerText(_) => Vec::new(),
-            Line::Kill(k) => some(&[Some(k.victim), k.attacker, k.assister]),
-            Line::Damage(d) => some(&[Some(d.victim), d.attacker]),
-            Line::Uber(u) => some(&[Some(u.medic), u.target]),
-            Line::UberReady(c) | Line::UberEnded(c) => vec![c.medic],
+            | Line::ServerText(_) => ([None; 3], &[]),
+            Line::Kill(k) => ([Some(k.victim), k.attacker, k.assister], &[]),
+            Line::Damage(d) => ([Some(d.victim), d.attacker, None], &[]),
+            Line::Uber(u) => ([Some(u.medic), u.target, None], &[]),
+            Line::UberReady(c) | Line::UberEnded(c) => (one(c.medic), &[]),
             Line::Spawn(Spawn { player, .. })
             | Line::TeamChange(TeamChange { player, .. })
             | Line::ClassChange(ClassChange { player, .. })
@@ -464,22 +471,23 @@ impl Line {
             | Line::Airblast(Airblast { player, .. })
             | Line::BlastJump(BlastJump { player, .. })
             | Line::Pickup(Pickup { player, .. })
-            | Line::VoiceCommand(VoiceCommand { player, .. }) => vec![*player],
+            | Line::VoiceCommand(VoiceCommand { player, .. }) => (one(*player), &[]),
             Line::Shot(Shot { player, .. })
             | Line::Chat(Chat { player, .. })
             | Line::VoteCast(VoteCast { player, .. })
-            | Line::Tournament(Tournament { player, .. }) => some(&[*player]),
-            Line::BuildingDestroyed(b) => some(&[Some(b.owner), b.attacker]),
-            Line::PointCaptured(p) => some(&p.cappers),
-            Line::CaptureBlocked(b) => some(&[b.blocker, b.victim]),
-            Line::KilledCapper(k) => some(&[Some(k.killer), Some(k.victim), k.assister]),
-            Line::Flag(f) => some(&[f.player, f.carrier]),
-            Line::MedicDeath(m) => some(&[Some(m.medic), m.attacker]),
-            Line::MedicDefended(m) => vec![m.player, m.medic],
-            Line::Reflect(r) => some(&[Some(r.player), r.owner]),
-            Line::SentryShot(s) => some(&[s.builder, s.target]),
-            Line::Heal(h) => some(&[Some(h.patient), h.healer]),
-        }
+            | Line::Tournament(Tournament { player, .. }) => ([*player, None, None], &[]),
+            Line::BuildingDestroyed(b) => ([Some(b.owner), b.attacker, None], &[]),
+            Line::PointCaptured(p) => ([None; 3], &p.cappers),
+            Line::CaptureBlocked(b) => ([b.blocker, b.victim, None], &[]),
+            Line::KilledCapper(k) => ([Some(k.killer), Some(k.victim), k.assister], &[]),
+            Line::Flag(f) => ([f.player, f.carrier, None], &[]),
+            Line::MedicDeath(m) => ([Some(m.medic), m.attacker, None], &[]),
+            Line::MedicDefended(m) => ([Some(m.player), Some(m.medic), None], &[]),
+            Line::Reflect(r) => ([Some(r.player), r.owner, None], &[]),
+            Line::SentryShot(s) => ([s.builder, s.target, None], &[]),
+            Line::Heal(h) => ([Some(h.patient), h.healer, None], &[]),
+        };
+        ids.into_iter().chain(more.iter().copied()).flatten()
     }
 }
 
@@ -708,7 +716,7 @@ pub struct Projectile {
     pub id: u32,
     /// What it is.
     pub kind: ProjectileKind,
-    /// Its rotation.
+    /// Its rotation in degrees.
     pub yaw: f64,
     /// Team.
     pub team: Team,
@@ -737,7 +745,7 @@ pub struct Building {
     pub max_hp: u16,
     /// Position.
     pub pos: Position,
-    /// Direction it was placed in.
+    /// Direction it was placed in, in degrees.
     pub yaw: f64,
     /// The engineer.
     pub builder: Option<PlayerId>,
@@ -752,7 +760,7 @@ pub struct Building {
     /// Sentries: still being built.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub building: Option<bool>,
-    /// Sentries whose turret has been seen: the direction it aims.
+    /// Sentries whose turret has been seen: the direction it aims, in degrees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim: Option<f64>,
     /// Sentries whose turret has been seen: who it targets (`Some(None)`: nobody).
@@ -769,8 +777,8 @@ pub struct Building {
 pub enum Objective {
     /// A control point.
     ControlPoint {
-        /// Its index.
-        index: usize,
+        /// Its index, as `point_captured` and the other point events give it.
+        index: u8,
         /// Where it is.
         pos: Option<Position>,
         /// The team that owns it.
@@ -1166,7 +1174,9 @@ pub struct Shot {
     pub tick: u32,
     pub player: Option<PlayerId>,
     pub origin: Position,
+    /// Degrees.
     pub pitch: f64,
+    /// Degrees.
     pub yaw: f64,
     pub weapon_id: i64,
     pub crit: bool,
@@ -1219,13 +1229,56 @@ pub struct Chat {
     pub kind: ChatKind,
 }
 
-/// A coloured span of a chat line.
+/// A coloured span of a chat line, written as `{"c": colour, "t": text}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatPart {
-    /// `RRGGBB`, `team` (the sender's team colour) or none (the default).
-    pub c: Option<String>,
+    /// The colour; none for the default.
+    #[serde(rename = "c")]
+    pub color: Option<ChatColor>,
     /// The text.
-    pub t: String,
+    #[serde(rename = "t")]
+    pub text: String,
+}
+
+/// A chat colour, written as `RRGGBB` (upper case) or `team`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatColor {
+    /// The sender's team colour.
+    Team,
+    /// Red, green and blue.
+    Rgb([u8; 3]),
+}
+
+impl ChatColor {
+    /// The colour of six hex digits, in either case.
+    pub fn from_hex(hex: &str) -> Option<ChatColor> {
+        if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+        Some(ChatColor::Rgb([byte(0)?, byte(2)?, byte(4)?]))
+    }
+}
+
+impl Serialize for ChatColor {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ChatColor::Team => s.serialize_str("team"),
+            ChatColor::Rgb([r, g, b]) => s.collect_str(&format_args!("{r:02X}{g:02X}{b:02X}")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ChatColor {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = <std::borrow::Cow<'de, str>>::deserialize(d)?;
+        match &*text {
+            "team" => Some(ChatColor::Team),
+            hex if !hex.bytes().any(|b| b.is_ascii_lowercase()) => ChatColor::from_hex(hex),
+            _ => None,
+        }
+        .ok_or_else(|| de::Error::custom(format_args!("unknown chat colour {text:?}")))
+    }
 }
 
 /// A player was healed.
@@ -1578,6 +1631,8 @@ mod tests {
         assert_eq!(Condition::from_number(89), None, "unused number");
         assert_eq!(Condition::from_number(200), None);
         let c = Condition::from_number(130).unwrap();
+        assert_eq!(c.number(), 130);
+        assert_eq!(c.to_string(), "ImmuneToPushback");
         assert_eq!(serde_json::to_value(c).unwrap(), json!("ImmuneToPushback"));
         assert_eq!(serde_json::from_value::<Condition>(json!("ImmuneToPushback")).unwrap(), c);
         assert!(serde_json::from_value::<Condition>(json!("Hovering")).is_err());
@@ -1606,11 +1661,39 @@ mod tests {
             team: Team::Red,
             cappers: vec![Some(PlayerId(3)), None, Some(PlayerId(8))],
         });
-        assert_eq!(cap.players(), [PlayerId(3), PlayerId(8)]);
+        assert_eq!(cap.players().collect::<Vec<_>>(), [PlayerId(3), PlayerId(8)]);
         assert_eq!(cap.tick(), Some(40));
         let medic =
             Line::MedicDeath(MedicDeath { tick: 1, medic: PlayerId(2), attacker: None, healing: 300, drop: true });
-        assert_eq!(medic.players(), [PlayerId(2)]);
+        assert_eq!(medic.players().collect::<Vec<_>>(), [PlayerId(2)]);
+        let killed = Line::KilledCapper(KilledCapper {
+            tick: 1,
+            point: 0,
+            killer: PlayerId(4),
+            victim: PlayerId(5),
+            assister: Some(PlayerId(6)),
+        });
+        assert_eq!(killed.players().collect::<Vec<_>>(), [PlayerId(4), PlayerId(5), PlayerId(6)]);
+        assert_eq!(
+            Line::Airblast(Airblast { tick: 1, player: PlayerId(7) }).players().collect::<Vec<_>>(),
+            [PlayerId(7)]
+        );
+        assert_eq!(Line::Mark(Mark { tick: 1, pos: [0.0; 3] }).players().count(), 0);
+    }
+
+    #[test]
+    fn chat_colours_are_written_as_hex_or_team() {
+        let parts = [
+            ChatPart { color: None, text: "[STV] ".into() },
+            ChatPart { color: Some(ChatColor::Rgb([0x99, 0xCC, 0x0F])), text: "BLU".into() },
+            ChatPart { color: Some(ChatColor::Team), text: "won".into() },
+        ];
+        let expected = json!([{"c": null, "t": "[STV] "}, {"c": "99CC0F", "t": "BLU"}, {"c": "team", "t": "won"}]);
+        assert_eq!(s(&parts), expected);
+        assert_eq!(serde_json::from_value::<Vec<ChatPart>>(expected).unwrap(), parts);
+        for bad in ["99cc0f", "99CC0", "GGGGGG", "red"] {
+            assert!(serde_json::from_value::<ChatPart>(json!({"c": bad, "t": ""})).is_err(), "{bad}");
+        }
     }
 
     fn s(v: impl Serialize) -> Value {

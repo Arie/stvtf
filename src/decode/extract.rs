@@ -3,8 +3,8 @@
 
 use super::detail;
 use crate::output::{
-    self as out, Airblast, BannerKind, BuildingKind, ChatKind, ChatPart, Condition, Line, MedigunKind, PlayerId,
-    Position, ProjectileKind, Resist, Round, Ubered,
+    self as out, Airblast, BannerKind, BuildingKind, ChatColor, ChatKind, ChatPart, Condition, Line, MedigunKind,
+    PlayerId, Position, ProjectileKind, Resist, Round, Ubered,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -404,7 +404,7 @@ fn has_cond(words: &[u32; 6], c: PlayerCondition) -> bool {
 /// The conditions set in a player's condition words (160 numbers: 0-31 twice, then four more
 /// words), in number order.
 fn conditions(words: &[u32; 6]) -> Vec<Condition> {
-    (0..32 * 5).filter(|&n| has_cond_bit(words, n)).filter_map(Condition::from_number).collect()
+    (0..32 * 5).filter(|&n| has_cond_bit(words, usize::from(n))).filter_map(Condition::from_number).collect()
 }
 
 fn chat_kind(kind: ChatMessageKind) -> ChatKind {
@@ -1216,8 +1216,8 @@ impl Extractor {
             .control_points
             .iter()
             .take(self.num_control_points)
-            .enumerate()
-            .map(|(index, cp)| out::Objective::ControlPoint {
+            .zip(0..)
+            .map(|(cp, index)| out::Objective::ControlPoint {
                 index,
                 pos: cp.pos.map(xyz),
                 owner: team_num(cp.owner),
@@ -1328,25 +1328,24 @@ pub(crate) fn strip_colors(text: &str) -> String {
     out.trim_end_matches('\n').to_string()
 }
 
-/// The coloured spans of a chat line with TF2 colour codes, or None without any. A span's colour
-/// is `RRGGBB`, `team` (the sender's team colour) or none (the default). \x03 is the team colour,
-/// \x04 and \x05 Valve's green ones.
+/// The coloured spans of a chat line with TF2 colour codes, or None without any. \x03 is the
+/// sender's team colour, \x04 and \x05 Valve's green ones, \x07 and \x08 a hex colour.
 pub(crate) fn color_parts(text: &str) -> Option<Vec<ChatPart>> {
     if !text.chars().any(|c| ('\u{01}'..='\u{08}').contains(&c)) {
         return None;
     }
     let mut parts = Vec::new();
-    let (mut color, mut run): (Option<String>, String) = (None, String::new());
+    let (mut color, mut run): (Option<ChatColor>, String) = (None, String::new());
     let mut chars = text.trim_end_matches('\n').chars();
     while let Some(c) = chars.next() {
         let next = match c {
             '\u{07}' | '\u{08}' => {
                 let hex: String = chars.by_ref().take(if c == '\u{07}' { 6 } else { 8 }).collect();
-                Some(hex.get(..6).filter(|h| h.chars().all(|d| d.is_ascii_hexdigit())).map(str::to_ascii_uppercase))
+                Some(hex.get(..6).and_then(ChatColor::from_hex))
             }
-            '\u{03}' => Some(Some("team".to_string())),
-            '\u{04}' => Some(Some("40FF40".to_string())),
-            '\u{05}' => Some(Some("99FF99".to_string())),
+            '\u{03}' => Some(Some(ChatColor::Team)),
+            '\u{04}' => Some(Some(ChatColor::Rgb([0x40, 0xFF, 0x40]))),
+            '\u{05}' => Some(Some(ChatColor::Rgb([0x99, 0xFF, 0x99]))),
             '\u{01}' | '\u{02}' | '\u{06}' => Some(None),
             _ => {
                 run.push(c);
@@ -1355,13 +1354,13 @@ pub(crate) fn color_parts(text: &str) -> Option<Vec<ChatPart>> {
         };
         if let Some(next) = next {
             if !run.is_empty() {
-                parts.push(ChatPart { c: color.clone(), t: std::mem::take(&mut run) });
+                parts.push(ChatPart { color, text: std::mem::take(&mut run) });
             }
             color = next;
         }
     }
     if !run.is_empty() {
-        parts.push(ChatPart { c: color, t: run });
+        parts.push(ChatPart { color, text: run });
     }
     Some(parts)
 }
@@ -2022,19 +2021,19 @@ mod tests {
 
     #[test]
     fn chat_colour_codes_become_spans() {
-        let part = |c: Option<&str>, t: &str| ChatPart { c: c.map(str::to_string), t: t.to_string() };
+        let part = |color, text: &str| ChatPart { color, text: text.to_string() };
         let parts = color_parts("\u{1}\u{1}[STV Stats] \u{7}99ccffBLU\u{1}'s medic \u{3}DROPPED!\n").unwrap();
         assert_eq!(
             parts,
             [
                 part(None, "[STV Stats] "),
-                part(Some("99CCFF"), "BLU"),
+                part(Some(ChatColor::Rgb([0x99, 0xCC, 0xFF])), "BLU"),
                 part(None, "'s medic "),
-                part(Some("team"), "DROPPED!")
+                part(Some(ChatColor::Team), "DROPPED!")
             ]
         );
         assert!(color_parts("plain text").is_none());
-        assert_eq!(color_parts("\u{8}FF0000AAred").unwrap(), [part(Some("FF0000"), "red")]);
+        assert_eq!(color_parts("\u{8}FF0000AAred").unwrap(), [part(Some(ChatColor::Rgb([0xFF, 0, 0])), "red")]);
     }
 
     #[test]
@@ -2163,7 +2162,7 @@ mod cond_tests {
     fn condition_names_match_the_parser() {
         for n in 0..=PlayerCondition::MAX as u8 {
             let expected = PlayerCondition::try_from(n).map(|c| format!("{c:?}")).ok();
-            assert_eq!(Condition::from_number(usize::from(n)).map(|c| c.name().to_string()), expected, "condition {n}");
+            assert_eq!(Condition::from_number(n).map(|c| c.name().to_string()), expected, "condition {n}");
         }
     }
 

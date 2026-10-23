@@ -40,7 +40,7 @@ fn cart(snapshot: &Snapshot) -> Option<Cart> {
 }
 
 /// Control point `index`: its position and owner.
-fn point(snapshot: &Snapshot, index: usize) -> (Option<Position>, Team) {
+fn point(snapshot: &Snapshot, index: u8) -> (Option<Position>, Team) {
     snapshot
         .objectives
         .iter()
