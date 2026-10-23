@@ -1268,6 +1268,7 @@ impl Extractor {
                 },
                 carrier: holder.and_then(|p| p.info.as_ref()).map(|i| PlayerId(u16::from(i.user_id))),
                 returns_in: (f.status == 2 && f.reset_time > now).then(|| round1(f.reset_time - now)),
+                points: None,
             });
         }
         let score = |team: Team| self.teams.values().find(|t| t.team == team as u8).map_or(0, |t| t.score);
@@ -1287,6 +1288,8 @@ impl Extractor {
             score: out::Score { red: score(Team::Red), blue: score(Team::Blue) },
             captures: (!self.flags.is_empty())
                 .then(|| out::Score { red: captures(Team::Red), blue: captures(Team::Blue) }),
+            points: None,
+            mvm: None,
             timers: self
                 .timers
                 .iter()

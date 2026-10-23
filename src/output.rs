@@ -199,11 +199,13 @@ pub enum HealSource {
 
 /// What a player blast jumped with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub enum JumpKind {
     Rocket,
     Sticky,
+    /// The Thermal Thruster.
+    RocketPack,
 }
 
 /// Whether a blast jump started or landed.
@@ -369,6 +371,33 @@ pub enum Line {
     TimeRemaining(TimeRemaining),
     VoiceCommand(VoiceCommand),
     ServerText(ServerText),
+    PassGet(PassGet),
+    PassFree(PassFree),
+    PassCaught(PassCaught),
+    PassScore(PassScore),
+    PassStolen(PassStolen),
+    PassBlocked(PassBlocked),
+    BallCarrierKilled(BallCarrierKilled),
+    RobotKilled(RobotKilled),
+    PointsScored(PointsScored),
+    SpecialScore(PlayerMoment),
+    TeamLeaderKilled(TeamLeaderKilled),
+    RocketOpen(RocketOpen),
+    RoundSelected(RoundSelected),
+    Teleported(Teleported),
+    Stun(Stun),
+    Sapped(Sapped),
+    BuildingRemoved(ObjectChange),
+    BuildingDetonated(ObjectChange),
+    DetStickies(PlayerMoment),
+    CaptureStarted(CaptureStarted),
+    PointLocked(PointLocked),
+    NpcDamage(NpcDamage),
+    HudText(HudText),
+    Hint(Hint),
+    VoteStarted(VoteStarted),
+    VotePassed(VotePassed),
+    VoteFailed(VoteFailed),
 }
 
 impl Line {
@@ -427,7 +456,34 @@ impl Line {
             | Line::Announcer(Announcer { tick, .. })
             | Line::TimeRemaining(TimeRemaining { tick, .. })
             | Line::VoiceCommand(VoiceCommand { tick, .. })
-            | Line::ServerText(ServerText { tick, .. }) => Some(*tick),
+            | Line::ServerText(ServerText { tick, .. })
+            | Line::PassGet(PassGet { tick, .. })
+            | Line::PassFree(PassFree { tick, .. })
+            | Line::PassCaught(PassCaught { tick, .. })
+            | Line::PassScore(PassScore { tick, .. })
+            | Line::PassStolen(PassStolen { tick, .. })
+            | Line::PassBlocked(PassBlocked { tick, .. })
+            | Line::BallCarrierKilled(BallCarrierKilled { tick, .. })
+            | Line::RobotKilled(RobotKilled { tick, .. })
+            | Line::PointsScored(PointsScored { tick, .. })
+            | Line::SpecialScore(PlayerMoment { tick, .. })
+            | Line::TeamLeaderKilled(TeamLeaderKilled { tick, .. })
+            | Line::RocketOpen(RocketOpen { tick, .. })
+            | Line::RoundSelected(RoundSelected { tick, .. })
+            | Line::Teleported(Teleported { tick, .. })
+            | Line::Stun(Stun { tick, .. })
+            | Line::Sapped(Sapped { tick, .. })
+            | Line::BuildingRemoved(ObjectChange { tick, .. })
+            | Line::BuildingDetonated(ObjectChange { tick, .. })
+            | Line::DetStickies(PlayerMoment { tick, .. })
+            | Line::CaptureStarted(CaptureStarted { tick, .. })
+            | Line::PointLocked(PointLocked { tick, .. })
+            | Line::NpcDamage(NpcDamage { tick, .. })
+            | Line::HudText(HudText { tick, .. })
+            | Line::Hint(Hint { tick, .. })
+            | Line::VoteStarted(VoteStarted { tick, .. })
+            | Line::VotePassed(VotePassed { tick, .. })
+            | Line::VoteFailed(VoteFailed { tick, .. }) => Some(*tick),
         }
     }
 
@@ -456,7 +512,28 @@ impl Line {
             | Line::VoteOptions(_)
             | Line::Announcer(_)
             | Line::TimeRemaining(_)
-            | Line::ServerText(_) => ([None; 3], &[]),
+            | Line::ServerText(_)
+            | Line::RocketOpen(_)
+            | Line::RoundSelected(_)
+            | Line::PointLocked(_)
+            | Line::HudText(_)
+            | Line::Hint(_)
+            | Line::VotePassed(_)
+            | Line::VoteFailed(_) => ([None; 3], &[]),
+            Line::PassFree(f) => ([Some(f.player), f.attacker, None], &[]),
+            Line::PassCaught(c) => ([Some(c.passer), Some(c.catcher), None], &[]),
+            Line::PassScore(sc) => ([Some(sc.scorer), sc.assister, None], &[]),
+            Line::PassStolen(st) => ([Some(st.victim), Some(st.attacker), None], &[]),
+            Line::PassBlocked(b) => ([Some(b.owner), Some(b.blocker), None], &[]),
+            Line::BallCarrierKilled(k) => ([k.attacker, Some(k.victim), k.assister], &[]),
+            Line::RobotKilled(r) => ([r.attacker, None, None], &[]),
+            Line::TeamLeaderKilled(k) => ([k.killer, Some(k.victim), None], &[]),
+            Line::Teleported(t) => ([Some(t.player), t.builder, None], &[]),
+            Line::Stun(st) => ([st.stunner, Some(st.victim), None], &[]),
+            Line::Sapped(sa) => ([Some(sa.player), Some(sa.owner), None], &[]),
+            Line::CaptureStarted(c) => ([None; 3], &c.cappers),
+            Line::NpcDamage(n) => ([n.attacker, None, None], &[]),
+            Line::VoteStarted(v) => ([v.caller, None, None], &[]),
             Line::Kill(k) => ([Some(k.victim), k.attacker, k.assister], &[]),
             Line::Damage(d) => ([Some(d.victim), d.attacker, None], &[]),
             Line::Uber(u) => ([Some(u.medic), u.target, None], &[]),
@@ -471,7 +548,13 @@ impl Line {
             | Line::Airblast(Airblast { player, .. })
             | Line::BlastJump(BlastJump { player, .. })
             | Line::Pickup(Pickup { player, .. })
-            | Line::VoiceCommand(VoiceCommand { player, .. }) => (one(*player), &[]),
+            | Line::VoiceCommand(VoiceCommand { player, .. })
+            | Line::PassGet(PassGet { player, .. })
+            | Line::PointsScored(PointsScored { player, .. })
+            | Line::SpecialScore(PlayerMoment { player, .. })
+            | Line::BuildingRemoved(ObjectChange { player, .. })
+            | Line::BuildingDetonated(ObjectChange { player, .. })
+            | Line::DetStickies(PlayerMoment { player, .. }) => (one(*player), &[]),
             Line::Shot(Shot { player, .. })
             | Line::Chat(Chat { player, .. })
             | Line::VoteCast(VoteCast { player, .. })
@@ -603,9 +686,15 @@ pub struct Snapshot {
     pub match_time: Option<f64>,
     /// Rounds won.
     pub score: Score,
-    /// Flags captured this round, on maps with flags.
+    /// Flags captured this round, on maps with flags; goals scored on pass time maps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub captures: Option<Score>,
+    /// Robot or player destruction points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<Points>,
+    /// Mann vs. Machine's wave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mvm: Option<Mvm>,
     /// The round timers the HUD shows.
     pub timers: Vec<Timer>,
 }
@@ -825,7 +914,83 @@ pub enum Objective {
         carrier: Option<PlayerId>,
         /// Seconds until a dropped flag returns.
         returns_in: Option<f64>,
+        /// What it is worth, when the mode counts that: the points of a robot destruction core,
+        /// the bottles a player destruction pickup holds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        points: Option<i64>,
     },
+    /// The pass time ball.
+    Ball {
+        /// Entity index.
+        id: u32,
+        /// Position (its carrier's while carried).
+        pos: Position,
+        /// The team of the player who has it or last had it; none when neutral.
+        team: Team,
+        /// Who carries it.
+        carrier: Option<PlayerId>,
+    },
+    /// A pass time goal.
+    Goal {
+        /// Entity index.
+        id: u32,
+        /// Position.
+        pos: Position,
+        /// The team that scores in it.
+        team: Team,
+    },
+    /// A robot destruction robot.
+    Robot {
+        /// Entity index.
+        id: u32,
+        /// Position.
+        pos: Position,
+        /// Team.
+        team: Team,
+        /// Health.
+        hp: u16,
+        /// Maximum health.
+        max_hp: u16,
+    },
+    /// A Mann vs. Machine tank.
+    Tank {
+        /// Entity index.
+        id: u32,
+        /// Position.
+        pos: Position,
+        /// Health left, 0 to 1.
+        health: f64,
+    },
+}
+
+/// Robot and player destruction points, or what a map that reuses their logic counts with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Points {
+    /// Red's points.
+    pub red: i64,
+    /// Blue's points.
+    pub blue: i64,
+    /// Points to win, when the map sets it.
+    pub max: Option<i64>,
+    /// Player destruction: red's team leader.
+    pub red_leader: Option<PlayerId>,
+    /// Player destruction: blue's team leader.
+    pub blue_leader: Option<PlayerId>,
+}
+
+/// Mann vs. Machine's wave.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mvm {
+    /// The current wave, from 1.
+    pub wave: u16,
+    /// Waves in the mission.
+    pub waves: u16,
+    /// Robots in the current wave.
+    pub enemies: u16,
+    /// Between waves (players are upgrading and readying up).
+    pub between_waves: bool,
+    /// Money lying on the ground.
+    pub money: i64,
 }
 
 /// Players on a control point, per team.
@@ -1393,6 +1558,290 @@ pub struct ServerText {
     pub text: String,
 }
 
+/// Pass time: a player got the ball.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PassGet {
+    pub tick: u32,
+    pub player: PlayerId,
+}
+
+/// Pass time: the ball came loose from its carrier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PassFree {
+    pub tick: u32,
+    /// Who had it.
+    pub player: PlayerId,
+    /// Who knocked it loose, if anyone.
+    pub attacker: Option<PlayerId>,
+}
+
+/// Pass time: a pass was caught.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PassCaught {
+    pub tick: u32,
+    pub passer: PlayerId,
+    pub catcher: PlayerId,
+    /// Hammer units the ball flew.
+    pub dist: f64,
+    /// Seconds in the air.
+    pub duration: f64,
+}
+
+/// Pass time: a goal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PassScore {
+    pub tick: u32,
+    pub scorer: PlayerId,
+    /// Who passed it to the scorer.
+    pub assister: Option<PlayerId>,
+    /// Points the goal is worth.
+    pub points: u8,
+}
+
+/// Pass time: the ball was taken off its carrier by melee.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PassStolen {
+    pub tick: u32,
+    pub victim: PlayerId,
+    pub attacker: PlayerId,
+}
+
+/// Pass time: a pass was blocked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PassBlocked {
+    pub tick: u32,
+    /// Who threw it.
+    pub owner: PlayerId,
+    pub blocker: PlayerId,
+}
+
+/// Pass time: the ball carrier was killed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct BallCarrierKilled {
+    pub tick: u32,
+    pub attacker: Option<PlayerId>,
+    pub victim: PlayerId,
+    pub assister: Option<PlayerId>,
+}
+
+/// Robot destruction: a robot was destroyed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct RobotKilled {
+    pub tick: u32,
+    pub attacker: Option<PlayerId>,
+    /// The kill icon's weapon name.
+    pub weapon: String,
+}
+
+/// How robot destruction points were scored (TF2's `RDScoreMethod_t`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoreMethod {
+    /// Cores brought to the team's reactor.
+    ReactorCaptured,
+    /// A core picked up.
+    CoresCollected,
+    /// The reactor's cores returned.
+    ReactorReturned,
+    /// Cores stolen from the enemy reactor (negative for the team stolen from).
+    ReactorStolen,
+    /// A method this version does not know.
+    Unknown,
+}
+
+/// Robot destruction: a player scored points for their team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PointsScored {
+    pub tick: u32,
+    pub player: PlayerId,
+    pub method: ScoreMethod,
+    pub amount: i16,
+}
+
+/// Something one player did: delivered player destruction pickups (`special_score`), detonated
+/// their stickies (`det_stickies`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PlayerMoment {
+    pub tick: u32,
+    pub player: PlayerId,
+}
+
+/// Player destruction: a team leader was killed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct TeamLeaderKilled {
+    pub tick: u32,
+    pub killer: Option<PlayerId>,
+    pub victim: PlayerId,
+}
+
+/// Special delivery: the rocket opened for the team with the Australium.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct RocketOpen {
+    pub tick: u32,
+    pub team: Team,
+}
+
+/// Territorial control: the round chose its control points.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct RoundSelected {
+    pub tick: u32,
+    /// The map's name for the round (`round_a`).
+    pub round: String,
+}
+
+/// A player went through a teleporter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct Teleported {
+    pub tick: u32,
+    pub player: PlayerId,
+    /// The engineer whose teleporter it was.
+    pub builder: Option<PlayerId>,
+    /// Hammer units between entrance and exit.
+    pub dist: f64,
+}
+
+/// A player was stunned (the Sandman's ball, …).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct Stun {
+    pub tick: u32,
+    pub stunner: Option<PlayerId>,
+    pub victim: PlayerId,
+    /// The victim was capping.
+    pub capping: bool,
+    /// A full stun (a moonshot), not a slow-down.
+    pub big: bool,
+}
+
+/// A spy sapped a building.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct Sapped {
+    pub tick: u32,
+    /// The spy.
+    pub player: PlayerId,
+    /// The engineer.
+    pub owner: PlayerId,
+    pub object: BuildingKind,
+    /// The sapper's entity index.
+    pub sapper: u16,
+}
+
+/// A capture started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct CaptureStarted {
+    pub tick: u32,
+    pub point: u8,
+    pub name: String,
+    /// The team capturing.
+    pub team: Team,
+    /// The team that owns the point.
+    pub owner: Team,
+    /// Who is capping (none for one no longer known).
+    pub cappers: Vec<Option<PlayerId>>,
+}
+
+/// A control point was locked or unlocked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct PointLocked {
+    pub tick: u32,
+    pub point: u8,
+    pub name: String,
+    pub locked: bool,
+}
+
+/// Damage to something that is not a player: a tank, a robot destruction robot, a boss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct NpcDamage {
+    pub tick: u32,
+    /// Its entity index.
+    pub id: u16,
+    pub attacker: Option<PlayerId>,
+    pub amount: u16,
+    /// Health left.
+    pub health: u16,
+    pub crit: bool,
+    pub weapon_id: u16,
+    /// TF2's boss type, 0 for none.
+    pub boss: u16,
+}
+
+/// A map's or plugin's text on the HUD (`game_text`): scores, timers, instructions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct HudText {
+    pub tick: u32,
+    /// The HUD channel; a new text replaces the one on its channel.
+    pub channel: u8,
+    /// Where on the screen, 0 to 1 from the top left (-1 centres).
+    pub pos: [f64; 2],
+    pub color: ChatColor,
+    /// Seconds it stays.
+    pub hold: f64,
+    pub text: String,
+}
+
+/// A hint shown on the HUD.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct Hint {
+    pub tick: u32,
+    pub text: String,
+}
+
+/// A vote was called.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct VoteStarted {
+    pub tick: u32,
+    /// The team voting; none for everyone.
+    pub team: Team,
+    pub caller: Option<PlayerId>,
+    /// What the vote is about, as a localisation token (`#TF_vote_nextlevel`).
+    pub issue: String,
+    /// Its argument (a map, a player's name).
+    pub details: String,
+    /// A yes/no vote, not a choice between options.
+    pub yes_no: bool,
+}
+
+/// A vote passed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct VotePassed {
+    pub tick: u32,
+    pub team: Team,
+    pub issue: String,
+    pub details: String,
+}
+
+/// A vote failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct VoteFailed {
+    pub tick: u32,
+    pub team: Team,
+    /// TF2's reason (`vote_create_failed_t`).
+    pub reason: u8,
+}
+
 /// Names of the TF2 player conditions (`ETFCond`), by number; "" for unused numbers. They follow
 /// tf-demo-parser's `PlayerCondition`, spelled out so the output does not follow that crate's
 /// Debug formatting.
@@ -1694,6 +2143,251 @@ mod tests {
         for bad in ["99cc0f", "99CC0", "GGGGGG", "red"] {
             assert!(serde_json::from_value::<ChatPart>(json!({"c": bad, "t": ""})).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    #[expect(clippy::too_many_lines, reason = "one case per line type")]
+    fn game_mode_lines_are_written_as_documented() {
+        let p = PlayerId;
+        let cases = [
+            (Line::PassGet(PassGet { tick: 1, player: p(3) }), json!({"type": "pass_get", "tick": 1, "player": 3})),
+            (
+                Line::PassFree(PassFree { tick: 1, player: p(3), attacker: None }),
+                json!({"type": "pass_free", "tick": 1, "player": 3, "attacker": null}),
+            ),
+            (
+                Line::PassCaught(PassCaught { tick: 1, passer: p(3), catcher: p(4), dist: 54.3, duration: 1.48 }),
+                json!({"type": "pass_caught", "tick": 1, "passer": 3, "catcher": 4, "dist": 54.3, "duration": 1.48}),
+            ),
+            (
+                Line::PassScore(PassScore { tick: 1, scorer: p(3), assister: Some(p(4)), points: 1 }),
+                json!({"type": "pass_score", "tick": 1, "scorer": 3, "assister": 4, "points": 1}),
+            ),
+            (
+                Line::PassStolen(PassStolen { tick: 1, victim: p(3), attacker: p(4) }),
+                json!({"type": "pass_stolen", "tick": 1, "victim": 3, "attacker": 4}),
+            ),
+            (
+                Line::PassBlocked(PassBlocked { tick: 1, owner: p(3), blocker: p(4) }),
+                json!({"type": "pass_blocked", "tick": 1, "owner": 3, "blocker": 4}),
+            ),
+            (
+                Line::BallCarrierKilled(BallCarrierKilled {
+                    tick: 1,
+                    attacker: Some(p(3)),
+                    victim: p(4),
+                    assister: None,
+                }),
+                json!({"type": "ball_carrier_killed", "tick": 1, "attacker": 3, "victim": 4, "assister": null}),
+            ),
+            (
+                Line::RobotKilled(RobotKilled { tick: 1, attacker: Some(p(3)), weapon: "solemn_vow".into() }),
+                json!({"type": "robot_killed", "tick": 1, "attacker": 3, "weapon": "solemn_vow"}),
+            ),
+            (
+                Line::PointsScored(PointsScored {
+                    tick: 1,
+                    player: p(3),
+                    method: ScoreMethod::ReactorStolen,
+                    amount: -5,
+                }),
+                json!({"type": "points_scored", "tick": 1, "player": 3, "method": "reactor_stolen", "amount": -5}),
+            ),
+            (
+                Line::SpecialScore(PlayerMoment { tick: 1, player: p(3) }),
+                json!({"type": "special_score", "tick": 1, "player": 3}),
+            ),
+            (
+                Line::TeamLeaderKilled(TeamLeaderKilled { tick: 1, killer: Some(p(3)), victim: p(4) }),
+                json!({"type": "team_leader_killed", "tick": 1, "killer": 3, "victim": 4}),
+            ),
+            (
+                Line::RocketOpen(RocketOpen { tick: 1, team: Team::Red }),
+                json!({"type": "rocket_open", "tick": 1, "team": "red"}),
+            ),
+            (
+                Line::RoundSelected(RoundSelected { tick: 1, round: "round_a".into() }),
+                json!({"type": "round_selected", "tick": 1, "round": "round_a"}),
+            ),
+            (
+                Line::Teleported(Teleported { tick: 1, player: p(3), builder: Some(p(4)), dist: 2707.7 }),
+                json!({"type": "teleported", "tick": 1, "player": 3, "builder": 4, "dist": 2707.7}),
+            ),
+            (
+                Line::Stun(Stun { tick: 1, stunner: Some(p(3)), victim: p(4), capping: false, big: true }),
+                json!({"type": "stun", "tick": 1, "stunner": 3, "victim": 4, "capping": false, "big": true}),
+            ),
+            (
+                Line::Sapped(Sapped { tick: 1, player: p(3), owner: p(4), object: BuildingKind::Sentry, sapper: 1096 }),
+                json!({"type": "sapped", "tick": 1, "player": 3, "owner": 4, "object": "sentry", "sapper": 1096}),
+            ),
+            (
+                Line::BuildingRemoved(ObjectChange {
+                    tick: 1,
+                    player: p(3),
+                    object: BuildingKind::Teleporter,
+                    id: 165,
+                }),
+                json!({"type": "building_removed", "tick": 1, "player": 3, "object": "teleporter", "id": 165}),
+            ),
+            (
+                Line::BuildingDetonated(ObjectChange {
+                    tick: 1,
+                    player: p(3),
+                    object: BuildingKind::Dispenser,
+                    id: 476,
+                }),
+                json!({"type": "building_detonated", "tick": 1, "player": 3, "object": "dispenser", "id": 476}),
+            ),
+            (
+                Line::DetStickies(PlayerMoment { tick: 1, player: p(3) }),
+                json!({"type": "det_stickies", "tick": 1, "player": 3}),
+            ),
+            (
+                Line::CaptureStarted(CaptureStarted {
+                    tick: 1,
+                    point: 0,
+                    name: "#Arena_cap".into(),
+                    team: Team::Red,
+                    owner: Team::Unassigned,
+                    cappers: vec![Some(p(3)), None],
+                }),
+                json!({"type": "capture_started", "tick": 1, "point": 0, "name": "#Arena_cap", "team": "red",
+                       "owner": "none", "cappers": [3, null]}),
+            ),
+            (
+                Line::PointLocked(PointLocked { tick: 1, point: 0, name: "#cap".into(), locked: true }),
+                json!({"type": "point_locked", "tick": 1, "point": 0, "name": "#cap", "locked": true}),
+            ),
+            (
+                Line::NpcDamage(NpcDamage {
+                    tick: 1,
+                    id: 154,
+                    attacker: Some(p(3)),
+                    amount: 22,
+                    health: 77,
+                    crit: false,
+                    weapon_id: 58,
+                    boss: 0,
+                }),
+                json!({"type": "npc_damage", "tick": 1, "id": 154, "attacker": 3, "amount": 22, "health": 77,
+                       "crit": false, "weapon_id": 58, "boss": 0}),
+            ),
+            (
+                Line::HudText(HudText {
+                    tick: 1,
+                    channel: 2,
+                    pos: [0.65, 0.82],
+                    color: ChatColor::Rgb([0xFF, 0x55, 0x42]),
+                    hold: 1.0,
+                    text: "0%".into(),
+                }),
+                json!({"type": "hud_text", "tick": 1, "channel": 2, "pos": [0.65, 0.82], "color": "FF5542",
+                       "hold": 1.0, "text": "0%"}),
+            ),
+            (
+                Line::Hint(Hint { tick: 1, text: "Votes: 0/8".into() }),
+                json!({"type": "hint", "tick": 1, "text": "Votes: 0/8"}),
+            ),
+            (
+                Line::VoteStarted(VoteStarted {
+                    tick: 1,
+                    team: Team::Unassigned,
+                    caller: Some(p(3)),
+                    issue: "#TF_vote_nextlevel".into(),
+                    details: "pl_goldrush".into(),
+                    yes_no: true,
+                }),
+                json!({"type": "vote_started", "tick": 1, "team": "none", "caller": 3,
+                       "issue": "#TF_vote_nextlevel", "details": "pl_goldrush", "yes_no": true}),
+            ),
+            (
+                Line::VotePassed(VotePassed {
+                    tick: 1,
+                    team: Team::Unassigned,
+                    issue: "#TF_vote_passed_nextlevel".into(),
+                    details: "pl_goldrush".into(),
+                }),
+                json!({"type": "vote_passed", "tick": 1, "team": "none", "issue": "#TF_vote_passed_nextlevel",
+                       "details": "pl_goldrush"}),
+            ),
+            (
+                Line::VoteFailed(VoteFailed { tick: 1, team: Team::Red, reason: 3 }),
+                json!({"type": "vote_failed", "tick": 1, "team": "red", "reason": 3}),
+            ),
+            (
+                Line::BlastJump(BlastJump {
+                    tick: 1,
+                    player: p(3),
+                    kind: JumpKind::RocketPack,
+                    phase: JumpPhase::Start,
+                }),
+                json!({"type": "blast_jump", "tick": 1, "player": 3, "kind": "rocket_pack", "phase": "start"}),
+            ),
+        ];
+        for (line, expected) in cases {
+            assert_eq!(value(&line), expected);
+            assert_eq!(back(&expected), line);
+            assert_eq!(line.tick(), Some(1));
+        }
+    }
+
+    #[test]
+    fn game_mode_objectives_and_scores_are_written_as_documented() {
+        let objectives = [
+            Objective::Ball { id: 9, pos: [1.0, 2.0, 3.0], team: Team::Blue, carrier: Some(PlayerId(4)) },
+            Objective::Goal { id: 10, pos: [0.0, -1758.1, -416.5], team: Team::Blue },
+            Objective::Robot { id: 11, pos: [0.0; 3], team: Team::Red, hp: 70, max_hp: 330 },
+            Objective::Tank { id: 12, pos: [0.0; 3], health: 0.99 },
+        ];
+        let expected = json!([
+            {"kind": "ball", "id": 9, "pos": [1.0, 2.0, 3.0], "team": "blue", "carrier": 4},
+            {"kind": "goal", "id": 10, "pos": [0.0, -1758.1, -416.5], "team": "blue"},
+            {"kind": "robot", "id": 11, "pos": [0.0, 0.0, 0.0], "team": "red", "hp": 70, "max_hp": 330},
+            {"kind": "tank", "id": 12, "pos": [0.0, 0.0, 0.0], "health": 0.99},
+        ]);
+        assert_eq!(s(&objectives), expected);
+        assert_eq!(serde_json::from_value::<Vec<Objective>>(expected).unwrap(), objectives);
+        let core = |points| Objective::Flag {
+            id: 1,
+            pos: [0.0; 3],
+            team: Team::Red,
+            status: FlagStatus::Home,
+            carrier: None,
+            returns_in: None,
+            points,
+        };
+        assert!(s(core(None)).get("points").is_none(), "a CTF flag is written as before");
+        assert_eq!(s(core(Some(5)))["points"], 5);
+        let points = Points { red: 3, blue: 5, max: Some(45), red_leader: Some(PlayerId(4)), blue_leader: None };
+        let expected = json!({"red": 3, "blue": 5, "max": 45, "red_leader": 4, "blue_leader": null});
+        assert_eq!(s(&points), expected);
+        let mvm = Mvm { wave: 2, waves: 5, enemies: 67, between_waves: false, money: 41 };
+        let expected = json!({"wave": 2, "waves": 5, "enemies": 67, "between_waves": false, "money": 41});
+        assert_eq!(s(&mvm), expected);
+        assert_eq!(serde_json::from_value::<Mvm>(expected).unwrap(), mvm);
+    }
+
+    #[test]
+    fn game_mode_lines_name_their_players() {
+        let line = Line::BallCarrierKilled(BallCarrierKilled {
+            tick: 1,
+            attacker: Some(PlayerId(3)),
+            victim: PlayerId(4),
+            assister: Some(PlayerId(5)),
+        });
+        assert_eq!(line.players().collect::<Vec<_>>(), [PlayerId(3), PlayerId(4), PlayerId(5)]);
+        let stun = Line::Stun(Stun { tick: 1, stunner: None, victim: PlayerId(4), capping: true, big: false });
+        assert_eq!(stun.players().collect::<Vec<_>>(), [PlayerId(4)]);
+        let started = Line::CaptureStarted(CaptureStarted {
+            tick: 1,
+            point: 1,
+            name: String::new(),
+            team: Team::Blue,
+            owner: Team::Red,
+            cappers: vec![Some(PlayerId(7)), Some(PlayerId(8))],
+        });
+        assert_eq!(started.players().collect::<Vec<_>>(), [PlayerId(7), PlayerId(8)]);
     }
 
     fn s(v: impl Serialize) -> Value {
