@@ -123,7 +123,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   before) or `match_time`. `time_left` is what remains of `mp_timelimit` (or null); `win_limit` is
   `mp_winlimit`.
 - Dead players stay listed with `"alive": false` at the `pos`/`yaw` where they died (null if that
-  was before the tool connected).
+  was before the tool connected). So do players who joined a team but have not picked a class.
 - `uber` is the charge percentage; `ping` the scoreboard ping (updated about every 2 s).
 - `conds` are TF2 player conditions by name (`Invulnerable` for an über, `Stealthed` for cloak, `Disguised`, `Burning`, `CritBoosted`, `BlastJumping`, `Zoomed`, …).
 - `ubered` is the medigun charge a player is under, or null: `uber`, `kritz`, `quickfix`,
@@ -153,7 +153,21 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 - Flags are CTF intelligence briefcases (`team` red or blue) and neutral ones such as the bball
   ball (`team` none). `status` is `home`, `carried` (`pos` is then the carrier's) or `dropped`,
   with `returns_in` seconds until it goes home. Maps with several flag spawns list only the
-  enabled ones.
+  enabled ones. Where the mode gives a flag a value, it has `points`: a robot destruction
+  reactor's stolen points, the bottles a player destruction pickup holds.
+- Game modes add objectives:
+  - pass time: the `ball` (`{"kind": "ball", "id", "pos", "team", "carrier"}`, `team` none
+    while neutral, `pos` the carrier's while carried; absent while it waits to respawn) and the
+    `goal`s (`{"kind": "goal", "id", "pos", "team"}`, the team that scores there);
+    `captures` then counts the goals.
+  - robot destruction: `robot`s (`{"kind": "robot", "id", "pos", "team", "hp", "max_hp"}`) and
+    the `core`s they drop (`{"kind": "core", "id", "pos", "team"}`).
+  - Mann vs. Machine: the `tank` (`{"kind": "tank", "id", "pos", "health"}`, 0 → 1).
+- Robot and player destruction add `points`: `{"red", "blue", "max" (to win, or null),
+  "red_leader", "blue_leader"}` (player destruction's team leaders). Other maps that reuse their
+  logic for their own HUD (Versus Saxton Hale, tug of war) have it too, with whatever they count.
+- Mann vs. Machine adds `mvm`: `{"wave", "waves", "enemies" (robots in the wave), "between_waves",
+  "money" (on the ground)}`.
 - `cap_progress` runs 0 → 1 while `capping_team` caps, else 0. The server sends it every few
   seconds; like the HUD, the tool extrapolates it in between. `cap_rate` is progress per second.
   `on_point` counts the players of each team standing on the point.
@@ -192,7 +206,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `round_win` | `team`, `reason`, `round_time` |
 | `flag` | `event` (`pickup`, `captured`, `dropped`, `defended`, `returned`), `player`, `carrier` (the carrier a `defended` stopped), `team` (the flag's) |
 | `heal` | `patient`, `healer` (null for on-hit heals), `amount`, `source` (`medigun`, `dispenser`, `crossbow`, `on_hit`, `other`; medigun/dispenser are inferred from the healer's class) |
-| `blast_jump` | `player`, `kind` (`rocket`, `sticky`), `phase` (`start`, `land`) |
+| `blast_jump` | `player`, `kind` (`rocket`, `sticky`, `rocket_pack`), `phase` (`start`, `land`) |
 | `pickup` | `player`, `item` (`health`, `ammo`), `size` (`small`, `medium`, `full`, null when unknown) |
 | `point_captured` | `point` (index into the control points), `name`, `team`, `cappers` (player ids) |
 | `capture_broken` | `point`, `name`: a capture was stopped before it finished |
@@ -207,6 +221,31 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `server_text` | `text` (colour codes stripped): a server message, such as a hint or a vote result |
 | `game_over` | `reason` |
 | `chat` | `player` (null for console), `name`, `text` (colour codes stripped), `kind`, `parts` (null, or the coloured spans of a line with TF2 colour codes: `{"c": "RRGGBB"/"team"/null, "t": text}`; `team` is the sender's team colour, null the default) |
+| `teleported` | `player`, `builder`, `dist` (units between entrance and exit) |
+| `stun` | `stunner`, `victim`, `capping`, `big` (a full stun, such as a moonshot) |
+| `sapped` | `player` (the spy), `owner`, `object`, `sapper` (its entity) |
+| `building_removed`, `building_detonated` | `player`, `object`, `id`: a building went without being destroyed (a new round, a detonation, its engineer leaving) / its engineer blew it up |
+| `det_stickies` | `player`: a demoman detonated their stickies |
+| `capture_started` | `point`, `name`, `team` (capping), `owner`, `cappers` |
+| `point_locked` | `point`, `name`, `locked` |
+| `npc_damage` | `id` (entity), `attacker` (null for none, such as a sapper's drain), `amount`, `health` (left), `crit`, `weapon_id`, `boss`: damage to a building, a tank, a robot or a boss |
+| `hud_text` | `channel`, `pos` (`[x, y]` on the screen, 0 → 1, -1 centred), `color`, `hold` (seconds), `text`: a map's or plugin's HUD text (`game_text`) |
+| `hint` | `text`: a hint shown on the HUD |
+| `vote_started` | `team` (`none` for everyone), `caller`, `issue` (`#TF_vote_nextlevel`, …), `details`, `yes_no` |
+| `vote_passed` | `team`, `issue`, `details` |
+| `vote_failed` | `team`, `reason` (TF2's `vote_create_failed_t`) |
+| `pass_get`, `pass_free` | pass time: `player` got the ball / lost it (`attacker`: who knocked it loose, or null) |
+| `pass_caught` | `passer`, `catcher`, `dist`, `duration` (seconds in the air) |
+| `pass_score` | `scorer`, `assister` (or null), `points` |
+| `pass_stolen` | `victim`, `attacker` |
+| `pass_blocked` | `owner` (who threw it), `blocker` |
+| `ball_carrier_killed` | `attacker`, `victim`, `assister` |
+| `robot_killed` | robot destruction: `attacker`, `weapon` |
+| `points_scored` | `player`, `method` (`reactor_captured`, `cores_collected`, `reactor_returned`, `reactor_stolen`), `amount` (negative for points lost) |
+| `special_score` | player destruction: `player` delivered their pickups |
+| `team_leader_killed` | `killer`, `victim` |
+| `rocket_open` | special delivery: `team`, whose rocket opened |
+| `round_selected` | territorial control: `round`, the map's name for the round's points |
 
 For "fired" markers, diff the projectile ids of consecutive snapshots.
 
@@ -235,6 +274,23 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
 - Temp entities (`explosion`, `shot`, `impact`, `mark`) fill omitted properties from the previous one of the same
   class, as the engine does.
 - `shot` covers hitscan only; melee swings have no event.
+- Not reported, as other lines or snapshots already carry them: `player_domination` (the kill's
+  `dominated`), `player_invulned` (`uber`), `environmental_death` (the `kill`), `ctf_flag_captured`
+  and `flagstatus_update` (`flag`), `capper_killed` (`killed_capper`), `arena_round_start` and
+  `arena_win_panel` (the round lines), `control_point_starttouch`/`endtouch` (`on_point`),
+  `player_score_changed`, `teams_changed`, `teamplay_pre_round_time_left`, `teamplay_update_timer`,
+  `teamplay_restart_round`, `teamplay_round_restart_seconds`, `win_limit_changed`,
+  `post_inventory_application`, `player_regenerate`, `player_activate`, `player_connect_client`
+  and `player_initial_spawn`; `weapon_equipped` (the snapshot's `weapon`) and `take_health` (the
+  heals and pickups). `ammo_pickup` names no player.
+- Not reported as server bookkeeping, client-only or cosmetic: `hltv_status`, `server_cvar`,
+  `server_addban`, `entity_killed`, `remove_nemesis_relationships`, `recalculate_holidays`,
+  `score_stats_accumulated_*`, `stats_resetround`, `nav_blocked`, `break_breakable`, `break_prop`,
+  `localplayer_pickup_weapon`, `item_found`, `achievement_earned`, `player_killed_achievement_zone`,
+  `quest_progress`, `teamplay_teambalanced_player`, `arrow_impact`, `rd_robot_impact`,
+  `rps_taunt_event`, `kill_refills_meter`, `player_buff`, `player_destroyed_pipebomb`,
+  `flag_carried_in_detection_zone`; and the user messages for screen effects, the local client's
+  HUD, MvM's upgrade screens, stats panels and taunt sounds.
 
 ## Development
 
@@ -257,7 +313,9 @@ from a bot server (`tests/fixtures/*.cap`, made with `connect --record`) through
 and decoder, including a map change; `tests/payload.rs` runs the start of a real pl_upward
 match (`tests/fixtures/pl_upward.dem`) and `tests/flags.rs` a bball match
 (`tests/fixtures/ctf_ballin_sky.dem`). `tests/detail.rs` also decodes a ctf_turbine match
-(`tests/fixtures/ctf_turbine.dem`) for votes and medic defences. `cargo run --example cut_demo -- IN.dem OUT.dem N`
+(`tests/fixtures/ctf_turbine.dem`) for votes and medic defences. `tests/modes.rs` runs the starts
+of pass time, robot and player destruction, special delivery, Mann vs. Machine and territorial
+control matches. `cargo run --example cut_demo -- IN.dem OUT.dem N`
 cuts a demo after tick N, to make a fixture.
 
 ## Credits
