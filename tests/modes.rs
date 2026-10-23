@@ -153,3 +153,81 @@ fn mode_fields_only_where_the_mode_has_them() {
     let rd = of!(RD, Snapshot).last().unwrap();
     assert!(rd.mvm.is_none() && rd.captures.is_some(), "robot destruction has flags (cores)");
 }
+
+/// Each player id in the lines named, for the ids that must be players of the match.
+fn known(lines: &[Line]) -> std::collections::HashSet<PlayerId> {
+    of!(lines, Snapshot).flat_map(|s| s.players.iter().map(|p| p.id)).collect()
+}
+
+#[test]
+fn pass_time_events_name_the_players_with_the_ball() {
+    let players = known(&PASS);
+    let gets: Vec<_> = of!(PASS, PassGet).collect();
+    assert_eq!(gets.len(), 8);
+    for get in gets {
+        // The next snapshot has the ball with that player (unless they lost it at once).
+        let next = of!(PASS, Snapshot).find(|s| s.tick > get.tick).unwrap();
+        let carrier = next.objectives.iter().find_map(|o| match o {
+            Objective::Ball { carrier, .. } => *carrier,
+            _ => None,
+        });
+        assert_eq!(carrier, Some(get.player), "pass_get at {}", get.tick);
+    }
+    for free in of!(PASS, PassFree) {
+        assert!(players.contains(&free.player) && free.attacker.is_none_or(|a| players.contains(&a)));
+    }
+    for killed in of!(PASS, BallCarrierKilled) {
+        let kill = of!(PASS, Kill).find(|k| k.tick == killed.tick && k.victim == killed.victim);
+        assert!(kill.is_some_and(|k| k.attacker == killed.attacker), "ball_carrier_killed at {}", killed.tick);
+    }
+    let caught: Vec<_> = of!(PASS, PassCaught).collect();
+    assert!(caught.iter().all(|c| players.contains(&c.passer) && players.contains(&c.catcher) && c.dist > 0.0));
+    let stolen: Vec<_> = of!(PASS, PassStolen).collect();
+    assert!(stolen.len() == 1 && players.contains(&stolen[0].victim) && players.contains(&stolen[0].attacker));
+}
+
+#[test]
+fn pass_time_goals_add_up_to_the_captures() {
+    let scores: Vec<_> = of!(PASS, PassScore).collect();
+    assert_eq!(scores.len(), 3);
+    let last = of!(PASS, Snapshot).last().unwrap().captures.clone().unwrap();
+    assert_eq!(scores.iter().map(|s| i64::from(s.points)).sum::<i64>(), last.red + last.blue);
+    for score in scores {
+        // The scorer had the ball just before.
+        let before = of!(PASS, Snapshot).filter(|s| s.tick < score.tick).next_back().unwrap();
+        let ball = before.objectives.iter().find_map(|o| match o {
+            Objective::Ball { carrier, .. } => Some(*carrier),
+            _ => None,
+        });
+        assert!(ball.is_some(), "a ball before the goal at {}", score.tick);
+    }
+}
+
+#[test]
+fn destruction_events_name_players_of_the_match() {
+    let players = known(&RD);
+    let killed: Vec<_> = of!(RD, RobotKilled).collect();
+    assert_eq!(killed.len(), 2);
+    assert!(killed.iter().all(|k| k.attacker.is_some_and(|a| players.contains(&a)) && !k.weapon.is_empty()));
+    let scored: Vec<_> = of!(RD, PointsScored).collect();
+    assert_eq!(scored.len(), 10);
+    assert!(scored.iter().all(|s| players.contains(&s.player) && s.method != stvtf::output::ScoreMethod::Unknown));
+    let players = known(&PD);
+    let special: Vec<_> = of!(PD, SpecialScore).collect();
+    assert!(special.len() == 2 && special.iter().all(|s| players.contains(&s.player)));
+    for leader in of!(PD, TeamLeaderKilled) {
+        let kill = of!(PD, Kill).find(|k| k.tick == leader.tick && k.victim == leader.victim);
+        assert!(kill.is_some_and(|k| k.attacker == leader.killer), "team_leader_killed at {}", leader.tick);
+    }
+    assert_eq!(of!(PD, Stun).count(), 2);
+}
+
+#[test]
+fn special_delivery_opens_the_rocket_and_tc_selects_its_round() {
+    let sd = common::demo("sd_doomsday.dem", 0.0);
+    let open: Vec<_> = of!(sd, RocketOpen).collect();
+    assert!(open.len() == 1 && matches!(open[0].team, Team::Red | Team::Blue));
+    let tc = common::demo("tc_hydro.dem", 0.0);
+    let rounds: Vec<&str> = of!(tc, RoundSelected).map(|r| r.round.as_str()).collect();
+    assert!(!rounds.is_empty() && rounds.iter().all(|r| r.starts_with("round_")), "{rounds:?}");
+}

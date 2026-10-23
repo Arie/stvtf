@@ -1775,13 +1775,14 @@ pub struct PointLocked {
     pub locked: bool,
 }
 
-/// Damage to something that is not a player: a tank, a robot destruction robot, a boss.
+/// Damage to something that is not a player: a building, a tank, a robot destruction robot, a boss.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub struct NpcDamage {
     pub tick: u32,
     /// Its entity index.
     pub id: u16,
+    /// None for damage from no player (a sapper's drain).
     pub attacker: Option<PlayerId>,
     pub amount: u16,
     /// Health left.

@@ -276,3 +276,57 @@ fn scoreboard_damage_adds_up_the_damage_events() {
         assert_eq!(shown, dealt.get(&p.id).copied().unwrap_or(0), "{}", p.name);
     }
 }
+
+#[test]
+fn engineer_and_spy_events_name_players() {
+    let players: HashSet<PlayerId> = of!(EVENTS, Snapshot).flat_map(|s| s.players.iter().map(|p| p.id)).collect();
+    let teleports: Vec<_> = of!(EVENTS, Teleported).collect();
+    assert_eq!(teleports.len(), 2);
+    assert!(teleports.iter().all(|t| players.contains(&t.player) && t.builder.is_some() && t.dist > 100.0));
+    let sapped: Vec<_> = of!(EVENTS, Sapped).collect();
+    assert_eq!(sapped.len(), 4);
+    assert!(
+        sapped
+            .iter()
+            .all(|s| players.contains(&s.player) && players.contains(&s.owner) && s.object != BuildingKind::Unknown)
+    );
+    assert_eq!(of!(EVENTS, BuildingRemoved).count(), 1);
+    let dets: Vec<_> = of!(EVENTS, DetStickies).collect();
+    assert_eq!(dets.len(), 119);
+    assert!(dets.iter().all(|d| players.contains(&d.player)));
+}
+
+#[test]
+fn captures_start_with_their_cappers() {
+    let started: Vec<_> = of!(EVENTS, CaptureStarted).collect();
+    assert_eq!(started.len(), 16);
+    assert!(started.iter().all(|c| matches!(c.team, Team::Red | Team::Blue) && !c.cappers.is_empty()));
+    assert!(started.iter().flat_map(|c| &c.cappers).all(Option::is_some));
+}
+
+#[test]
+fn damage_to_buildings() {
+    let npc: Vec<_> = of!(EVENTS, NpcDamage).collect();
+    assert_eq!(npc.len(), 117);
+    assert!(npc.iter().all(|n| n.amount > 0));
+    let buildings: HashSet<u32> = of!(EVENTS, Snapshot).flat_map(|s| s.buildings.iter().map(|b| b.id)).collect();
+    let on_buildings = npc.iter().filter(|n| buildings.contains(&u32::from(n.id))).count();
+    assert!(on_buildings >= 110, "{on_buildings} of them on buildings");
+    // A sapper drains a building with no attacker.
+    assert!(npc.iter().any(|n| n.attacker.is_none()) && npc.iter().any(|n| n.attacker.is_some()));
+}
+
+#[test]
+fn votes_start_and_pass() {
+    let started: Vec<_> = of!(CTF, VoteStarted).collect();
+    assert_eq!(started.len(), 1);
+    let v = started[0];
+    assert_eq!(
+        (v.issue.as_str(), v.details.as_str(), v.yes_no, v.team),
+        ("#TF_vote_nextlevel", "pl_goldrush", true, Team::Unassigned)
+    );
+    assert!(v.caller.is_some(), "the caller is a player");
+    let passed: Vec<_> = of!(CTF, VotePassed).collect();
+    assert_eq!(passed.len(), 1);
+    assert_eq!((passed[0].issue.as_str(), passed[0].details.as_str()), ("#TF_vote_passed_nextlevel", "pl_goldrush"));
+}

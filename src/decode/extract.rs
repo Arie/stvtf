@@ -16,6 +16,7 @@ use tf_demo_parser::demo::data::game_state::{
     Building, GameState, PlayerCondition, PlayerState, Projectile, ProjectileType,
 };
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
+use tf_demo_parser::demo::gamevent::GameEventType;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::usermessage::{ChatMessageKind, UserMessage};
 
@@ -208,6 +209,7 @@ pub(crate) struct Extractor {
     building_kinds: HashMap<u32, BuildingKind>,
     /// Pass time, robot and player destruction, Mann vs. Machine.
     modes: Modes,
+    raw_names: detail::RawNames,
 }
 
 /// A player's line on the scoreboard. Points, kills and deaths are the server's match totals;
@@ -561,7 +563,7 @@ pub(crate) fn xyz(v: Vector) -> Position {
     [round1(v.x), round1(v.y), round1(v.z)]
 }
 
-fn round2(f: f32) -> f64 {
+pub(crate) fn round2(f: f32) -> f64 {
     (f64::from(f) * 100.0).round() / 100.0
 }
 
@@ -1033,7 +1035,12 @@ impl Extractor {
                     p.map(|p| p.class)
                 };
                 let user_of_entity = |ent: u32| self.user_of_entity(ent);
-                let look = detail::Lookup { user_of_entity: &user_of_entity, class_of_user: &class_of_user, tick };
+                let look = detail::Lookup {
+                    user_of_entity: &user_of_entity,
+                    class_of_user: &class_of_user,
+                    tick,
+                    raw_names: &self.raw_names,
+                };
                 if let Some(line) = detail::game_event(event, &look) {
                     self.push(line);
                 }
@@ -1390,7 +1397,7 @@ fn building_kind_of(b: &Building) -> BuildingKind {
     }
 }
 
-fn building_kind(object: u16) -> BuildingKind {
+pub(crate) fn building_kind(object: u16) -> BuildingKind {
     match object {
         0 => BuildingKind::Dispenser,
         1 => BuildingKind::Teleporter,
@@ -1948,6 +1955,7 @@ impl Extractor {
                     user_of_entity: &user_of_entity,
                     class_of_user: &class_of_user,
                     tick: self.server_tick,
+                    raw_names: &self.raw_names,
                 };
                 if let Some(line) = detail::user_message(message, &look) {
                     self.push(line);
@@ -1970,6 +1978,7 @@ impl MessageHandler for Extractor {
                     | MessageType::UserMessage
                     | MessageType::ServerInfo
                     | MessageType::SetConVar
+                    | MessageType::GameEventList
             )
     }
 
@@ -1994,6 +2003,18 @@ impl MessageHandler for Extractor {
             }
             Message::TempEntities(te) => self.temp_entities(te, state),
             Message::UserMessage(m) => self.user_message(m),
+            Message::GameEventList(list) => {
+                self.raw_names = list
+                    .event_list
+                    .iter()
+                    .filter_map(|d| match &d.event_type {
+                        GameEventType::Unknown(name) => {
+                            Some((name.clone(), d.entries.iter().map(|e| e.name.clone()).collect()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+            }
             _ => {}
         }
     }

@@ -1,22 +1,44 @@
-//! Heals, blast jumps and pickups: game events turned into lines.
+//! Heals, blast jumps, pickups, the game modes' events and the HUD's messages: game events and
+//! user messages turned into lines.
 
-use super::extract::{round1, strip_colors, team_num};
+use super::extract::{building_kind, round1, round2, strip_colors, team_num};
 use crate::output::{
-    Announcer, BlastJump, CaptureBroken, Heal, HealSource, Impact, ImpactKind, JumpKind, JumpPhase, KilledCapper, Line,
-    Mark, MedicDefended, Pickup, PickupItem, PickupSize, PlayerId, ServerText, TimeRemaining, Tournament, VoiceCommand,
-    VoteCast, VoteOptions,
+    Announcer, BallCarrierKilled, BlastJump, CaptureBroken, CaptureStarted, ChatColor, Heal, HealSource, Hint, HudText,
+    Impact, ImpactKind, JumpKind, JumpPhase, KilledCapper, Line, Mark, MedicDefended, NpcDamage, ObjectChange,
+    PassBlocked, PassCaught, PassFree, PassGet, PassScore, PassStolen, Pickup, PickupItem, PickupSize, PlayerId,
+    PlayerMoment, PointLocked, PointsScored, RobotKilled, RocketOpen, RoundSelected, Sapped, ScoreMethod, ServerText,
+    Stun, TeamLeaderKilled, Teleported, TimeRemaining, Tournament, VoiceCommand, VoteCast, VoteFailed, VoteOptions,
+    VotePassed, VoteStarted,
 };
+use bitbuffer::{BitRead, LittleEndian};
+use std::collections::HashMap;
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
+use tf_demo_parser::demo::gamevent::{GameEventType, GameEventValue, RawGameEvent};
 use tf_demo_parser::demo::message::usermessage::UserMessage;
 use tf_demo_parser::demo::parser::analyser::Class;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
-/// Lookups the extractor owns: entity index to user id, a user's current class, and the tick.
+/// The field names of each game event tf-demo-parser has no type for, from the demo's own event
+/// list: their values come in that order.
+pub(crate) type RawNames = HashMap<String, Vec<String>>;
+
+/// Lookups the extractor owns: entity index to user id, a user's current class, the tick and the
+/// names of raw events' fields.
 pub(crate) struct Lookup<'a> {
     pub user_of_entity: &'a dyn Fn(u32) -> Option<PlayerId>,
     pub class_of_user: &'a dyn Fn(u16) -> Option<Class>,
     pub tick: u32,
+    pub raw_names: &'a RawNames,
 }
+
+/// User message types (TF2's `usermessages` order) read here by hand.
+const USER_MESSAGE_HINT_TEXT: u8 = 19;
+const USER_MESSAGE_HUD_MSG: u8 = 21;
+const USER_MESSAGE_VOTE_START: u8 = 46;
+const USER_MESSAGE_VOTE_PASS: u8 = 47;
+const USER_MESSAGE_VOTE_FAILED: u8 = 48;
+/// An entity index field meaning nobody.
+const NO_ENTITY: u16 = u16::MAX;
 
 fn heal(
     tick: u32,
@@ -107,9 +129,26 @@ fn pickup(item: &str) -> Option<(PickupItem, Option<PickupSize>)> {
     }
 }
 
+fn opt_user(id: u16) -> Option<PlayerId> {
+    (id != 0).then_some(PlayerId(id))
+}
+
+fn score_method(method: u16) -> ScoreMethod {
+    match method {
+        0 => ScoreMethod::ReactorCaptured,
+        1 => ScoreMethod::CoresCollected,
+        2 => ScoreMethod::ReactorReturned,
+        3 => ScoreMethod::ReactorStolen,
+        _ => ScoreMethod::Unknown,
+    }
+}
+
+#[expect(clippy::too_many_lines, reason = "one arm per event")]
 pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
     let tick = look.tick;
     let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
+    // Pass time names players by entity index.
+    let ent = |ent: u16| (ent != NO_ENTITY).then(|| (look.user_of_entity)(u32::from(ent))).flatten();
     match event {
         GameEvent::PlayerHealed(h) => {
             // The event doesn't say what healed: infer it from the healer's class.
@@ -171,6 +210,131 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
             Some(Line::TimeRemaining(TimeRemaining { tick, seconds: u32::from(t.seconds) }))
         }
         GameEvent::TfMapTimeRemaining(t) => Some(Line::TimeRemaining(TimeRemaining { tick, seconds: t.seconds })),
+        GameEvent::PassGet(g) => Some(Line::PassGet(PassGet { tick, player: ent(g.owner)? })),
+        GameEvent::PassFree(f) => {
+            Some(Line::PassFree(PassFree { tick, player: ent(f.owner)?, attacker: ent(f.attacker) }))
+        }
+        GameEvent::PassPassCaught(c) => Some(Line::PassCaught(PassCaught {
+            tick,
+            passer: ent(c.passer)?,
+            catcher: ent(c.catcher)?,
+            dist: round1(c.dist),
+            duration: round2(c.duration),
+        })),
+        GameEvent::PassScore(sc) => Some(Line::PassScore(PassScore {
+            tick,
+            scorer: ent(sc.scorer)?,
+            assister: ent(sc.assister),
+            points: sc.points,
+        })),
+        GameEvent::PassBallStolen(st) => {
+            Some(Line::PassStolen(PassStolen { tick, victim: ent(st.victim)?, attacker: ent(st.attacker)? }))
+        }
+        GameEvent::PassBallBlocked(b) => {
+            Some(Line::PassBlocked(PassBlocked { tick, owner: ent(b.owner)?, blocker: ent(b.blocker)? }))
+        }
+        GameEvent::Unknown(raw) => raw_event(raw, look),
+        GameEvent::RdRobotKilled(r) => {
+            Some(Line::RobotKilled(RobotKilled { tick, attacker: opt_user(r.attacker), weapon: r.weapon.to_string() }))
+        }
+        GameEvent::RdPlayerScorePoints(p) => Some(Line::PointsScored(PointsScored {
+            tick,
+            player: PlayerId(p.player),
+            method: score_method(p.method),
+            amount: p.amount.cast_signed(),
+        })),
+        // Player destruction names players by entity index.
+        GameEvent::SpecialScore(sc) => Some(Line::SpecialScore(PlayerMoment { tick, player: user(sc.player)? })),
+        GameEvent::TeamLeaderKilled(k) => {
+            Some(Line::TeamLeaderKilled(TeamLeaderKilled { tick, killer: user(k.killer), victim: user(k.victim)? }))
+        }
+        GameEvent::DoomsdayRocketOpen(r) => Some(Line::RocketOpen(RocketOpen { tick, team: team_num(r.team) })),
+        GameEvent::TeamPlayRoundSelected(r) => {
+            Some(Line::RoundSelected(RoundSelected { tick, round: r.round.to_string() }))
+        }
+        GameEvent::PlayerTeleported(t) => Some(Line::Teleported(Teleported {
+            tick,
+            player: PlayerId(t.user_id),
+            builder: opt_user(t.builder_id),
+            dist: round1(t.dist),
+        })),
+        GameEvent::PlayerStunned(st) => Some(Line::Stun(Stun {
+            tick,
+            stunner: opt_user(st.stunner),
+            victim: PlayerId(st.victim),
+            capping: st.victim_capping,
+            big: st.big_stun,
+        })),
+        GameEvent::PlayerSappedObject(sa) => Some(Line::Sapped(Sapped {
+            tick,
+            player: PlayerId(sa.user_id),
+            owner: PlayerId(sa.owner_id),
+            object: building_kind(u16::from(sa.object)),
+            sapper: sa.sapper_id,
+        })),
+        GameEvent::ObjectRemoved(o) => Some(Line::BuildingRemoved(ObjectChange {
+            tick,
+            player: PlayerId(o.user_id),
+            object: building_kind(o.object_type),
+            id: o.index,
+        })),
+        GameEvent::ObjectDetonated(o) => Some(Line::BuildingDetonated(ObjectChange {
+            tick,
+            player: PlayerId(o.user_id),
+            object: building_kind(o.object_type),
+            id: o.index,
+        })),
+        GameEvent::DemomanDetStickies(d) => Some(Line::DetStickies(PlayerMoment { tick, player: PlayerId(d.player) })),
+        // `cappers` holds the cappers' entity indexes as characters, as for `point_captured`.
+        GameEvent::TeamPlayPointStartCapture(c) => Some(Line::CaptureStarted(CaptureStarted {
+            tick,
+            point: c.cp,
+            name: c.cp_name.to_string(),
+            team: team_num(c.cap_team),
+            owner: team_num(c.team),
+            cappers: c.cappers.as_bytes().iter().map(|&e| user(e)).collect(),
+        })),
+        GameEvent::TeamPlayPointLocked(l) => {
+            Some(Line::PointLocked(PointLocked { tick, point: l.cp, name: l.cp_name.to_string(), locked: true }))
+        }
+        GameEvent::TeamPlayPointUnlocked(l) => {
+            Some(Line::PointLocked(PointLocked { tick, point: l.cp, name: l.cp_name.to_string(), locked: false }))
+        }
+        GameEvent::RocketPackLaunch(j) => Some(jump(tick, j.user_id, JumpKind::RocketPack, JumpPhase::Start)),
+        GameEvent::RocketPackLanded(j) => Some(jump(tick, j.user_id, JumpKind::RocketPack, JumpPhase::Land)),
+        GameEvent::NpcHurt(n) => Some(Line::NpcDamage(NpcDamage {
+            tick,
+            id: n.ent_index,
+            attacker: opt_user(n.attacker_player),
+            amount: n.damage_amount,
+            health: n.health,
+            crit: n.crit,
+            weapon_id: n.weapon_id,
+            boss: n.boss,
+        })),
+        _ => None,
+    }
+}
+
+/// An event tf-demo-parser has no type for, read by its field names.
+fn raw_event(raw: &RawGameEvent, look: &Lookup<'_>) -> Option<Line> {
+    let GameEventType::Unknown(name) = &raw.event_type else { return None };
+    let names = look.raw_names.get(name)?;
+    let number = |field: &str| match raw.values.get(names.iter().position(|n| n == field)?)? {
+        GameEventValue::Short(v) => Some(u32::from(*v)),
+        GameEventValue::Long(v) => Some(*v),
+        GameEventValue::Byte(v) => Some(u32::from(*v)),
+        _ => None,
+    };
+    let ent = |field: &str| number(field).filter(|&e| e != u32::from(NO_ENTITY)).and_then(look.user_of_entity);
+    match name.as_str() {
+        // Pass time; entity indexes.
+        "killed_ball_carrier" => Some(Line::BallCarrierKilled(BallCarrierKilled {
+            tick: look.tick,
+            attacker: ent("attacker"),
+            victim: ent("victim")?,
+            assister: ent("assister"),
+        })),
         _ => None,
     }
 }
@@ -189,6 +353,73 @@ pub(crate) fn user_message(message: &UserMessage<'_>, look: &Lookup<'_>) -> Opti
             item: v.item,
         })),
         UserMessage::Text(t) => Some(Line::ServerText(ServerText { tick, text: strip_colors(t.text.as_ref()) })),
+        UserMessage::Unknown(u) => raw_user_message(u.raw_type, &mut u.data.clone(), look),
+        _ => None,
+    }
+}
+
+type Stream<'a> = bitbuffer::BitReadStream<'a, LittleEndian>;
+
+fn read<'a, T: BitRead<'a, LittleEndian>>(data: &mut Stream<'a>) -> Option<T> {
+    data.read().ok()
+}
+
+/// A null-terminated string; bitbuffer reads one cut short by the end of the data as whatever is there.
+fn string(data: &mut Stream<'_>) -> Option<String> {
+    let mut bytes = Vec::new();
+    loop {
+        match read::<u8>(data)? {
+            0 => return Some(String::from_utf8_lossy(&bytes).into_owned()),
+            b => bytes.push(b),
+        }
+    }
+}
+
+/// A user message tf-demo-parser has no type for; short or malformed data gives none.
+fn raw_user_message(kind: u8, data: &mut Stream<'_>, look: &Lookup<'_>) -> Option<Line> {
+    let tick = look.tick;
+    match kind {
+        USER_MESSAGE_HINT_TEXT => Some(Line::Hint(Hint { tick, text: string(data)? })),
+        // channel, x, y, colour, second colour, effect, fade in, fade out, hold time, effect time, text.
+        USER_MESSAGE_HUD_MSG => {
+            let channel = read::<u8>(data)?;
+            let (left, top) = (read::<f32>(data)?, read::<f32>(data)?);
+            let [red, green, blue, _alpha] = read::<[u8; 4]>(data)?;
+            let _second_color = read::<[u8; 4]>(data)?;
+            let _effect = read::<u8>(data)?;
+            let [_fade_in, _fade_out, hold, _effect_time] = read::<[f32; 4]>(data)?;
+            let text = string(data)?;
+            Some(Line::HudText(HudText {
+                tick,
+                channel,
+                pos: [round2(left), round2(top)],
+                color: ChatColor::Rgb([red, green, blue]),
+                hold: round2(hold),
+                text,
+            }))
+        }
+        // team, vote index, the caller's entity, issue, details, yes/no.
+        USER_MESSAGE_VOTE_START => {
+            let team = team_num(read::<u8>(data)?);
+            let _vote = read::<u32>(data)?;
+            let caller = (look.user_of_entity)(u32::from(read::<u8>(data)?));
+            let (issue, details) = (string(data)?, string(data)?);
+            let yes_no = read::<u8>(data)? != 0;
+            Some(Line::VoteStarted(VoteStarted { tick, team, caller, issue, details, yes_no }))
+        }
+        // team, vote index, issue, details.
+        USER_MESSAGE_VOTE_PASS => {
+            let team = team_num(read::<u8>(data)?);
+            let _vote = read::<u32>(data)?;
+            let (issue, details) = (string(data)?, string(data)?);
+            Some(Line::VotePassed(VotePassed { tick, team, issue, details }))
+        }
+        // team, vote index, reason.
+        USER_MESSAGE_VOTE_FAILED => {
+            let team = team_num(read::<u8>(data)?);
+            let _vote = read::<u32>(data)?;
+            Some(Line::VoteFailed(VoteFailed { tick, team, reason: read::<u8>(data)? }))
+        }
         _ => None,
     }
 }
@@ -203,12 +434,85 @@ mod tests {
         let msg = UserMessage::VoiceSubtitle(VoiceSubtitleMessage { client: 5, menu: 0, item: 1 });
         let user = |ent: u32| (ent == 5).then_some(PlayerId(12));
         let class = |_| None;
-        let look = Lookup { user_of_entity: &user, class_of_user: &class, tick: 3 };
+        let raw_names = RawNames::new();
+        let look = Lookup { user_of_entity: &user, class_of_user: &class, tick: 3, raw_names: &raw_names };
         assert_eq!(
             user_message(&msg, &look),
             Some(Line::VoiceCommand(VoiceCommand { tick: 3, player: PlayerId(12), menu: 0, item: 1 }))
         );
         let other = UserMessage::VoiceSubtitle(VoiceSubtitleMessage { client: 6, menu: 0, item: 1 });
         assert_eq!(user_message(&other, &look), None);
+    }
+
+    fn read_raw(kind: u8, bytes: &[u8]) -> Option<Line> {
+        let user = |ent: u32| (ent == 10).then_some(PlayerId(12));
+        let class = |_| None;
+        let raw_names = RawNames::new();
+        let look = Lookup { user_of_entity: &user, class_of_user: &class, tick: 3, raw_names: &raw_names };
+        let buffer = bitbuffer::BitReadBuffer::new(bytes, LittleEndian);
+        raw_user_message(kind, &mut bitbuffer::BitReadStream::new(buffer), &look)
+    }
+
+    fn hex(text: &str) -> Vec<u8> {
+        text.split(' ').map(|b| u8::from_str_radix(b, 16).unwrap()).collect()
+    }
+
+    #[test]
+    fn hud_messages_and_votes_are_read_by_hand() {
+        // A dom_canalzone score counter, as recorded.
+        let hud = hex(
+            "02 66 66 26 3f 85 eb 51 3f ff 55 42 00 ff ff ff 00 00 00 00 00 3f 00 00 00 3f 00 00 80 3f 00 00 80 3e 30 00",
+        );
+        assert_eq!(
+            read_raw(USER_MESSAGE_HUD_MSG, &hud),
+            Some(Line::HudText(HudText {
+                tick: 3,
+                channel: 2,
+                pos: [0.65, 0.82],
+                color: ChatColor::Rgb([0xFF, 0x55, 0x42]),
+                hold: 1.0,
+                text: "0".into(),
+            }))
+        );
+        let mut vote = hex("00 00 00 00 00 0a");
+        vote.extend(b"#TF_vote_nextlevel\0pl_goldrush\0\x01");
+        assert_eq!(
+            read_raw(USER_MESSAGE_VOTE_START, &vote),
+            Some(Line::VoteStarted(VoteStarted {
+                tick: 3,
+                team: crate::output::Team::Unassigned,
+                caller: Some(PlayerId(12)),
+                issue: "#TF_vote_nextlevel".into(),
+                details: "pl_goldrush".into(),
+                yes_no: true,
+            }))
+        );
+        assert_eq!(
+            read_raw(USER_MESSAGE_VOTE_FAILED, &hex("02 01 00 00 00 03")),
+            Some(Line::VoteFailed(VoteFailed { tick: 3, team: crate::output::Team::Red, reason: 3 }))
+        );
+        assert_eq!(
+            read_raw(USER_MESSAGE_HINT_TEXT, b"Votes: 0/8\0"),
+            Some(Line::Hint(Hint { tick: 3, text: "Votes: 0/8".into() }))
+        );
+    }
+
+    #[test]
+    fn short_user_messages_give_nothing() {
+        let hud = hex(
+            "02 66 66 26 3f 85 eb 51 3f ff 55 42 00 ff ff ff 00 00 00 00 00 3f 00 00 00 3f 00 00 80 3f 00 00 80 3e 30 00",
+        );
+        // Each cut before its last field; a vote failure is 6 bytes in all.
+        for (kind, lens) in [
+            (USER_MESSAGE_HUD_MSG, &[0, 1, 5, 12, 35][..]),
+            (USER_MESSAGE_VOTE_START, &[0, 1, 5, 12][..]),
+            (USER_MESSAGE_VOTE_PASS, &[0, 1, 5, 12][..]),
+            (USER_MESSAGE_VOTE_FAILED, &[0, 1, 5][..]),
+        ] {
+            for &len in lens {
+                assert_eq!(read_raw(kind, &hud[..len]), None, "message {kind}, {len} bytes");
+            }
+        }
+        assert_eq!(read_raw(USER_MESSAGE_HINT_TEXT, b""), None);
     }
 }
