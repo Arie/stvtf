@@ -10,9 +10,11 @@
 pub mod capture;
 pub mod decode;
 mod net;
+pub mod output;
 mod session;
 pub mod watch;
 
+pub use output::Line;
 pub use session::{Fatal, Options};
 
 /// The TF2 server build whose tables and CRC are compiled in.
