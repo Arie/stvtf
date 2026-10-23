@@ -162,12 +162,17 @@ outside the playable area, so fit an overview image to per-map coordinates inste
     `captures` then counts the goals.
   - robot destruction: `robot`s (`{"kind": "robot", "id", "pos", "team", "hp", "max_hp"}`) and
     the `core`s they drop (`{"kind": "core", "id", "pos", "team"}`).
-  - Mann vs. Machine: the `tank` (`{"kind": "tank", "id", "pos", "health"}`, 0 → 1).
+  - Mann vs. Machine: the `tank` (`{"kind": "tank", "id", "pos", "health"}`, 0 → 1), revive
+    markers (`{"kind": "revive", "id", "pos", "owner"}`, the dead player a medic can bring back)
+    and `money` on the ground (`{"kind": "money", "id", "pos"}`).
 - Robot and player destruction add `points`: `{"red", "blue", "max" (to win, or null),
   "red_leader", "blue_leader"}` (player destruction's team leaders). Other maps that reuse their
   logic for their own HUD (Versus Saxton Hale, tug of war) have it too, with whatever they count.
 - Mann vs. Machine adds `mvm`: `{"wave", "waves", "enemies" (robots in the wave), "between_waves",
-  "money" (on the ground)}`.
+  "money" (on the ground), "classes"}`. `classes` lists the wave's robots as its HUD does:
+  `{"name" (the icon: "scout", "soldier_barrage", "sentry_buster", "tank", …), "count" (left),
+  "active" (on the field), "giant", "crit", "support" (not counted towards the wave), "mission"
+  (sentry busters, spies, engineers)}`.
 - `cap_progress` runs 0 → 1 while `capping_team` caps, else 0. The server sends it every few
   seconds; like the HUD, the tool extrapolates it in between. `cap_rate` is progress per second.
   `on_point` counts the players of each team standing on the point.
@@ -246,6 +251,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `team_leader_killed` | `killer`, `victim` |
 | `rocket_open` | special delivery: `team`, whose rocket opened |
 | `round_selected` | territorial control: `round`, the map's name for the round's points |
+| `upgrade` | Mann vs. Machine: `player` bought an upgrade: `item` (item definition index of what was upgraded, 30015 the Power Up Canteen), `attribute` (attribute definition index), `cost` |
 
 For "fired" markers, diff the projectile ids of consecutive snapshots.
 
@@ -290,7 +296,8 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
   `quest_progress`, `teamplay_teambalanced_player`, `arrow_impact`, `rd_robot_impact`,
   `rps_taunt_event`, `kill_refills_meter`, `player_buff`, `player_destroyed_pipebomb`,
   `flag_carried_in_detection_zone`; and the user messages for screen effects, the local client's
-  HUD, MvM's upgrade screens, stats panels and taunt sounds.
+  HUD, MvM's spending panels and announcements, stats panels and taunt sounds. A player's MvM
+  money is sent only to that player, so it is not in SourceTV.
 
 ## Development
 

@@ -7,8 +7,8 @@ use crate::output::{
     Impact, ImpactKind, JumpKind, JumpPhase, KilledCapper, Line, Mark, MedicDefended, NpcDamage, ObjectChange,
     PassBlocked, PassCaught, PassFree, PassGet, PassScore, PassStolen, Pickup, PickupItem, PickupSize, PlayerId,
     PlayerMoment, PointLocked, PointsScored, RobotKilled, RocketOpen, RoundSelected, Sapped, ScoreMethod, ServerText,
-    Stun, TeamLeaderKilled, Teleported, TimeRemaining, Tournament, VoiceCommand, VoteCast, VoteFailed, VoteOptions,
-    VotePassed, VoteStarted,
+    Stun, TeamLeaderKilled, Teleported, TimeRemaining, Tournament, Upgrade, VoiceCommand, VoteCast, VoteFailed,
+    VoteOptions, VotePassed, VoteStarted,
 };
 use bitbuffer::{BitRead, LittleEndian};
 use std::collections::HashMap;
@@ -37,6 +37,7 @@ const USER_MESSAGE_HUD_MSG: u8 = 21;
 const USER_MESSAGE_VOTE_START: u8 = 46;
 const USER_MESSAGE_VOTE_PASS: u8 = 47;
 const USER_MESSAGE_VOTE_FAILED: u8 = 48;
+const USER_MESSAGE_MVM_UPGRADED: u8 = 60;
 /// An entity index field meaning nobody.
 const NO_ENTITY: u16 = u16::MAX;
 
@@ -415,6 +416,15 @@ fn raw_user_message(kind: u8, data: &mut Stream<'_>, look: &Lookup<'_>) -> Optio
             let _vote = read::<u32>(data)?;
             let (issue, details) = (string(data)?, string(data)?);
             Some(Line::VotePassed(VotePassed { tick, team, issue, details }))
+        }
+        // The player's entity, a byte, the item definition, the attribute, a byte, the cost: checked
+        // against the money the upgraded item then holds as refundable (`m_nRefundableCurrency`).
+        USER_MESSAGE_MVM_UPGRADED => {
+            let player = (look.user_of_entity)(u32::from(read::<u8>(data)?))?;
+            let _unknown = read::<u8>(data)?;
+            let (item, attribute) = (read::<u16>(data)?, read::<u16>(data)?);
+            let _unknown = read::<u8>(data)?;
+            Some(Line::Upgrade(Upgrade { tick, player, item, attribute, cost: read::<u16>(data)? }))
         }
         // team, vote index, reason.
         USER_MESSAGE_VOTE_FAILED => {

@@ -398,6 +398,7 @@ pub enum Line {
     VoteStarted(VoteStarted),
     VotePassed(VotePassed),
     VoteFailed(VoteFailed),
+    Upgrade(Upgrade),
 }
 
 impl Line {
@@ -483,7 +484,8 @@ impl Line {
             | Line::Hint(Hint { tick, .. })
             | Line::VoteStarted(VoteStarted { tick, .. })
             | Line::VotePassed(VotePassed { tick, .. })
-            | Line::VoteFailed(VoteFailed { tick, .. }) => Some(*tick),
+            | Line::VoteFailed(VoteFailed { tick, .. })
+            | Line::Upgrade(Upgrade { tick, .. }) => Some(*tick),
         }
     }
 
@@ -554,7 +556,8 @@ impl Line {
             | Line::SpecialScore(PlayerMoment { player, .. })
             | Line::BuildingRemoved(ObjectChange { player, .. })
             | Line::BuildingDetonated(ObjectChange { player, .. })
-            | Line::DetStickies(PlayerMoment { player, .. }) => (one(*player), &[]),
+            | Line::DetStickies(PlayerMoment { player, .. })
+            | Line::Upgrade(Upgrade { player, .. }) => (one(*player), &[]),
             Line::Shot(Shot { player, .. })
             | Line::Chat(Chat { player, .. })
             | Line::VoteCast(VoteCast { player, .. })
@@ -961,6 +964,22 @@ pub enum Objective {
         /// The team of the robot that dropped it.
         team: Team,
     },
+    /// A Mann vs. Machine revive marker: a dead player a medic can revive.
+    Revive {
+        /// Entity index.
+        id: u32,
+        /// Position.
+        pos: Position,
+        /// The dead player.
+        owner: Option<PlayerId>,
+    },
+    /// Mann vs. Machine money on the ground.
+    Money {
+        /// Entity index.
+        id: u32,
+        /// Position.
+        pos: Position,
+    },
     /// A Mann vs. Machine tank.
     Tank {
         /// Entity index.
@@ -1000,6 +1019,28 @@ pub struct Mvm {
     pub between_waves: bool,
     /// Money lying on the ground.
     pub money: i64,
+    /// The robots of the wave, as its HUD lists them.
+    pub classes: Vec<MvmClass>,
+}
+
+/// One kind of robot in a Mann vs. Machine wave.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(clippy::struct_excessive_bools, reason = "TF2's class flags")]
+pub struct MvmClass {
+    /// Its icon's name (`scout`, `soldier_barrage`, `sentry_buster`, …).
+    pub name: String,
+    /// How many are left to fight.
+    pub count: u16,
+    /// Some are on the field now.
+    pub active: bool,
+    /// Giant robots.
+    pub giant: bool,
+    /// Always crit.
+    pub crit: bool,
+    /// Support robots, which keep coming and do not count towards the wave.
+    pub support: bool,
+    /// Mission robots: sentry busters, spies, engineers, sent at the players.
+    pub mission: bool,
 }
 
 /// Players on a control point, per team.
@@ -1844,6 +1885,20 @@ pub struct VotePassed {
     pub details: String,
 }
 
+/// Mann vs. Machine: a player bought an upgrade.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(missing_docs, reason = "self-explanatory")]
+pub struct Upgrade {
+    pub tick: u32,
+    pub player: PlayerId,
+    /// The item definition index of what was upgraded (30015 for the Power Up Canteen).
+    pub item: u16,
+    /// The attribute definition index bought.
+    pub attribute: u16,
+    /// Money spent.
+    pub cost: u16,
+}
+
 /// A vote failed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[expect(missing_docs, reason = "self-explanatory")]
@@ -2329,6 +2384,10 @@ mod tests {
                 json!({"type": "vote_failed", "tick": 1, "team": "red", "reason": 3}),
             ),
             (
+                Line::Upgrade(Upgrade { tick: 1, player: p(3), item: 30015, attribute: 327, cost: 50 }),
+                json!({"type": "upgrade", "tick": 1, "player": 3, "item": 30015, "attribute": 327, "cost": 50}),
+            ),
+            (
                 Line::BlastJump(BlastJump {
                     tick: 1,
                     player: p(3),
@@ -2353,6 +2412,8 @@ mod tests {
             Objective::Robot { id: 11, pos: [0.0; 3], team: Team::Red, hp: 70, max_hp: 330 },
             Objective::Tank { id: 12, pos: [0.0; 3], health: 0.99 },
             Objective::Core { id: 13, pos: [0.0; 3], team: Team::Blue },
+            Objective::Revive { id: 14, pos: [0.0; 3], owner: Some(PlayerId(5)) },
+            Objective::Money { id: 15, pos: [0.0; 3] },
         ];
         let expected = json!([
             {"kind": "ball", "id": 9, "pos": [1.0, 2.0, 3.0], "team": "blue", "carrier": 4},
@@ -2360,6 +2421,8 @@ mod tests {
             {"kind": "robot", "id": 11, "pos": [0.0, 0.0, 0.0], "team": "red", "hp": 70, "max_hp": 330},
             {"kind": "tank", "id": 12, "pos": [0.0, 0.0, 0.0], "health": 0.99},
             {"kind": "core", "id": 13, "pos": [0.0, 0.0, 0.0], "team": "blue"},
+            {"kind": "revive", "id": 14, "pos": [0.0, 0.0, 0.0], "owner": 5},
+            {"kind": "money", "id": 15, "pos": [0.0, 0.0, 0.0]},
         ]);
         assert_eq!(s(&objectives), expected);
         assert_eq!(serde_json::from_value::<Vec<Objective>>(expected).unwrap(), objectives);
@@ -2377,8 +2440,19 @@ mod tests {
         let points = Points { red: 3, blue: 5, max: Some(45), red_leader: Some(PlayerId(4)), blue_leader: None };
         let expected = json!({"red": 3, "blue": 5, "max": 45, "red_leader": 4, "blue_leader": null});
         assert_eq!(s(&points), expected);
-        let mvm = Mvm { wave: 2, waves: 5, enemies: 67, between_waves: false, money: 41 };
-        let expected = json!({"wave": 2, "waves": 5, "enemies": 67, "between_waves": false, "money": 41});
+        let buster = MvmClass {
+            name: "sentry_buster".into(),
+            count: 1,
+            active: false,
+            giant: true,
+            crit: false,
+            support: false,
+            mission: true,
+        };
+        let mvm = Mvm { wave: 2, waves: 5, enemies: 67, between_waves: false, money: 41, classes: vec![buster] };
+        let expected = json!({"wave": 2, "waves": 5, "enemies": 67, "between_waves": false, "money": 41, "classes": [
+            {"name": "sentry_buster", "count": 1, "active": false, "giant": true, "crit": false, "support": false, "mission": true}
+        ]});
         assert_eq!(s(&mvm), expected);
         assert_eq!(serde_json::from_value::<Mvm>(expected).unwrap(), mvm);
     }

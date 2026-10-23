@@ -3,7 +3,7 @@
 //! and wave.
 
 use super::extract::{as_float, as_int, opt_handle, team_byte, team_num, xyz};
-use crate::output::{Mvm, Objective, PlayerId, Points};
+use crate::output::{Mvm, MvmClass, Objective, PlayerId, Points};
 use std::collections::BTreeMap;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
@@ -29,6 +29,10 @@ const PROP_MVM_WAVES: SendPropIdentifier = prop_id("DT_TFObjectiveResource", "m_
 const PROP_MVM_ENEMIES: SendPropIdentifier = prop_id("DT_TFObjectiveResource", "m_nMannVsMachineWaveEnemyCount");
 const PROP_MVM_BETWEEN_WAVES: SendPropIdentifier = prop_id("DT_TFObjectiveResource", "m_bMannVsMachineBetweenWaves");
 const PROP_MVM_MONEY: SendPropIdentifier = prop_id("DT_TFObjectiveResource", "m_nMvMWorldMoney");
+const PROP_MVM_CLASS_NAMES: SendPropIdentifier = prop_id("DT_TFObjectiveResource", "m_iszMannVsMachineWaveClassNames");
+const PROP_MVM_CLASS_NAMES_2: SendPropIdentifier =
+    prop_id("DT_TFObjectiveResource", "m_iszMannVsMachineWaveClassNames2");
+const PROP_REVIVE_OWNER: SendPropIdentifier = prop_id("DT_TFReviveMarker", "m_hOwner");
 /// `m_fEffects`: not drawn (the ball between rounds).
 const EF_NODRAW: i64 = 0x20;
 
@@ -75,7 +79,26 @@ struct MvmState {
     enemies: i64,
     between_waves: bool,
     money: i64,
+    /// The wave's robot kinds, in the HUD's order: two arrays of 12 (the second's props end in 2).
+    classes: [WaveClass; 2 * WAVE_CLASSES],
 }
+
+#[derive(Default, Clone)]
+struct WaveClass {
+    name: String,
+    count: i64,
+    flags: i64,
+    active: bool,
+}
+
+/// Robot kinds per array of `CTFObjectiveResource`'s wave props.
+const WAVE_CLASSES: usize = 12;
+/// `m_nMannVsMachineWaveClassFlags` bits (`MVM_CLASS_FLAG_*`).
+const MVM_SUPPORT: i64 = 1 << 1;
+const MVM_MISSION: i64 = 1 << 2;
+const MVM_MINIBOSS: i64 = 1 << 3;
+const MVM_ALWAYS_CRIT: i64 = 1 << 4;
+const MVM_SUPPORT_LIMITED: i64 = 1 << 5;
 
 #[derive(Default)]
 pub(crate) struct Modes {
@@ -87,6 +110,10 @@ pub(crate) struct Modes {
     /// Robot destruction cores (`CBonusPack`).
     cores: BTreeMap<u32, Placed>,
     tanks: BTreeMap<u32, Tank>,
+    /// Mann vs. Machine revive markers and their dead players' entities.
+    revives: BTreeMap<u32, (Placed, Option<u32>)>,
+    /// Mann vs. Machine money packs.
+    money: BTreeMap<u32, Placed>,
     /// The robot or player destruction logic, and its entity.
     logic: Option<(u32, Logic)>,
     mvm: MvmState,
@@ -130,6 +157,19 @@ impl Modes {
             "CBonusPack" => {
                 let core = self.cores.entry(idx).or_default();
                 props.for_each(|p| placed(core, &p));
+            }
+            "CCurrencyPack" => {
+                let pack = self.money.entry(idx).or_default();
+                props.for_each(|p| placed(pack, &p));
+            }
+            "CTFReviveMarker" => {
+                let (at, owner) = self.revives.entry(idx).or_default();
+                for p in props {
+                    placed(at, &p);
+                    if p.identifier == PROP_REVIVE_OWNER {
+                        *owner = opt_handle(as_int(&p.value));
+                    }
+                }
             }
             "CTFRobotDestruction_Robot" => {
                 let robot = self.robots.entry(idx).or_default();
@@ -178,7 +218,34 @@ impl Modes {
             PROP_MVM_ENEMIES => self.mvm.enemies = v,
             PROP_MVM_BETWEEN_WAVES => self.mvm.between_waves = v != 0,
             PROP_MVM_MONEY => self.mvm.money = v,
-            _ => {}
+            PROP_MVM_CLASS_NAMES | PROP_MVM_CLASS_NAMES_2 => {
+                let offset = if p.identifier == PROP_MVM_CLASS_NAMES { 0 } else { WAVE_CLASSES };
+                if let SendPropValue::Array(names) = &p.value {
+                    for (class, name) in self.mvm.classes[offset..].iter_mut().zip(names.iter().take(WAVE_CLASSES)) {
+                        if let SendPropValue::String(name) = name {
+                            class.name.clone_from(name);
+                        }
+                    }
+                }
+            }
+            // The per-kind arrays come as elements named after the array, with the index as name.
+            _ => {
+                let Some((table, index)) = p.identifier.names() else { return };
+                let Ok(index) = index.as_str().parse::<usize>() else { return };
+                let (array, second) = match table.as_str().strip_suffix('2') {
+                    Some(first) => (first, true),
+                    None => (table.as_str(), false),
+                };
+                let Some(class) = self.mvm.classes.get_mut(index + if second { WAVE_CLASSES } else { 0 }) else {
+                    return;
+                };
+                match array {
+                    "m_nMannVsMachineWaveClassCounts" => class.count = v,
+                    "m_nMannVsMachineWaveClassFlags" => class.flags = v,
+                    "m_bMannVsMachineWaveClassActive" => class.active = v != 0,
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -190,6 +257,8 @@ impl Modes {
             .chain(self.robots.keys())
             .chain(self.cores.keys())
             .chain(self.tanks.keys())
+            .chain(self.revives.keys())
+            .chain(self.money.keys())
             .copied()
     }
 
@@ -199,6 +268,8 @@ impl Modes {
         self.robots.remove(&idx);
         self.cores.remove(&idx);
         self.tanks.remove(&idx);
+        self.revives.remove(&idx);
+        self.money.remove(&idx);
         if self.logic.as_ref().is_some_and(|(id, _)| *id == idx) {
             self.logic = None;
         }
@@ -233,12 +304,18 @@ impl Modes {
             max_hp: u16::try_from(r.max_hp.max(0)).unwrap_or(u16::MAX),
         });
         let cores = self.cores.iter().map(|(&id, c)| Objective::Core { id, pos: xyz(c.pos), team: team_num(c.team) });
+        let revives = self.revives.iter().map(|(&id, (at, owner))| Objective::Revive {
+            id,
+            pos: xyz(at.pos),
+            owner: owner.and_then(player).map(|p| p.0),
+        });
+        let money = self.money.iter().map(|(&id, m)| Objective::Money { id, pos: xyz(m.pos) });
         let tanks = self.tanks.iter().map(|(&id, t)| Objective::Tank {
             id,
             pos: xyz(t.at.pos),
             health: (f64::from(t.health.clamp(0.0, 1.0)) * 1000.0).round() / 1000.0,
         });
-        balls.chain(goals).chain(robots).chain(cores).chain(tanks).collect()
+        balls.chain(goals).chain(robots).chain(cores).chain(revives).chain(money).chain(tanks).collect()
     }
 
     pub(crate) fn points(&self, player: PlayerAt<'_>) -> Option<Points> {
@@ -263,6 +340,20 @@ impl Modes {
             enemies: count(w.enemies),
             between_waves: w.between_waves,
             money: w.money,
+            classes: w
+                .classes
+                .iter()
+                .filter(|c| !c.name.is_empty())
+                .map(|c| MvmClass {
+                    name: c.name.clone(),
+                    count: count(c.count),
+                    active: c.active,
+                    giant: c.flags & MVM_MINIBOSS != 0,
+                    crit: c.flags & MVM_ALWAYS_CRIT != 0,
+                    support: c.flags & (MVM_SUPPORT | MVM_SUPPORT_LIMITED) != 0,
+                    mission: c.flags & MVM_MISSION != 0,
+                })
+                .collect(),
         })
     }
 }

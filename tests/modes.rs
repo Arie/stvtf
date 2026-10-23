@@ -243,3 +243,37 @@ fn players_without_a_class_are_not_alive() {
         assert!(classless.iter().all(|p| !p.alive && p.pos.is_none()), "{:?}", classless.iter().find(|p| p.alive));
     }
 }
+
+#[test]
+fn mvm_waves_list_their_robots() {
+    let waves: Vec<_> = of!(MVM, Snapshot).filter_map(|s| s.mvm.as_ref()).collect();
+    let names = |wave: u16| -> Vec<&str> {
+        let w = waves.iter().find(|w| w.wave == wave).unwrap();
+        w.classes.iter().map(|c| c.name.as_str()).collect()
+    };
+    assert_eq!(names(1), ["scout", "soldier", "heavy", "soldier_barrage", "sentry_buster"]);
+    assert_eq!(names(2), ["tank", "pyro", "pyro_flare", "heavy_heater", "sentry_buster"]);
+    let buster = waves.last().unwrap().classes.iter().find(|c| c.name == "sentry_buster").unwrap();
+    assert!(buster.mission && buster.giant && !buster.support);
+    // Counts go down as robots die.
+    let scouts = |w: &stvtf::output::Mvm| w.classes.iter().find(|c| c.name == "scout").map(|c| c.count);
+    assert!(waves.windows(2).any(|w| w[0].wave == w[1].wave && scouts(w[1]) < scouts(w[0])));
+}
+
+#[test]
+fn mvm_has_revive_markers_money_and_upgrades() {
+    let players = known(&MVM);
+    let objectives: Vec<&Objective> = of!(MVM, Snapshot).flat_map(|s| &s.objectives).collect();
+    let owners: Vec<_> = objectives
+        .iter()
+        .filter_map(|o| match o {
+            Objective::Revive { owner, .. } => Some(*owner),
+            _ => None,
+        })
+        .collect();
+    assert!(!owners.is_empty() && owners.iter().all(|o| o.is_some_and(|p| players.contains(&p))));
+    assert!(objectives.iter().any(|o| matches!(o, Objective::Money { .. })));
+    let bought: Vec<(u16, u16)> = of!(MVM, Upgrade).map(|u| (u.item, u.cost)).collect();
+    assert_eq!(bought[..5], [(30015, 50), (25, 350), (30015, 50), (30015, 50), (30015, 50)]);
+    assert!(of!(MVM, Upgrade).all(|u| players.contains(&u.player)));
+}
