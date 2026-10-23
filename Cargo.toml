@@ -17,6 +17,9 @@ anyhow = "1"
 ctrlc = { version = "3", features = ["termination"] }
 serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+flate2 = "1"
+
 [profile.release]
 debug = 1
 
