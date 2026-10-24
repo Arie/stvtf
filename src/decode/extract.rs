@@ -232,6 +232,8 @@ pub(crate) struct Extractor {
     pub(crate) server_tick: u32,
     events: RefCell<Vec<Line>>,
     world_sent: Cell<bool>,
+    /// A delta came from a frame never seen: the entities may be missing what it held.
+    lost_frame: Cell<bool>,
     control_points: Vec<ControlPoint>,
     num_control_points: usize,
     /// Per server class id: whether its send table has an item definition index.
@@ -821,6 +823,11 @@ impl Extractor {
     /// Takes the queued events.
     pub(crate) fn drain(&self) -> Vec<Line> {
         self.events.take()
+    }
+
+    /// Whether a delta came from a frame never seen since this was last asked.
+    pub(crate) fn take_lost_frame(&self) -> bool {
+        self.lost_frame.take()
     }
 
     fn user_pos(&self, user_id: u16) -> Option<Position> {
@@ -1502,6 +1509,9 @@ impl Extractor {
             None => Some(HashSet::new()),
             Some(t) => self.frames.iter().rev().find(|(tick, _)| *tick == u32::from(t)).map(|(_, f)| f.clone()),
         };
+        if base.is_none() {
+            self.lost_frame.set(true);
+        }
         let mut frame = base.unwrap_or_else(|| self.tracked().collect());
         for e in &pe.entities {
             let id = u32::from(e.entity_index);

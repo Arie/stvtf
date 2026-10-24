@@ -135,6 +135,8 @@ struct Session<'o> {
     spawncount: Option<i32>,
     map: Option<String>,
     server_tick: i32,
+    /// The entities missed a frame: tick acks ask for a full update until one comes.
+    want_full_update: bool,
     echoed: HashSet<(i32, Signon)>,
     pending: Option<Pending>,
     last_inbound: Instant,
@@ -161,6 +163,7 @@ impl<'o> Session<'o> {
             spawncount: None,
             map: None,
             server_tick: 0,
+            want_full_update: false,
             echoed: HashSet::new(),
             pending: None,
             last_inbound: Instant::now(),
@@ -168,6 +171,12 @@ impl<'o> Session<'o> {
             broke: None,
             remap: None,
         }
+    }
+
+    /// The tick to ack: the latest seen, so the server deltas from it; -1 asks for a full update,
+    /// as a game client does when its entities missed a frame.
+    fn ack_tick(&self) -> i32 {
+        if self.want_full_update { -1 } else { self.server_tick }
     }
 
     /// Records why the session ends; the first reason wins.
@@ -262,6 +271,11 @@ impl<'o> Session<'o> {
         if let Some(t) = life.tick {
             self.server_tick = self.server_tick.max(t);
         }
+        if life.lost_frame {
+            self.want_full_update = true;
+        } else if life.full_update {
+            self.want_full_update = false;
+        }
         if let Some(reason) = life.disconnect {
             let fatal = Fatal::from_reason(&reason);
             self.break_with(format!("disconnected by server: {reason}"), fatal);
@@ -342,7 +356,7 @@ impl<'o> Session<'o> {
         self.promote(emit);
         if self.state >= Signon::Spawn && now.duration_since(self.last_tick_ack) > TICK_ACK_EVERY {
             self.last_tick_ack = now;
-            let body = messages::tick(self.server_tick);
+            let body = messages::tick(self.ack_tick());
             self.send(None, Some(&body));
         }
     }
@@ -529,7 +543,23 @@ pub fn replay(
 
 #[cfg(test)]
 mod tests {
-    use super::Fatal;
+    use super::{Fatal, Options, Session};
+    use crate::decode::Lifecycle;
+
+    #[test]
+    fn a_lost_frame_asks_for_a_full_update_until_one_comes() {
+        let opt = Options::default();
+        let mut s = Session::new(None, 0, &opt);
+        let mut emit = |_| {};
+        s.lifecycle(Lifecycle { tick: Some(500), ..Lifecycle::default() }, &mut emit);
+        assert_eq!(s.ack_tick(), 500);
+        s.lifecycle(Lifecycle { tick: Some(501), lost_frame: true, ..Lifecycle::default() }, &mut emit);
+        assert_eq!(s.ack_tick(), -1);
+        s.lifecycle(Lifecycle { tick: Some(502), ..Lifecycle::default() }, &mut emit);
+        assert_eq!(s.ack_tick(), -1, "a delta does not put the entities right");
+        s.lifecycle(Lifecycle { tick: Some(503), full_update: true, ..Lifecycle::default() }, &mut emit);
+        assert_eq!(s.ack_tick(), 503);
+    }
 
     #[test]
     fn only_unfixable_rejections_are_fatal() {

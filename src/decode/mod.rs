@@ -72,6 +72,11 @@ pub(crate) struct Lifecycle {
     pub server_info: Option<(i32, String)>,
     pub tick: Option<i32>,
     pub disconnect: Option<String>,
+    /// The entities may have missed a frame: a message failed to decode, or a delta came from a
+    /// frame never seen. Later deltas build on it, so only a full update puts them right.
+    pub lost_frame: bool,
+    /// Entities came as a full update, from no earlier frame.
+    pub full_update: bool,
 }
 
 pub(crate) struct Decoder<'a> {
@@ -163,6 +168,7 @@ impl<'a> Decoder<'a> {
                         eprintln!("decode error at bit {start} of {nbits}, message id {id}: {e}");
                     }
                     self.parse_errors += 1;
+                    life.lost_frame = true;
                     break;
                 }
             }
@@ -173,7 +179,10 @@ impl<'a> Decoder<'a> {
                 Message::SignOnState(s) => life.signon.push(signon(&s.state)),
                 Message::ServerInfo(i) => life.server_info = Some((i.server_count as i32, i.map.clone())),
                 Message::NetTick(t) => life.tick = Some(u32::from(t.tick) as i32),
-                Message::PacketEntities(_) => has_entities = true,
+                Message::PacketEntities(pe) => {
+                    has_entities = true;
+                    life.full_update |= pe.delta.is_none();
+                }
                 _ => {}
             }
         }
@@ -182,8 +191,10 @@ impl<'a> Decoder<'a> {
             Packet::Message(MessagePacket { tick: DemoTick::from(tick), messages, meta: MessagePacketMeta::default() });
         if self.handler.handle_packet(packet).is_err() {
             self.parse_errors += 1;
+            life.lost_frame = true;
         }
         let x = self.handler.borrow_output();
+        life.lost_frame |= x.take_lost_frame();
         x.announce();
         let drained = x.drain();
         let now = x.server_tick;
