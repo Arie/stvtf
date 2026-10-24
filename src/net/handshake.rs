@@ -159,11 +159,19 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     let mut buf = vec![0u8; MAX_DATAGRAM];
     let deadline = Instant::now() + timeout;
     // Replies are taken from any address (see `recv_from_port`), so only the nonce tells
-    // the server's from a forgery: skip the ones without it rather than fail on them.
+    // the server's from a forgery: skip the ones without it, and those that do not parse, rather
+    // than fail on them. The last that did not parse is named if no reply comes.
+    let mut junk: Option<anyhow::Error> = None;
     let (ch, from) = loop {
-        let (n, from) = recv_from_port(&sock, server.port(), &mut buf, deadline).context("no challenge reply")?;
-        if let Some(ch) = parse_challenge(&buf[..n], nonce)? {
-            break (ch, from);
+        let (n, from) = recv_from_port(&sock, server.port(), &mut buf, deadline).with_context(|| match &junk {
+            Some(e) => format!("no challenge reply (ignored one: {e})"),
+            None => "no challenge reply".to_string(),
+        })?;
+        match parse_challenge(&buf[..n], nonce) {
+            Ok(Some(ch)) => break (ch, from),
+            Ok(None) => {}
+            Err(e) if e.is::<Rejected>() => return Err(e),
+            Err(e) => junk = Some(e),
         }
     };
     sock.connect(from)?;
@@ -339,6 +347,28 @@ mod tests {
         assert!(matches!(kind, std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock), "{kind:?}");
         assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
         spam.join().unwrap();
+    }
+
+    #[test]
+    fn junk_from_the_servers_port_is_skipped() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = server.local_addr().unwrap();
+        let fake = std::thread::spawn(move || {
+            let mut buf = [0u8; 64];
+            let (_, client) = server.recv_from(&mut buf).unwrap();
+            let nonce = &buf[OOB_KIND + 1..OOB_KIND + 5];
+            server.send_to(b"\xff\xff\xff\xffZjunk", client).unwrap();
+            let mut reply = vec![0xff, 0xff, 0xff, 0xff, b'A'];
+            reply.extend_from_slice(&MAGIC_VERSION.to_le_bytes());
+            reply.extend_from_slice(&77u32.to_le_bytes());
+            reply.extend_from_slice(nonce);
+            reply.extend_from_slice(&AUTH_STEAM.to_le_bytes());
+            server.send_to(&reply, client).unwrap();
+        });
+        // A game server's challenge ends the attempt as soon as it is parsed.
+        let err = connect(addr, "stv.tf", "", "1", Duration::from_secs(2)).err().unwrap();
+        assert!(err.is::<GamePort>(), "{err:#}");
+        fake.join().unwrap();
     }
 
     #[test]
