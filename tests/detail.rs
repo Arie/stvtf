@@ -100,6 +100,15 @@ fn points_count_players_standing_on_them() {
 }
 
 #[test]
+fn kills_without_an_attacker_have_no_attacker_position() {
+    let suicides: Vec<_> = of!(EVENTS, Kill).filter(|k| k.attacker.is_none()).collect();
+    assert!(!suicides.is_empty(), "no kill without an attacker");
+    for k in suicides {
+        assert_eq!(k.attacker_pos, None, "{k:?}");
+    }
+}
+
+#[test]
 fn killed_cappers_match_the_kill_at_that_tick() {
     let k: Vec<_> = of!(EVENTS, KilledCapper).collect();
     assert!(!k.is_empty(), "no killed_capper");

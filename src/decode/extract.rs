@@ -941,11 +941,13 @@ impl Extractor {
         let user = PlayerId;
         Some(match event {
             GameEvent::PlayerDeath(d) => {
+                // A suicide names the victim as attacker: it has none, nor a position for one.
+                let attacker = if d.attacker == d.user_id { 0 } else { d.attacker };
                 // Building kills (sentries) report the building as inflictor; attacker stays the engineer.
                 Line::Kill(out::Kill {
                     tick,
                     victim: user(d.user_id),
-                    attacker: opt_user(if d.attacker == d.user_id { 0 } else { d.attacker }),
+                    attacker: opt_user(attacker),
                     assister: if d.assister == NO_ASSISTER { None } else { opt_user(d.assister) },
                     weapon: d.weapon.to_string(),
                     crit: d.damage_bits & DMG_CRIT != 0,
@@ -959,7 +961,7 @@ impl Extractor {
                     // The victim was blast jumping: an airshot for projectiles.
                     airborne: d.rocket_jump,
                     victim_pos: self.user_pos(d.user_id),
-                    attacker_pos: self.user_pos(d.attacker),
+                    attacker_pos: self.user_pos(attacker),
                 })
             }
             GameEvent::PlayerHurt(h) => Line::Damage(out::Damage {
