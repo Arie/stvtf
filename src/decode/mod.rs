@@ -233,10 +233,11 @@ fn signon(s: &SignOnState) -> Signon {
     }
 }
 
-/// Server ticks between snapshots for a rate cap, at `interval` seconds per tick;
-/// 0 disables snapshots.
+/// Server ticks between snapshots for a rate cap, at `interval` seconds per tick; 0 disables
+/// snapshots. Rounded up, so the rate stays at or under `hz`; the tolerance keeps a rate that
+/// divides the tick rate (64 Hz on 128 ticks) from rounding up over float error.
 fn snapshot_every(hz: f32, interval: f32) -> u32 {
-    if hz <= 0.0 { 0 } else { (1.0 / (interval * hz)).round().max(1.0) as u32 }
+    if hz <= 0.0 { 0 } else { (1.0 / (interval * hz) - 1e-3).ceil().max(1.0) as u32 }
 }
 
 /// Whether a snapshot is due at server tick `now`. The tick restarts at a map load, so a
@@ -279,8 +280,10 @@ mod tests {
         assert!(snapshot_due(Some(500), 2, 3), "tick restarted at a map load");
         assert!(!snapshot_due(Some(u32::MAX - 1), u32::MAX, 3), "no overflow near u32::MAX");
         assert!(!snapshot_due(None, 5, 0), "disabled");
-        assert_eq!(snapshot_every(20.0, 0.015), 3);
-        assert_eq!(snapshot_every(20.0, 1.0 / 128.0), 6, "128-tick server");
+        assert_eq!(snapshot_every(20.0, 0.015), 4, "16.7/s: never over the cap");
+        assert_eq!(snapshot_every(20.0, 1.0 / 128.0), 7, "128-tick server");
+        assert_eq!(snapshot_every(64.0, 1.0 / 128.0), 2, "an exact divisor stays exact");
+        assert_eq!(snapshot_every(1000.0, 0.015), 1, "every tick");
         assert_eq!(snapshot_every(0.0, 0.015), 0);
     }
 }

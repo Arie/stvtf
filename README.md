@@ -18,7 +18,10 @@ For example, `STVTF_PASSWORD=tv stvtf connect 1.2.3.4:27020 > match.jsonl`.
 - `HOST:PORT` is the SourceTV port (`tv_port`). Given the game port, it tries game port + 5.
 - `--password` is the `tv_password`. Prefer `STVTF_PASSWORD`: other local users can read
   command-line arguments.
-- `--hz` caps the snapshot rate (default 20, 0 for none). Events are never rate limited.
+- `--hz` caps the snapshot rate (default 20; 0 for no snapshots). Snapshots come at most that often,
+  in whole ticks, and no more often than the STV sends frames (`tv_snapshotrate`): the default is
+  every 4 ticks, 16.7 a second on a 66-tick server, which takes every frame of an STV at the
+  default `tv_snapshotrate 16`. Events are never rate limited.
 - `--record` saves the raw datagrams to a new file; `replay` decodes it offline. `demo` runs a
   `.dem` through the same extractor.
 - Flags take `--hz 10` or `--hz=10`; an unknown flag is an error.
@@ -183,7 +186,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 |---|---|
 | `kill` | `victim`, `attacker` (null for world/suicide), `assister`, `weapon` (kill icon name), `crit`, `headshot`, `backstab`, `suicide`, `dominated`, `revenge`, `feign` (Dead Ringer: not a real death), `airborne` (victim was blast jumping), `victim_pos`, `attacker_pos` |
 | `damage` | `victim`, `attacker`, `amount`, `health` (left), `crit`, `minicrit`, `weapon_id` |
-| `shot` | `player`, `origin`, `pitch`, `yaw`, `weapon_id`: one per hitscan shot (bullets, shotgun, sniper, minigun) from TE_FireBullets |
+| `shot` | `player`, `origin`, `pitch`, `yaw`, `weapon_id`, `crit`: one per hitscan shot (bullets, shotgun, sniper, minigun) from TE_FireBullets |
 | `explosion` | `origin`, `weapon_id`: rockets, pipes, stickies, … |
 | `impact` | `kind` (`blood`, `sparks`, `ricochet`), `pos`: where a bullet hit |
 | `mark` | `pos`: a decal (bullet hole, scorch) left on the world |
@@ -195,7 +198,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `medic_death` | `medic`, `attacker`, `healing` (this life), `drop` (died with a full charge) |
 | `capture_blocked` | `point`, `name`, `blocker`, `victim` |
 | `reflect` | `player` (the pyro), `owner` (of the projectile), `weapon_id` |
-| `banner` | `player`, `kind` (`buff_banner`, `battalions_backup`, `concheror`) |
+| `banner` | `player`, `kind` (`buff_banner`, `battalions_backup`, `concheror`, `other`) |
 | `scores` | `red`, `blue`, `game_over`: the end-of-round panel |
 | `stalemate`, `overtime` | (none) |
 | `build` | `player`, `object` (`sentry`/`dispenser`/`teleporter`/`sapper`), `id` |
@@ -275,10 +278,11 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
   `tv_delay`; the tool follows until the delayed stream reaches the new map.
 - Memory grows with the current map's data (about 26 MB for a 3-minute 6v6) and is freed at each
   map change. Past 1 GiB (`Options::max_decoder_bytes`) the tool reconnects to start afresh.
-- SourceTV keeps an exploded projectile around for up to seconds. Like a game client, the tool
-  hides it: the nearest rocket or grenade within 150 units of each `explosion`.
-- Temp entities (`explosion`, `shot`, `impact`, `mark`) fill omitted properties from the previous one of the same
-  class, as the engine does.
+- SourceTV relays often send deltas from a frame a few ticks back, so a projectile that came and
+  went in between is never deleted. Like a game client, the tool builds each frame's entities from
+  the base frame's and drops the projectiles and buildings left out of it.
+- Temp entities (`explosion`, `shot`, `impact`, `mark`) fill omitted properties from the one just before
+  them in the same message if it is of the same class, else with zeros, as the engine does.
 - `shot` covers hitscan only; melee swings have no event.
 - Not reported, as other lines or snapshots already carry them: `player_domination` (the kill's
   `dominated`), `player_invulned` (`uber`), `environmental_death` (the `kill`), `ctf_flag_captured`
@@ -317,7 +321,8 @@ opens weekly update pull requests.
 
 Unit tests cover the codec and protocol layers. `tests/captures.rs` replays SourceTV traffic
 from a bot server (`tests/fixtures/*.cap`, made with `connect --record`) through the session
-and decoder, including a map change; `tests/payload.rs` runs the start of a real pl_upward
+and decoder, including a map change, and `tests/golden.rs` compares a whole replay with its recorded
+output (`bots_cp_badlands.jsonl.gz`); `tests/payload.rs` runs the start of a real pl_upward
 match (`tests/fixtures/pl_upward.dem`) and `tests/flags.rs` a bball match
 (`tests/fixtures/ctf_ballin_sky.dem`). `tests/detail.rs` also decodes a ctf_turbine match
 (`tests/fixtures/ctf_turbine.dem`) for votes and medic defences. `tests/modes.rs` runs the starts
