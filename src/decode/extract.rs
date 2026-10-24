@@ -727,6 +727,14 @@ impl Extractor {
         }
     }
 
+    /// The entities `track_frame` drops when a frame leaves them out.
+    fn tracked(&self) -> impl Iterator<Item = u32> + '_ {
+        let state = &self.gs.state;
+        (state.projectiles.keys().chain(state.buildings.keys()).map(|id| u32::from(*id)))
+            .chain(self.ents.flags.keys().copied())
+            .chain(self.modes.ids())
+    }
+
     fn forget_entity(&mut self, idx: u32) {
         self.ents.forget(idx);
         self.modes.forget(idx);
@@ -1486,13 +1494,15 @@ impl Extractor {
     /// ever sent. `SourceTV` relays often send deltas from a frame a few ticks back; demo files
     /// from the previous tick, where every delete arrives. Like the game client, this frame's
     /// entities are the base frame's plus those that entered, less those that left: projectiles
-    /// and buildings outside it are gone. Without the base frame (just connected), nothing is dropped.
+    /// and buildings outside it are gone. Without the base frame (just connected, or one lost to
+    /// a decode error), what it held is unknown: it is taken to be the entities known now, so
+    /// nothing is dropped, and the next delta, from this frame, finds its base.
     fn track_frame(&mut self, pe: &PacketEntitiesMessage) {
         let base = match pe.delta {
             None => Some(HashSet::new()),
             Some(t) => self.frames.iter().rev().find(|(tick, _)| *tick == u32::from(t)).map(|(_, f)| f.clone()),
         };
-        let Some(mut frame) = base else { return };
+        let mut frame = base.unwrap_or_else(|| self.tracked().collect());
         for e in &pe.entities {
             let id = u32::from(e.entity_index);
             match e.update_type {
@@ -2355,6 +2365,19 @@ mod frame_tests {
         frame(&mut x, 101, Some(100), vec![update(10, UpdateType::Enter)]);
         frame(&mut x, 102, Some(100), vec![]);
         assert_eq!(shown(&x), [10]);
+    }
+
+    #[test]
+    fn tracking_picks_up_again_after_a_lost_base_frame() {
+        let mut x = Extractor::default();
+        frame(&mut x, 100, None, vec![update(10, UpdateType::Enter)]);
+        // Frame 101 was lost; 102 deltas from it, 103 from 102.
+        frame(&mut x, 102, Some(101), vec![update(11, UpdateType::Enter)]);
+        assert_eq!(shown(&x), [10, 11]);
+        frame(&mut x, 103, Some(102), vec![update(12, UpdateType::Enter)]);
+        // 12 came and went since 102: frame 102 was recorded, so the delta from it drops 12.
+        frame(&mut x, 104, Some(102), vec![]);
+        assert_eq!(shown(&x), [10, 11]);
     }
 }
 
