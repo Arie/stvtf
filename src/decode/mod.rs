@@ -80,7 +80,7 @@ pub(crate) struct Decoder<'a> {
     arena_bytes: usize,
     handler: DemoHandler<'a, Extractor>,
     snapshot_hz: f32,
-    last_snapshot: Option<u32>,
+    snapshots: SnapshotClock,
     parse_errors: u64,
     /// The parser panicked on some input; its state can no longer be trusted.
     panicked: bool,
@@ -97,7 +97,7 @@ impl<'a> Decoder<'a> {
             arena_bytes: 0,
             handler,
             snapshot_hz,
-            last_snapshot: None,
+            snapshots: SnapshotClock::default(),
             parse_errors: 0,
             panicked: false,
             out: Vec::new(),
@@ -189,8 +189,7 @@ impl<'a> Decoder<'a> {
         let now = x.server_tick;
         let every = snapshot_every(self.snapshot_hz, x.interval());
         self.out.extend(drained);
-        if has_entities && snapshot_due(self.last_snapshot, now, every) {
-            self.last_snapshot = Some(now);
+        if has_entities && self.snapshots.due(now, every) {
             let snap = self.extractor().snapshot();
             self.out.push(Line::Snapshot(snap));
         }
@@ -234,16 +233,44 @@ fn signon(s: &SignOnState) -> Signon {
 }
 
 /// Server ticks between snapshots for a rate cap, at `interval` seconds per tick; 0 disables
-/// snapshots. Rounded up, so the rate stays at or under `hz`; the tolerance keeps a rate that
-/// divides the tick rate (64 Hz on 128 ticks) from rounding up over float error.
+/// snapshots. Rounded up, so the rate stays at or under `hz`; the tolerance, a hundred-thousandth
+/// of the ratio, keeps a rate that divides the tick rate (64 Hz on 128 ticks) from rounding up
+/// over float error.
 fn snapshot_every(hz: f32, interval: f32) -> u32 {
-    if hz <= 0.0 { 0 } else { (1.0 / (interval * hz) - 1e-3).ceil().max(1.0) as u32 }
+    if hz <= 0.0 { 0 } else { (1.0 / (f64::from(interval) * f64::from(hz)) * (1.0 - 1e-5)).ceil().max(1.0) as u32 }
 }
 
-/// Whether a snapshot is due at server tick `now`. The tick restarts at a map load, so a
-/// tick before the last snapshot is due too.
-fn snapshot_due(last: Option<u32>, now: u32, every: u32) -> bool {
-    every > 0 && last.is_none_or(|l| now < l || now - l >= every)
+/// When snapshots are due. Each is due `every` ticks after the one before it was due, not after
+/// the frame it went out with: the STV sends frames only every few ticks (`tv_snapshotrate`), and
+/// counting from a late frame would skip the next one (frames every 3 ticks at `every` 4 would
+/// give a snapshot every 6).
+#[derive(Default)]
+struct SnapshotClock {
+    /// The tick of the last snapshot and the tick the next is due.
+    last: Option<(u32, u32)>,
+}
+
+impl SnapshotClock {
+    /// Whether a frame at server tick `now` gets a snapshot. The tick restarts at a map load, so
+    /// a tick before the last snapshot is due too; one a whole interval late (a stall) starts
+    /// the count again from `now`.
+    fn due(&mut self, now: u32, every: u32) -> bool {
+        if every == 0 {
+            return false;
+        }
+        let next = match self.last {
+            Some((last, next)) if now >= last => {
+                if now < next {
+                    return false;
+                }
+                if now - next < every { next } else { now }
+            }
+            // The first snapshot, or the tick restarted.
+            _ => now,
+        };
+        self.last = Some((now, next.saturating_add(every)));
+        true
+    }
 }
 
 /// Runs a demo file through the same extractor a live session uses, passing events and
@@ -252,7 +279,7 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Line)) -> 
     let demo = tf_demo_parser::Demo::new(bytes);
     let parser = tf_demo_parser::DemoParser::new_with_analyser(demo.get_stream(), Extractor::default());
     let (_header, mut ticker) = parser.ticker()?;
-    let mut last: Option<u32> = None;
+    let mut snapshots = SnapshotClock::default();
     while ticker.tick()? {
         let x = ticker.state();
         x.announce();
@@ -260,8 +287,7 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Line)) -> 
             emit(line);
         }
         let now = x.server_tick;
-        if now > 0 && snapshot_due(last, now, snapshot_every(snapshot_hz, x.interval())) {
-            last = Some(now);
+        if now > 0 && snapshots.due(now, snapshot_every(snapshot_hz, x.interval())) {
             emit(Line::Snapshot(x.snapshot()));
         }
     }
@@ -274,13 +300,20 @@ mod tests {
 
     #[test]
     fn snapshot_timing() {
-        assert!(snapshot_due(None, 5, 3));
-        assert!(!snapshot_due(Some(5), 7, 3));
-        assert!(snapshot_due(Some(5), 8, 3));
-        assert!(snapshot_due(Some(500), 2, 3), "tick restarted at a map load");
-        assert!(!snapshot_due(Some(u32::MAX - 1), u32::MAX, 3), "no overflow near u32::MAX");
-        assert!(!snapshot_due(None, 5, 0), "disabled");
+        let sent = |frames: &[u32], every| {
+            let mut clock = SnapshotClock::default();
+            frames.iter().copied().filter(|&t| clock.due(t, every)).collect::<Vec<_>>()
+        };
+        assert_eq!(sent(&[5, 6, 7, 8, 9, 10, 11], 3), [5, 8, 11]);
+        let every_third: Vec<u32> = (1..=8).map(|n| n * 3).collect();
+        assert_eq!(sent(&every_third, 4), [3, 9, 12, 15, 21, 24], "frames 3 ticks apart: one per 4 ticks");
+        assert_eq!(sent(&[4, 8, 13, 17, 21, 25], 4), [4, 8, 13, 17, 21, 25], "every frame of a slower STV");
+        assert_eq!(sent(&[5, 6, 100, 101, 103], 3), [5, 100, 103], "after a stall, counted from there");
+        assert_eq!(sent(&[500, 501, 2, 3, 5], 3), [500, 2, 5], "tick restarted at a map load");
+        assert_eq!(sent(&[u32::MAX - 1, u32::MAX], 3), [u32::MAX - 1, u32::MAX], "saturates near u32::MAX");
+        assert_eq!(sent(&[5, 6], 0), [] as [u32; 0], "disabled");
         assert_eq!(snapshot_every(20.0, 0.015), 4, "16.7/s: never over the cap");
+        assert_eq!(snapshot_every(33.32, 0.015), 3, "just over a whole tick ratio still rounds up");
         assert_eq!(snapshot_every(20.0, 1.0 / 128.0), 7, "128-tick server");
         assert_eq!(snapshot_every(64.0, 1.0 / 128.0), 2, "an exact divisor stays exact");
         assert_eq!(snapshot_every(1000.0, 0.015), 1, "every tick");
