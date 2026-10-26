@@ -213,7 +213,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `round_active`, `setup_finished` | (none) |
 | `round_win` | `team`, `reason`, `round_time` |
 | `flag` | `event` (`pickup`, `captured`, `dropped`, `defended`, `returned`), `player`, `carrier` (the carrier a `defended` stopped), `team` (the flag's) |
-| `heal` | `patient`, `healer` (null for on-hit heals), `amount`, `source` (`medigun`, `dispenser`, `crossbow`, `on_hit`, `other`; medigun/dispenser are inferred from the healer's class) |
+| `heal` | `patient`, `healer` (null for on-hit heals and a player healing themselves, such as a medic regenerating), `amount`, `source` (`medigun`, `dispenser`, `crossbow`, `on_hit`, `other`; medigun/dispenser are inferred from the healer's class) |
 | `blast_jump` | `player`, `kind` (`rocket`, `sticky`, `rocket_pack`), `phase` (`start`, `land`) |
 | `pickup` | `player`, `item` (`health`, `ammo`), `size` (`small`, `medium`, `full`, null when unknown) |
 | `point_captured` | `point` (index into the control points), `name`, `team`, `cappers` (player ids) |

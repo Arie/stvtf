@@ -143,13 +143,14 @@ fn heal_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
     let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
     match event {
         GameEvent::PlayerHealed(h) => {
-            // The event doesn't say what healed: infer it from the healer's class.
-            let source = match (look.class_of_user)(h.healer) {
+            // The event doesn't say what healed: infer it from the healer's class. A player healing
+            // themselves (a medic's regeneration) has no healer.
+            let healer = (h.healer != 0 && h.healer != h.patient).then_some(PlayerId(h.healer));
+            let source = match healer.and_then(|healer| (look.class_of_user)(healer.0)) {
                 Some(Class::Medic) => HealSource::Medigun,
                 Some(Class::Engineer) => HealSource::Dispenser,
                 _ => HealSource::Other,
             };
-            let healer = (h.healer != 0).then_some(PlayerId(h.healer));
             heal(tick, Some(PlayerId(h.patient)), healer, i64::from(h.amount), source)
         }
         // `healer` and `target` are entity indexes.

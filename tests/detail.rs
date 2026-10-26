@@ -24,6 +24,15 @@ fn heals_name_patient_and_amount() {
 }
 
 #[test]
+fn a_heal_of_oneself_is_no_medigun_or_dispenser() {
+    // A medic regenerates and an engineer's weapons can heal their wielder: the event names
+    // the player as their own healer.
+    let heals: Vec<_> = of!(EVENTS, Heal).collect();
+    assert!(heals.iter().all(|h| h.healer != Some(h.patient)), "a heal names the patient as healer");
+    assert!(heals.iter().any(|h| h.healer.is_none() && h.source == HealSource::Other));
+}
+
+#[test]
 fn every_blast_jump_starts_before_it_lands() {
     let jumps: Vec<_> = of!(EVENTS, BlastJump).collect();
     assert!(!jumps.is_empty(), "no blast jumps");
