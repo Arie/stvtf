@@ -14,14 +14,19 @@ use crate::output::{
 use bitbuffer::{BitRead, LittleEndian};
 use std::collections::HashMap;
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
-use tf_demo_parser::demo::gamevent::{GameEventType, GameEventValue, RawGameEvent};
+use tf_demo_parser::demo::gamevent::{GameEventEntry, GameEventType, GameEventValue, GameEventValueType, RawGameEvent};
 use tf_demo_parser::demo::message::usermessage::UserMessage;
 use tf_demo_parser::demo::parser::analyser::Class;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
 /// The field names of each game event tf-demo-parser has no type for, from the demo's own event
-/// list: their values come in that order.
-pub(crate) type RawNames = HashMap<String, Vec<String>>;
+/// list, as tf-demo-parser keeps them (hashed): their values come in that order.
+pub(crate) type RawNames = HashMap<String, Vec<u64>>;
+
+/// A field name's hash, as tf-demo-parser keeps it in an event's definition.
+pub(crate) fn field_hash(name: &str) -> u64 {
+    GameEventEntry::new(name, GameEventValueType::None).hash
+}
 
 /// Lookups the extractor owns: entity index to user id, a user's current class, the tick and the
 /// names of raw events' fields.
@@ -365,7 +370,7 @@ fn destruction_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
 fn raw_event(raw: &RawGameEvent, look: &Lookup<'_>) -> Option<Line> {
     let GameEventType::Unknown(name) = &raw.event_type else { return None };
     let names = look.raw_names.get(name)?;
-    let number = |field: &str| match raw.values.get(names.iter().position(|n| n == field)?)? {
+    let number = |field: &str| match raw.values.get(names.iter().position(|&n| n == field_hash(field))?)? {
         GameEventValue::Short(v) => Some(u32::from(*v)),
         GameEventValue::Long(v) => Some(*v),
         GameEventValue::Byte(v) => Some(u32::from(*v)),
@@ -570,7 +575,7 @@ mod tests {
 
     fn raw(names: &[&str], values: Vec<GameEventValue>) -> Option<Line> {
         let mut raw_names = RawNames::new();
-        raw_names.insert("killed_ball_carrier".into(), names.iter().map(ToString::to_string).collect());
+        raw_names.insert("killed_ball_carrier".into(), names.iter().map(|n| field_hash(n)).collect());
         let event = RawGameEvent { event_type: GameEventType::Unknown("killed_ball_carrier".into()), values };
         with_lookup(|ent| (ent < 10).then_some(PlayerId(100 + ent as u16)), &raw_names, |look| raw_event(&event, look))
     }

@@ -18,7 +18,7 @@ use std::sync::LazyLock;
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::data::game_state::{
-    Building, GameState, Player, PlayerCondition, PlayerState, Projectile, ProjectileType,
+    Building, GameState, Player, PlayerClassData, PlayerCondition, PlayerState, Projectile, ProjectileType,
 };
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::gamevent::GameEventType;
@@ -324,6 +324,14 @@ struct Pose {
 impl Pose {
     fn of(p: &Player) -> Self {
         Pose { pos: p.position, yaw: p.view_angle, pitch: p.pitch_angle }
+    }
+}
+
+/// A medic's charge percentage; 0 for anyone else.
+fn uber_charge(p: &Player) -> u8 {
+    match p.class_data {
+        PlayerClassData::Medic { charge, .. } => charge,
+        _ => 0,
     }
 }
 
@@ -708,7 +716,7 @@ impl Extractor {
                 continue;
             }
             let gun = self.medigun_owned_by(ent);
-            let now = Charge { charge: p.charge, releasing: gun.is_some_and(|m| m.releasing) };
+            let now = Charge { charge: uber_charge(p), releasing: gun.is_some_and(|m| m.releasing) };
             if let Some(&before) = self.ents.medic_charge.get(&ent) {
                 let charge = out::MedicCharge {
                     tick: self.server_tick,
@@ -1212,7 +1220,7 @@ impl Extractor {
             pos: last.map(|l| xyz(l.pos)),
             yaw: last.map(|l| round1(l.yaw)),
             pitch: last.map(|l| round1(l.pitch)),
-            uber: p.charge,
+            uber: uber_charge(p),
             ping: p.ping,
             conds: conds.map(conditions).unwrap_or_default(),
             ubered: conds.and_then(ubered),
@@ -1518,7 +1526,7 @@ impl Extractor {
         for e in &pe.entities {
             let id = u32::from(e.entity_index);
             match e.update_type {
-                UpdateType::Enter | UpdateType::Preserve => frame.insert(id),
+                UpdateType::Enter | UpdateType::Delta => frame.insert(id),
                 UpdateType::Leave | UpdateType::Delete => frame.remove(&id),
             };
         }
@@ -1634,7 +1642,7 @@ impl Extractor {
             if class.is_some_and(|c| {
                 c.name.starts_with("CTFProjectile_") || c.name.as_str() == "CTFGrenadePipebombProjectile"
             }) {
-                self.gs.handle_projectile_entity(e, state);
+                self.gs.handle_entity(e, state);
             }
         }
         let Some(class) = class else { return };
@@ -2099,7 +2107,7 @@ impl MessageHandler for Extractor {
                     .iter()
                     .filter_map(|d| match &d.event_type {
                         GameEventType::Unknown(name) => {
-                            Some((name.clone(), d.entries.iter().map(|e| e.name.clone()).collect()))
+                            Some((name.clone(), d.entries.iter().map(|e| e.hash).collect()))
                         }
                         _ => None,
                     })
@@ -2351,7 +2359,7 @@ mod frame_tests {
     fn deletes_and_deltas_from_the_previous_frame() {
         let mut x = Extractor::default();
         frame(&mut x, 100, None, vec![update(10, UpdateType::Enter), update(11, UpdateType::Enter)]);
-        frame(&mut x, 101, Some(100), vec![update(10, UpdateType::Preserve)]);
+        frame(&mut x, 101, Some(100), vec![update(10, UpdateType::Delta)]);
         frame(&mut x, 102, Some(101), vec![update(11, UpdateType::Delete)]);
         assert_eq!(shown(&x), [10]);
         frame(&mut x, 103, Some(102), vec![]);
@@ -2365,7 +2373,7 @@ mod frame_tests {
         // A robot destruction core and a player destruction bottle, dropped and picked up since 100.
         x.modes.entity("CBonusPack", 12, std::iter::empty());
         x.ents.flags.insert(13, Flag::default());
-        frame(&mut x, 101, Some(100), vec![update(12, UpdateType::Preserve), update(13, UpdateType::Preserve)]);
+        frame(&mut x, 101, Some(100), vec![update(12, UpdateType::Delta), update(13, UpdateType::Delta)]);
         assert_eq!(x.modes.objectives(&|_| None).len(), 1);
         frame(&mut x, 102, Some(100), vec![]);
         assert!(x.modes.objectives(&|_| None).is_empty() && x.ents.flags.is_empty());
@@ -2406,7 +2414,8 @@ mod medic_tests {
         p.entity = EntityId::from(5u32);
         p.class = Class::Medic;
         p.state = PlayerState::Alive;
-        p.charge = charge;
+        p.class_data = PlayerClassData::default_for_class(Class::Medic);
+        set_charge(&mut p, charge);
         p.info = Some(UserInfo {
             classes: tf_demo_parser::demo::parser::analyser::ClassList::default(),
             name: "medic".into(),
@@ -2420,8 +2429,14 @@ mod medic_tests {
         x
     }
 
+    fn set_charge(p: &mut Player, to: u8) {
+        if let PlayerClassData::Medic { charge, .. } = &mut p.class_data {
+            *charge = to;
+        }
+    }
+
     fn step(x: &mut Extractor, charge: u8, releasing: bool) -> Vec<Line> {
-        x.gs.state.players[0].charge = charge;
+        set_charge(&mut x.gs.state.players[0], charge);
         x.ents.mediguns.get_mut(&9).unwrap().releasing = releasing;
         x.medic_changes();
         x.drain()
