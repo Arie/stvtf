@@ -71,6 +71,21 @@ pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// A `-3 SNAP` datagram holding `datagram`.
+pub fn compress_datagram(datagram: &[u8]) -> Vec<u8> {
+    let mut out = (-3i32).to_le_bytes().to_vec();
+    out.extend_from_slice(&snappy_transfer(datagram));
+    out
+}
+
+/// A compressed reliable transfer: Snappy's magic and the block.
+pub fn snappy_transfer(data: &[u8]) -> Vec<u8> {
+    let mut out = SNAPPY_MAGIC.to_vec();
+    // Compressing a slice into a Vec only fails for inputs over 4 GiB.
+    out.extend_from_slice(&snap::raw::Encoder::new().compress_vec(data).expect("compressible size"));
+    out
+}
+
 pub fn inflate_transfer(payload: &[u8]) -> Result<Vec<u8>> {
     match payload.get(..SNAPPY_MAGIC.len()) {
         Some(m) if m == SNAPPY_MAGIC => snappy(&payload[SNAPPY_MAGIC.len()..]),

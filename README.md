@@ -11,6 +11,7 @@ stvtf connect HOST:PORT [--password tv] [--hz 20] [--seconds N] [--record FILE.c
                 [--name stv.tf] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
 stvtf replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
 stvtf demo    FILE.dem [--hz 20]
+stvtf relay   HOST:PORT|FILE.cap [--listen 0.0.0.0:27020] (see Relay below)
 ```
 
 For example, `STVTF_PASSWORD=tv stvtf connect 1.2.3.4:27020 > match.jsonl`.
@@ -269,6 +270,39 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
 - `src/decode`: [tf-demo-parser](https://crates.io/crates/tf-demo-parser) parses each message
   stream with the same-build send tables; `extract.rs` turns its game state into the JSON above.
 
+
+## Relay (proof of concept)
+
+```
+stvtf relay HOST:PORT [--listen 0.0.0.0:27020] [--password tv] [--tables …] [--crc …] [--build N]
+stvtf relay FILE.cap  [--listen 0.0.0.0:27020] [--speed 1]
+```
+
+`relay` takes one SourceTV slot and passes it on to clients that connect to `--listen`, as
+`tv_relay` does. Nothing is re-encoded: clients get the server's own message bits.
+
+- The reliable messages of the server's signon are logged and replayed to each client. Each
+  `net_SignonState` holds the rest back until the client echoes it, as a server does. After
+  signon, only string table updates join the log.
+- Entities are deltas from the frame the relay last acked, so a client can only follow from a
+  full update onward. The relay keeps the datagrams since the last full update (up to 64) and
+  sends them to a client that joins in that window. Otherwise it asks the server for a full
+  update (tick ack -1) and passes it on. From then on, each datagram's unreliable part goes to
+  the client unchanged.
+- A map change restarts the signon on the relay's connection, and every client signs on again.
+- A client in the game gets exactly one packet per server packet, as from the STV itself. Reliable
+  data rides along, and only a server silent for 100 ms gets a keepalive in between. Signon
+  transfers go out on all eight subchannels at once.
+
+`STVTF_DEBUG=relay` traces each client's handshake packets, its signon timing, the transfers it
+is sent, and every 5 s how many of its packets carried server data.
+
+Given a capture, it replays the capture's first session instead of connecting: it starts when
+the first client connects and pauses while a client signs on. `tests/relay.rs` connects stvtf
+to it and gets the same output as `stvtf replay`. A TF2 client watches through it as through the STV itself: `net_graph 5` shows the same
+rates (66/s on a 66-tick server) and no packets without entities.
+It has no client password, and a client that joins outside the 64-datagram window of a capture
+gets no entities (a capture cannot be asked for a full update).
 
 ## Known limits
 

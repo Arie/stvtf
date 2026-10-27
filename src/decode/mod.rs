@@ -77,7 +77,20 @@ pub(crate) struct Lifecycle {
     pub lost_frame: bool,
     /// Entities came as a full update, from no earlier frame.
     pub full_update: bool,
+    /// Where each message of the stream is, in order. After a decode error the rest of the
+    /// stream is one span of type [`UNPARSED`].
+    pub spans: Vec<Span>,
 }
+
+/// One message in a stream: its type id and its bits.
+#[derive(Debug, Clone)]
+pub(crate) struct Span {
+    pub id: u8,
+    pub bits: std::ops::Range<usize>,
+}
+
+/// The type of a span that could not be decoded.
+pub(crate) const UNPARSED: u8 = u8::MAX;
 
 pub(crate) struct Decoder<'a> {
     arena: &'a Arena<u8>,
@@ -160,10 +173,14 @@ impl<'a> Decoder<'a> {
                     Message::skip_type(t, &mut stream, state).map(|()| None)
                 }
             });
+            if parsed.is_ok() {
+                life.spans.push(Span { id, bits: start..stream.pos() });
+            }
             match parsed {
                 Ok(Some(m)) => messages.push(m),
                 Ok(None) => {}
                 Err(e) => {
+                    life.spans.push(Span { id: UNPARSED, bits: start..nbits });
                     if extract::debug("errors") {
                         eprintln!("decode error at bit {start} of {nbits}, message id {id}: {e}");
                     }

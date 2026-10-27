@@ -27,6 +27,22 @@ pub enum Signon {
     ChangeLevel = 7,
 }
 
+impl Signon {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        Some(match v {
+            0 => Signon::None,
+            1 => Signon::Challenge,
+            2 => Signon::Connected,
+            3 => Signon::New,
+            4 => Signon::PreSpawn,
+            5 => Signon::Spawn,
+            6 => Signon::Full,
+            7 => Signon::ChangeLevel,
+            _ => return None,
+        })
+    }
+}
+
 const USERINFO: &[(&str, &str)] = &[
     ("cl_team", "default"),
     ("cl_class", "default"),

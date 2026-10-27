@@ -77,9 +77,30 @@ impl<'a> BitReader<'a> {
         Ok(self.read_bits(8)? as u8)
     }
 
-    #[cfg(test)]
     pub fn read_i32(&mut self) -> Result<i32> {
         Ok(self.read_bits(32)? as i32)
+    }
+
+    pub fn skip(&mut self, n: usize) -> Result<()> {
+        if n > self.bits_left() {
+            bail!("skip({n}) past end");
+        }
+        self.pos += n;
+        Ok(())
+    }
+
+    /// The bits in `range`, repacked to start at bit 0.
+    pub fn slice(data: &'a [u8], range: std::ops::Range<usize>) -> BitBuf {
+        let mut r = BitReader::at(data, range.start);
+        let mut w = BitWriter::new();
+        let mut left = range.len();
+        while left > 0 {
+            let n = left.min(32);
+            // In range: the caller's span lies within the stream.
+            w.write_bits(r.read_bits(n).unwrap_or(0), n);
+            left -= n;
+        }
+        w.finish()
     }
 
     pub fn read_varint32(&mut self) -> Result<u32> {
@@ -209,6 +230,10 @@ impl BitWriter {
                 return;
             }
         }
+    }
+
+    pub fn nbits(&self) -> usize {
+        self.nbits
     }
 
     pub fn into_bytes(self) -> Vec<u8> {

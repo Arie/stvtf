@@ -158,6 +158,16 @@ pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
 /// Runs until `stop`, the duration, or a rejection that reconnecting cannot fix,
 /// passing every event and snapshot to `emit`. Blocks the calling thread.
 pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
+    watch_with(w, stop, None, emit)
+}
+
+/// [`watch`], passing the server's traffic to a tap as well.
+pub(crate) fn watch_with(
+    w: &Watch,
+    stop: &AtomicBool,
+    tap: Option<&dyn session::Tap>,
+    emit: &mut dyn FnMut(Line),
+) -> Result<(), WatchError> {
     let mut server = resolve(&w.target)?;
     // A2S_INFO is unauthenticated (and taken from any address, see handshake), so a
     // build we cannot use falls back to the current one: a forged reply must not end the
@@ -194,7 +204,7 @@ pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result
             server_build: server_build.clone(),
         }));
         let streamed = match handshake::connect(server, &opt.name, &w.password, &build, CONNECT_TIMEOUT) {
-            Ok(conn) => match session::run(&conn, &tables, &opt, recorder.as_mut(), stop, deadline, emit)? {
+            Ok(conn) => match session::run(&conn, &tables, &opt, recorder.as_mut(), stop, deadline, tap, emit)? {
                 End::Stopped => return Ok(()),
                 End::Broken(b) => {
                     if let Some(kind) = b.fatal {

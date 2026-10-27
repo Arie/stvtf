@@ -11,6 +11,7 @@ pub mod capture;
 pub mod decode;
 mod net;
 pub mod output;
+pub mod relay;
 mod session;
 pub mod watch;
 

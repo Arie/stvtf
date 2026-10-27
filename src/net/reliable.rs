@@ -15,15 +15,15 @@ use anyhow::{Result, bail};
 /// The netchannel's reliable subchannels, numbered in 3 bits.
 pub const SUBCHANNEL_BITS: usize = 3;
 pub const SUBCHANNELS: u8 = 1 << SUBCHANNEL_BITS;
-const FRAGMENT_SIZE: usize = 256;
+pub const FRAGMENT_SIZE: usize = 256;
 /// A multi-fragment block: the number of its first fragment and how many it carries.
-const START_FRAGMENT_BITS: usize = 18;
-const FRAGMENT_COUNT_BITS: usize = 3;
+pub const START_FRAGMENT_BITS: usize = 18;
+pub const FRAGMENT_COUNT_BITS: usize = 3;
 /// A file transfer's id and file name (`MAX_OSPATH`), skipped.
 const TRANSFER_ID_BITS: usize = 32;
 const MAX_FILE_NAME: usize = 260;
 /// A transfer's sizes (`MAX_FILE_SIZE_BITS`).
-const SIZE_BITS: usize = 26;
+pub const SIZE_BITS: usize = 26;
 const MAX_TRANSFER: usize = 4 << 20;
 /// Index of the message stream in `Reassembler::streams` (1 is the file stream).
 const STREAM_MESSAGES: usize = 0;

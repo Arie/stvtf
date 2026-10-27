@@ -17,10 +17,15 @@ stvtf: headless TF2 SourceTV spectator emitting top-down overview data as JSON l
                   [--name stv.tf] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
   stvtf replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
   stvtf demo    FILE.dem [--hz 20]
+  stvtf relay   HOST:PORT [--listen 0.0.0.0:27020] [--password tv] [--name stv.tf]
+                  [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
+  stvtf relay   FILE.cap [--listen 0.0.0.0:27020] [--speed 1] [--tables SAME_BUILD.dem] [--build N]
 
 HOST:PORT is the SourceTV port (tv_port); given the game port, it tries game port + 5.
 The password can also come from the STVTF_PASSWORD environment variable, which
 other local users cannot read the way they can read command-line arguments.
+`relay` passes a SourceTV server (or a capture, started when the first client connects) on
+to TF2 clients that connect to --listen, as tv_relay does. It prints the upstream's status lines.
 Tables and CRC of the build reported by the server are built in for known builds;
 pass --tables (any demo recorded on that build) and --crc for others.";
 
@@ -40,6 +45,7 @@ fn allowed_flags(command: &str) -> Option<&'static [&'static str]> {
         "connect" => Some(&["password", "hz", "seconds", "record", "name", "tables", "crc", "build"]),
         "replay" => Some(&["hz", "tables", "build"]),
         "demo" => Some(&["hz"]),
+        "relay" => Some(&["listen", "password", "name", "tables", "crc", "build", "speed"]),
         _ => None,
     }
 }
@@ -98,7 +104,7 @@ fn main() -> Result<()> {
     };
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
-    let live = args.command == "connect";
+    let live = matches!(args.command.as_str(), "connect" | "relay");
     let mut emit = |line: Line| {
         if STOP.load(Ordering::Relaxed) && !live {
             return;
@@ -129,6 +135,11 @@ fn main() -> Result<()> {
             let build = args.get("build").unwrap_or(stvtf::CURRENT_BUILD);
             capture::replay(&records, &args.tables(build)?, &opt, &mut emit)?;
         }
+        "relay" => relay(&args, &mut |line| {
+            if matches!(line, Line::Status(_)) {
+                emit(line);
+            }
+        })?,
         _ => connect(&args, &mut emit)?,
     }
     // Ignore a final flush error: it is the same closed pipe already handled above.
@@ -136,7 +147,34 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn relay(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
+    let relay = stvtf::relay::Relay::bind(args.get("listen").unwrap_or("0.0.0.0:27020"))?;
+    eprintln!("relay: listening on {}", relay.local_addr()?);
+    watch::stop_on_ctrl_c(&STOP)?;
+    if std::path::Path::new(&args.target).is_file() {
+        let bytes = std::fs::read(&args.target).with_context(|| format!("reading {}", args.target))?;
+        let records = capture::read(&bytes)?;
+        let speed: f64 = args.get("speed").unwrap_or("1").parse().context("--speed: not a number")?;
+        if !speed.is_finite() || speed <= 0.0 {
+            bail!("--speed must be over 0");
+        }
+        let build = args.get("build").unwrap_or(stvtf::CURRENT_BUILD);
+        relay.replay(&records, &args.tables(build)?, speed, &STOP, emit)?;
+    } else {
+        relay.watch(&watch_args(args)?, &STOP, emit)?;
+    }
+    Ok(())
+}
+
 fn connect(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
+    let w = watch_args(args)?;
+    watch::stop_on_ctrl_c(&STOP)?;
+    watch::watch(&w, &STOP, emit)?;
+    Ok(())
+}
+
+/// What to watch, from the flags `connect` and `relay` share.
+fn watch_args(args: &Args) -> Result<Watch> {
     let password = match args.get("password") {
         Some(p) => p.to_string(),
         None => std::env::var("STVTF_PASSWORD").unwrap_or_default(),
@@ -145,7 +183,7 @@ fn connect(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
     if let Some(n) = args.get("name") {
         w.name = n.to_string();
     }
-    w.snapshot_hz = args.hz()?;
+    w.snapshot_hz = if args.command == "relay" { 0.0 } else { args.hz()? };
     w.tables = args.get("tables").map(PathBuf::from);
     w.crc = args
         .get("crc")
@@ -160,9 +198,7 @@ fn connect(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
         })
         .transpose()?;
     w.record = args.get("record").map(PathBuf::from);
-    watch::stop_on_ctrl_c(&STOP)?;
-    watch::watch(&w, &STOP, emit)?;
-    Ok(())
+    Ok(w)
 }
 
 #[cfg(test)]

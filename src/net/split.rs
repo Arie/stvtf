@@ -78,6 +78,30 @@ impl SplitReassembler {
     }
 }
 
+/// Payload bytes in each part of a datagram we split (`nSplitSizeMinusHeader`), within the
+/// 564 to 1248 the engine accepts.
+pub const SPLIT_SIZE: usize = 1200;
+
+/// Cuts a datagram too large for one packet into `-2` parts of group `group`.
+pub fn split(datagram: &[u8], group: i32) -> Vec<Vec<u8>> {
+    let chunks: Vec<&[u8]> = datagram.chunks(SPLIT_SIZE).collect();
+    let count = u8::try_from(chunks.len()).expect("datagrams stay under 128 parts");
+    chunks
+        .iter()
+        .enumerate()
+        .map(|(n, chunk)| {
+            let mut d = Vec::with_capacity(HEADER_LEN + chunk.len());
+            d.extend_from_slice(&(-2i32).to_le_bytes());
+            d.extend_from_slice(&group.to_le_bytes());
+            d.push(count);
+            d.push(n as u8);
+            d.extend_from_slice(&(SPLIT_SIZE as u16).to_le_bytes());
+            d.extend_from_slice(chunk);
+            d
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,6 +126,18 @@ mod tests {
         assert!(r.feed(&part(1, 3, 0, 4, b"abcd"), now).is_none(), "duplicate is ignored");
         assert_eq!(r.feed(&part(1, 3, 1, 4, b"efgh"), now).unwrap(), b"abcdefghxy");
         assert_eq!(r.feed(&part(2, 2, 1, 4, b"B"), now).unwrap(), b"AAAAB");
+    }
+
+    #[test]
+    fn split_parts_join_again() {
+        let data: Vec<u8> = (0..3000).map(|i| (i % 251) as u8).collect();
+        let parts = split(&data, 4);
+        assert_eq!(parts.len(), 3);
+        let mut r = SplitReassembler::default();
+        let now = Instant::now();
+        assert!(r.feed(&parts[2], now).is_none());
+        assert!(r.feed(&parts[0], now).is_none());
+        assert_eq!(r.feed(&parts[1], now).unwrap(), data);
     }
 
     #[test]

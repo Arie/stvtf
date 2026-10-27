@@ -14,6 +14,8 @@ use std::time::Instant;
 #[derive(Debug)]
 pub struct MsgStream {
     pub bits: BitBuf,
+    /// A completed reliable transfer, not the unreliable tail.
+    pub reliable: bool,
 }
 
 #[derive(Debug)]
@@ -114,7 +116,7 @@ impl Receiver {
                 reliable_ok = true;
                 subchannel = Some(region.subchannel);
                 for payload in region.completed {
-                    streams.push(MsgStream { bits: BitBuf::from_bytes(payload) });
+                    streams.push(MsgStream { bits: BitBuf::from_bytes(payload), reliable: true });
                 }
                 tail = Some(region.end_bit);
             } else {
@@ -126,7 +128,7 @@ impl Receiver {
         if let Some(bit) = tail
             && bit < data.len() * 8
         {
-            streams.push(MsgStream { bits: BitReader::at(data, bit).read_remaining() });
+            streams.push(MsgStream { bits: BitReader::at(data, bit).read_remaining(), reliable: false });
         }
         Some(Received { header, subchannel, reliable_ok, streams })
     }

@@ -17,7 +17,7 @@ use crate::net::bits::BitBuf;
 use crate::net::handshake::Connection;
 use crate::net::messages::{self, Signon};
 use crate::net::netchan::{self, OutHeader};
-use crate::net::receiver::Receiver;
+use crate::net::receiver::{MsgStream, Receiver};
 use crate::net::reliable;
 use crate::output::{Line, Status};
 use anyhow::Result;
@@ -120,6 +120,16 @@ pub enum End {
     Stopped,
 }
 
+/// Sees the server's traffic as a session decodes it, to pass it on (see `relay`).
+pub(crate) trait Tap {
+    /// One message stream and what decoding it found, in the order the server sent them.
+    fn stream(&self, bits: &BitBuf, reliable: bool, life: &Lifecycle);
+    /// The streams of one datagram have all been seen.
+    fn flush(&self);
+    /// Tick acks ask for a full update while this holds.
+    fn want_full_update(&self) -> bool;
+}
+
 struct Session<'o> {
     /// None when replaying a capture: everything runs, nothing is sent.
     sock: Option<&'o UdpSocket>,
@@ -144,7 +154,8 @@ struct Session<'o> {
     broke: Option<(String, Option<Fatal>)>,
     /// Set when the server restarts signon on this connection (a map change): the
     /// streams from that point on are replayed into a fresh decoder for the new map.
-    remap: Option<Vec<BitBuf>>,
+    remap: Option<Vec<MsgStream>>,
+    tap: Option<&'o dyn Tap>,
 }
 
 impl<'o> Session<'o> {
@@ -170,13 +181,15 @@ impl<'o> Session<'o> {
             last_tick_ack: Instant::now(),
             broke: None,
             remap: None,
+            tap: None,
         }
     }
 
     /// The tick to ack: the latest seen, so the server deltas from it; -1 asks for a full update,
     /// as a game client does when its entities missed a frame.
     fn ack_tick(&self) -> i32 {
-        if self.want_full_update { -1 } else { self.server_tick }
+        let tap_wants = self.tap.is_some_and(Tap::want_full_update);
+        if self.want_full_update || tap_wants { -1 } else { self.server_tick }
     }
 
     /// Records why the session ends; the first reason wins.
@@ -319,14 +332,16 @@ impl<'o> Session<'o> {
         }
         for stream in pkt.streams {
             if let Some(rest) = &mut self.remap {
-                rest.push(stream.bits);
+                rest.push(stream);
                 continue;
             }
-            let life = dec.feed(stream.bits.bytes(), stream.bits.nbits());
-            self.lifecycle(life, emit);
+            self.feed(&stream, dec, emit);
             if let Some(rest) = &mut self.remap {
-                rest.push(stream.bits);
+                rest.push(stream);
             }
+        }
+        if let Some(tap) = self.tap {
+            tap.flush();
         }
         for line in dec.take_output() {
             emit(line);
@@ -360,17 +375,27 @@ impl<'o> Session<'o> {
             self.send(None, Some(&body));
         }
     }
+    fn feed(&mut self, stream: &MsgStream, dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Line)) {
+        let life = dec.feed(stream.bits.bytes(), stream.bits.nbits());
+        if let Some(tap) = self.tap {
+            tap.stream(&stream.bits, stream.reliable, &life);
+        }
+        self.lifecycle(life, emit);
+    }
+
     /// Feeds the streams held since signon restarted into the new map's decoder. False when
     /// signon restarted once more: the rest is held again, for the map after this one.
-    fn replay_streams(&mut self, streams: Vec<BitBuf>, dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Line)) -> bool {
+    fn replay_streams(&mut self, streams: Vec<MsgStream>, dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Line)) -> bool {
         let mut rest = streams.into_iter();
-        for bits in rest.by_ref() {
-            let life = dec.feed(bits.bytes(), bits.nbits());
-            self.lifecycle(life, emit);
+        for stream in rest.by_ref() {
+            self.feed(&stream, dec, emit);
             if let Some(next_map) = &mut self.remap {
-                next_map.push(bits);
+                next_map.push(stream);
                 break;
             }
+        }
+        if let Some(tap) = self.tap {
+            tap.flush();
         }
         for line in dec.take_output() {
             emit(line);
@@ -475,6 +500,7 @@ fn finish(s: &Session<'_>, outcome: &Outcome, emit: &mut dyn FnMut(Line)) {
     }));
 }
 
+#[allow(clippy::too_many_arguments, reason = "internal plumbing")]
 pub fn run(
     conn: &Connection,
     tables: &Tables,
@@ -482,9 +508,11 @@ pub fn run(
     mut recorder: Option<&mut Recorder>,
     stop: &AtomicBool,
     deadline: Option<Instant>,
+    tap: Option<&dyn Tap>,
     emit: &mut dyn FnMut(Line),
 ) -> Result<End> {
     let mut s = Session::new(Some(&conn.sock), conn.challenge, opt);
+    s.tap = tap;
     if let Some(r) = recorder.as_deref_mut() {
         r.session(conn.challenge)?;
         if let Some(p) = &conn.pending {
@@ -540,6 +568,57 @@ pub fn replay(
     finish(&s, &outcome, emit);
     Ok(())
 }
+
+/// Replays one recorded session at the pace it was recorded, `speed` times as fast, into a
+/// tap. `hold` pauses the clock while it holds (a relay client still signing on).
+#[allow(clippy::too_many_arguments, reason = "internal plumbing")]
+pub(crate) fn replay_paced(
+    challenge: u32,
+    records: &[(u64, &[u8])],
+    tables: &Tables,
+    opt: &Options,
+    speed: f64,
+    tap: &dyn Tap,
+    hold: &dyn Fn() -> bool,
+    stop: &AtomicBool,
+    emit: &mut dyn FnMut(Line),
+) -> Result<()> {
+    let mut s = Session::new(None, challenge, opt);
+    s.tap = Some(tap);
+    let mut it = records.iter();
+    let first = records.first().map_or(0, |r| r.0);
+    let mut start = Instant::now();
+    let mut next = |buf: &mut [u8]| -> Result<Next> {
+        let Some((t_us, d)) = it.next() else { return Ok(Next::Stop) };
+        let due = Duration::from_micros(t_us - first).div_f64(speed);
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(Next::Stop);
+            }
+            if hold() {
+                let paused = Instant::now();
+                std::thread::sleep(PACE_POLL);
+                start += paused.elapsed();
+                continue;
+            }
+            let now = Instant::now();
+            let at = start + due;
+            if now >= at {
+                break;
+            }
+            std::thread::sleep((at - now).min(PACE_POLL));
+        }
+        let n = d.len().min(buf.len());
+        buf[..n].copy_from_slice(&d[..n]);
+        Ok(Next::Datagram(n))
+    };
+    let outcome = drive(&mut s, tables, None, &mut next, emit)?;
+    finish(&s, &outcome, emit);
+    Ok(())
+}
+
+/// How often a paced replay checks its clock.
+const PACE_POLL: Duration = Duration::from_millis(2);
 
 #[cfg(test)]
 mod tests {

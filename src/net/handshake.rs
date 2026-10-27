@@ -11,7 +11,7 @@ use std::fmt;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-const PROTOCOL_VERSION: i32 = 24;
+pub const PROTOCOL_VERSION: i32 = 24;
 const AUTH_HASHEDCDKEY: u32 = 2;
 const AUTH_STEAM: u32 = 3;
 const MAGIC_VERSION: u32 = 0x5A4F_4933;
@@ -283,9 +283,124 @@ fn parse_a2s_version(data: &[u8]) -> Result<String> {
     Ok(String::from_utf8_lossy(&tail[..end]).into_owned())
 }
 
+/// A connectionless packet a client sends a server.
+#[derive(Debug, PartialEq)]
+pub enum FromClient {
+    GetChallenge { nonce: u32 },
+    Connect { protocol: i32, challenge: u32, nonce: u32, name: String, password: String },
+    Info,
+}
+
+/// Reads one NUL-terminated string at `*pos`, moving past it.
+fn read_cstr(data: &[u8], pos: &mut usize) -> Option<String> {
+    let rest = data.get(*pos..)?;
+    let end = rest.iter().position(|&b| b == 0)?;
+    *pos += end + 1;
+    Some(String::from_utf8_lossy(&rest[..end]).into_owned())
+}
+
+/// Parses what a client sends a server out of band; None for anything else.
+pub fn parse_from_client(data: &[u8]) -> Option<FromClient> {
+    if data.len() <= OOB_KIND || data[..OOB_KIND] != OOB_PREFIX {
+        return None;
+    }
+    let word = |o: usize| data.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    match data[OOB_KIND] {
+        C2S_GETCHALLENGE => Some(FromClient::GetChallenge { nonce: word(OOB_KIND + 1)? }),
+        C2S_CONNECT => {
+            // Protocol, auth protocol, our challenge, the client's nonce, then name and password.
+            let mut pos = OOB_KIND + 17;
+            Some(FromClient::Connect {
+                protocol: word(OOB_KIND + 1)? as i32,
+                challenge: word(OOB_KIND + 9)?,
+                nonce: word(OOB_KIND + 13)?,
+                name: read_cstr(data, &mut pos)?,
+                password: read_cstr(data, &mut pos)?,
+            })
+        }
+        A2S_INFO => Some(FromClient::Info),
+        _ => None,
+    }
+}
+
+/// The 'A' reply to a getchallenge, offering the auth protocol `SourceTV` takes.
+pub fn build_challenge(challenge: u32, nonce: u32) -> Vec<u8> {
+    let mut v = oob(S2C_CHALLENGE);
+    v.extend_from_slice(&MAGIC_VERSION.to_le_bytes());
+    v.extend_from_slice(&challenge.to_le_bytes());
+    v.extend_from_slice(&nonce.to_le_bytes());
+    v.extend_from_slice(&AUTH_HASHEDCDKEY.to_le_bytes());
+    cstr(&mut v, "000000");
+    v
+}
+
+/// The 'B' accept of a connect; the client checks it echoes its nonce.
+pub fn build_accept(nonce: u32) -> Vec<u8> {
+    let mut v = oob(S2C_CONNECTION);
+    v.extend_from_slice(&nonce.to_le_bytes());
+    cstr(&mut v, "0000000000");
+    v
+}
+
+/// A '9' refusal.
+pub fn build_reject(nonce: u32, reason: &str) -> Vec<u8> {
+    let mut v = oob(S2C_CONNREJECT);
+    v.extend_from_slice(&nonce.to_le_bytes());
+    cstr(&mut v, reason);
+    v
+}
+
+/// What an `A2S_INFO` reply says about a server.
+#[derive(Debug)]
+pub struct Info<'a> {
+    pub name: &'a str,
+    pub map: &'a str,
+    pub players: u8,
+    pub max_players: u8,
+    pub build: &'a str,
+}
+
+/// The `A2S_INFO` reply of a `SourceTV` server ('p' for proxy).
+pub fn build_info(info: &Info<'_>) -> Vec<u8> {
+    const A2S_PROTOCOL: u8 = 17;
+    const TF2_APP_ID: u16 = 440;
+    let mut v = oob(S2A_INFO);
+    v.push(A2S_PROTOCOL);
+    for s in [info.name, info.map, "tf", "Team Fortress"] {
+        cstr(&mut v, s);
+    }
+    v.extend_from_slice(&TF2_APP_ID.to_le_bytes());
+    v.extend_from_slice(&[info.players, info.max_players, 0, b'p', b'l', 0, 0]);
+    cstr(&mut v, info.build);
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_side_handshake_meets_the_client() {
+        let nonce = 0x1234_5678;
+        assert_eq!(parse_from_client(&build_getchallenge(nonce)), Some(FromClient::GetChallenge { nonce }));
+        let ch = parse_challenge(&build_challenge(99, nonce), nonce).unwrap().unwrap();
+        assert_eq!(ch, Challenge { challenge: 99, auth_proto: AUTH_HASHEDCDKEY });
+        let connect = parse_from_client(&build_connect(nonce, 99, "me", "pw", "1")).unwrap();
+        assert_eq!(
+            connect,
+            FromClient::Connect {
+                protocol: PROTOCOL_VERSION,
+                challenge: 99,
+                nonce,
+                name: "me".into(),
+                password: "pw".into()
+            }
+        );
+        let err = parse_challenge(&build_reject(nonce, "Bad password"), nonce).unwrap_err();
+        assert!(err.is::<Rejected>());
+        let info = Info { name: "relay", map: "cp_badlands", players: 1, max_players: 8, build: "11138802" };
+        assert_eq!(parse_a2s_version(&build_info(&info)).unwrap(), "11138802");
+    }
 
     #[test]
     fn connect_packet_layout() {
