@@ -51,6 +51,8 @@ fn statuses_are_tagged_by_state() {
     assert_eq!(value(&Line::Status(Status::MapChange)), json!({"type": "status", "state": "map_change"}));
     assert_eq!(value(&Line::Status(Status::Prespawn)), json!({"type": "status", "state": "prespawn"}));
     assert_eq!(Line::Status(Status::New).tick(), None);
+    let relay = Line::Status(Status::Relay { listen: "0.0.0.0:27121".into() });
+    assert_eq!(value(&relay), json!({"type": "status", "state": "relay", "listen": "0.0.0.0:27121"}));
 }
 
 #[expect(clippy::option_option, reason = "the field's own type")]

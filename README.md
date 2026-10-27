@@ -14,6 +14,8 @@ stvtf demo    FILE.dem [--hz 20]
 stvtf relay   HOST:PORT|FILE.cap [--listen 0.0.0.0:27020] (see Relay below)
 ```
 
+Add `--relay 0.0.0.0:27121` to `connect` to let TF2 clients watch through it (see Relay).
+
 For example, `STVTF_PASSWORD=tv stvtf connect 1.2.3.4:27020 > match.jsonl`.
 
 - `HOST:PORT` is the SourceTV port (`tv_port`). Given the game port, it tries game port + 5.
@@ -79,6 +81,7 @@ lower-case names (`scout` … `engineer`, `unknown`).
 {"type":"status","state":"disconnected","reason":"...","decode_errors":0,"packets":11935,"lost":0}
 {"type":"status","state":"connect_failed","reason":"connect refused: #GameUI_ServerRejectServerFull"}
 {"type":"status","state":"gave_up","reason":"..."}       // not from the CLI: a host of the library reporting watch's error
+{"type":"status","state":"relay","listen":"0.0.0.0:27121"} // with --relay: clients can watch through this address
 ```
 
 ### Map
@@ -271,15 +274,31 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
   stream with the same-build send tables; `extract.rs` turns its game state into the JSON above.
 
 
-## Relay (proof of concept)
+## Relay
 
 ```
-stvtf relay HOST:PORT [--listen 0.0.0.0:27020] [--password tv] [--tables …] [--crc …] [--build N]
-stvtf relay FILE.cap  [--listen 0.0.0.0:27020] [--speed 1]
+stvtf connect HOST:PORT … --relay 0.0.0.0:27121 [--relay-password PW] [--relay-slots 10]
+stvtf relay   HOST:PORT|FILE.cap [--listen 0.0.0.0:27020] [--relay-password PW] [--relay-slots 10]
+              [--password tv] [--name …] [--tables …] [--crc …] [--build N] [--speed 1]
 ```
 
-`relay` takes one SourceTV slot and passes it on to clients that connect to `--listen`, as
-`tv_relay` does. Nothing is re-encoded: clients get the server's own message bits.
+`--relay` passes the server on to TF2 clients (or other stvtf watchers) that connect to that
+address with `connect HOST:PORT; password PW`, as `tv_relay` does. It uses the watch's own
+connection, so it costs the server no slot. In the library it is `Watch::relay`, a
+`RelayConfig`. `relay` does only the relaying and prints only status lines.
+
+- **Password**: `--relay-password`, else `STVTF_RELAY_PASSWORD`, else a random one printed to
+  stderr. An empty password lets anyone in. A wrong one is refused as the server refuses it.
+- **Slots**: 10 clients at once by default (`--relay-slots`, 1 to 255). Each client gets what the
+  server sends us, on the order of 20 to 40 KB/s for a 6v6.
+- **Status line**: once the relay listens, `{"type":"status","state":"relay","listen":"0.0.0.0:27121"}`.
+  The address is useful with port 0, which picks a free port.
+- **No reflection**: a connectionless reply is never larger than the query, until the address
+  has proved itself by echoing a challenge. `A2S_INFO` first gets a challenge, as on current
+  srcds, and a connect with a wrong challenge gets no reply at all. The challenges are derived
+  from the address with a secret key, so nothing is stored before a client connects.
+
+How it works (nothing is re-encoded: clients get the server's own message bits):
 
 - The reliable messages of the server's signon are logged and replayed to each client. Each
   `net_SignonState` holds the rest back until the client echoes it, as a server does. After
@@ -287,22 +306,21 @@ stvtf relay FILE.cap  [--listen 0.0.0.0:27020] [--speed 1]
 - Entities are deltas from the frame the relay last acked, so a client can only follow from a
   full update onward. The relay keeps the datagrams since the last full update (up to 64) and
   sends them to a client that joins in that window. Otherwise it asks the server for a full
-  update (tick ack -1) and passes it on. From then on, each datagram's unreliable part goes to
-  the client unchanged.
+  update (tick ack -1), at most once every 2 s, and passes it on. From then on, each datagram's
+  unreliable part goes to the client unchanged.
 - A map change restarts the signon on the relay's connection, and every client signs on again.
-- A client in the game gets exactly one packet per server packet, as from the STV itself. Reliable
-  data rides along, and only a server silent for 100 ms gets a keepalive in between. Signon
-  transfers go out on all eight subchannels at once.
+- A client in the game gets exactly one packet per server packet, as from the STV itself:
+  `net_graph 5` shows the same rates and no packets without entities. Reliable data rides
+  along, and only a server silent for 100 ms gets a keepalive in between. Signon transfers go
+  out on all eight subchannels at once.
 
 `STVTF_DEBUG=relay` traces each client's handshake packets, its signon timing, the transfers it
 is sent, and every 5 s how many of its packets carried server data.
 
-Given a capture, it replays the capture's first session instead of connecting: it starts when
-the first client connects and pauses while a client signs on. `tests/relay.rs` connects stvtf
-to it and gets the same output as `stvtf replay`. A TF2 client watches through it as through the STV itself: `net_graph 5` shows the same
-rates (66/s on a 66-tick server) and no packets without entities.
-It has no client password, and a client that joins outside the 64-datagram window of a capture
-gets no entities (a capture cannot be asked for a full update).
+Given a capture, `relay` replays the capture's first session instead of connecting: it starts
+when the first client connects and pauses while a client signs on. `tests/relay.rs` connects
+stvtf to it and gets the same output as `stvtf replay`. A client that joins a capture outside
+the 64-datagram window gets no entities, since a capture cannot be asked for a full update.
 
 ## Known limits
 

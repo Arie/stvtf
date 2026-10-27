@@ -7,6 +7,7 @@ use std::time::Duration;
 use stvtf::capture;
 use stvtf::decode::{self, Tables};
 use stvtf::output::Stamped;
+use stvtf::relay::{Relay, RelayConfig};
 use stvtf::watch::{self, Watch};
 use stvtf::{Line, Options};
 
@@ -15,17 +16,20 @@ stvtf: headless TF2 SourceTV spectator emitting top-down overview data as JSON l
 
   stvtf connect HOST:PORT [--password tv] [--hz 20] [--seconds N] [--record FILE.cap]
                   [--name stv.tf] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
+                  [--relay HOST:PORT [--relay-password PW] [--relay-slots 10]]
   stvtf replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
   stvtf demo    FILE.dem [--hz 20]
-  stvtf relay   HOST:PORT [--listen 0.0.0.0:27020] [--password tv] [--name stv.tf]
-                  [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
-  stvtf relay   FILE.cap [--listen 0.0.0.0:27020] [--speed 1] [--tables SAME_BUILD.dem] [--build N]
+  stvtf relay   HOST:PORT|FILE.cap [--listen 0.0.0.0:27020] [--relay-password PW] [--relay-slots 10]
+                  [--password tv] [--name stv.tf] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
+                  [--speed 1]
 
 HOST:PORT is the SourceTV port (tv_port); given the game port, it tries game port + 5.
 The password can also come from the STVTF_PASSWORD environment variable, which
 other local users cannot read the way they can read command-line arguments.
-`relay` passes a SourceTV server (or a capture, started when the first client connects) on
-to TF2 clients that connect to --listen, as tv_relay does. It prints the upstream's status lines.
+--relay passes the server on to TF2 clients that connect there, as tv_relay does, at no cost of
+a slot on the server. Its password comes from --relay-password or STVTF_RELAY_PASSWORD, or is
+made up and printed to stderr. `relay` does only that, printing only status lines; given a
+capture, it replays it once the first client connects.
 Tables and CRC of the build reported by the server are built in for known builds;
 pass --tables (any demo recorded on that build) and --crc for others.";
 
@@ -42,10 +46,24 @@ struct Args {
 /// The flags each command accepts; anything else is an error, so a typo is not ignored.
 fn allowed_flags(command: &str) -> Option<&'static [&'static str]> {
     match command {
-        "connect" => Some(&["password", "hz", "seconds", "record", "name", "tables", "crc", "build"]),
+        "connect" => Some(&[
+            "password",
+            "hz",
+            "seconds",
+            "record",
+            "name",
+            "tables",
+            "crc",
+            "build",
+            "relay",
+            "relay-password",
+            "relay-slots",
+        ]),
         "replay" => Some(&["hz", "tables", "build"]),
         "demo" => Some(&["hz"]),
-        "relay" => Some(&["listen", "password", "name", "tables", "crc", "build", "speed"]),
+        "relay" => {
+            Some(&["listen", "relay-password", "relay-slots", "password", "name", "tables", "crc", "build", "speed"])
+        }
         _ => None,
     }
 }
@@ -148,8 +166,7 @@ fn main() -> Result<()> {
 }
 
 fn relay(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
-    let relay = stvtf::relay::Relay::bind(args.get("listen").unwrap_or("0.0.0.0:27020"))?;
-    eprintln!("relay: listening on {}", relay.local_addr()?);
+    let relay = Relay::bind(&relay_config(args, args.get("listen").unwrap_or("0.0.0.0:27020"))?)?;
     watch::stop_on_ctrl_c(&STOP)?;
     if std::path::Path::new(&args.target).is_file() {
         let bytes = std::fs::read(&args.target).with_context(|| format!("reading {}", args.target))?;
@@ -198,7 +215,26 @@ fn watch_args(args: &Args) -> Result<Watch> {
         })
         .transpose()?;
     w.record = args.get("record").map(PathBuf::from);
+    if args.command == "connect" {
+        w.relay = args.get("relay").map(|listen| relay_config(args, listen)).transpose()?;
+    }
     Ok(w)
+}
+
+/// The relay's password and slots from the flags; a password not given is made up and shown.
+fn relay_config(args: &Args, listen: &str) -> Result<RelayConfig> {
+    let mut config = RelayConfig::new(listen);
+    match args.get("relay-password").map(str::to_string).or_else(|| std::env::var("STVTF_RELAY_PASSWORD").ok()) {
+        Some(p) => config.password = p,
+        None => eprintln!("relay password: {}", config.password),
+    }
+    if let Some(n) = args.get("relay-slots") {
+        config.slots = n.parse().with_context(|| format!("--relay-slots {n}: not a number"))?;
+        if !(1..=255).contains(&config.slots) {
+            bail!("--relay-slots must be 1 to 255");
+        }
+    }
+    Ok(config)
 }
 
 #[cfg(test)]

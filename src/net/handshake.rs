@@ -26,6 +26,8 @@ const S2C_CONNECTION: u8 = b'B';
 const S2C_CONNREJECT: u8 = b'9';
 const A2S_INFO: u8 = b'T';
 const S2A_INFO: u8 = b'I';
+/// The text of an `A2S_INFO` query.
+const A2S_QUERY: &[u8; 20] = b"Source Engine Query\0";
 /// Room for an `A2S_INFO` reply.
 const A2S_REPLY: usize = 4096;
 /// An `A2S_INFO` reply: the protocol version follows the kind, then name, map, folder and game.
@@ -248,7 +250,7 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
     let mut server = server;
     let mut req = OOB_PREFIX.to_vec();
     req.push(A2S_INFO);
-    req.extend_from_slice(b"Source Engine Query\0");
+    req.extend_from_slice(A2S_QUERY);
     let mut buf = vec![0u8; A2S_REPLY];
     let mut extra: Vec<u8> = Vec::new();
     for _ in 0..A2S_TRIES {
@@ -286,9 +288,20 @@ fn parse_a2s_version(data: &[u8]) -> Result<String> {
 /// A connectionless packet a client sends a server.
 #[derive(Debug, PartialEq)]
 pub enum FromClient {
-    GetChallenge { nonce: u32 },
-    Connect { protocol: i32, challenge: u32, nonce: u32, name: String, password: String },
-    Info,
+    GetChallenge {
+        nonce: u32,
+    },
+    Connect {
+        protocol: i32,
+        challenge: u32,
+        nonce: u32,
+        name: String,
+        password: String,
+    },
+    /// `A2S_INFO`, with the challenge of an earlier reply if it has one.
+    Info {
+        challenge: Option<u32>,
+    },
 }
 
 /// Reads one NUL-terminated string at `*pos`, moving past it.
@@ -318,7 +331,11 @@ pub fn parse_from_client(data: &[u8]) -> Option<FromClient> {
                 password: read_cstr(data, &mut pos)?,
             })
         }
-        A2S_INFO => Some(FromClient::Info),
+        A2S_INFO => {
+            let query = data.get(OOB_KIND + 1..)?;
+            let rest = query.strip_prefix(A2S_QUERY.as_slice())?;
+            Some(FromClient::Info { challenge: rest.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) })
+        }
         _ => None,
     }
 }
@@ -347,6 +364,14 @@ pub fn build_reject(nonce: u32, reason: &str) -> Vec<u8> {
     let mut v = oob(S2C_CONNREJECT);
     v.extend_from_slice(&nonce.to_le_bytes());
     cstr(&mut v, reason);
+    v
+}
+
+/// The challenge an `A2S_INFO` must come back with: shorter than the query, so a forged source
+/// address gets nothing larger than it sent.
+pub fn build_info_challenge(challenge: u32) -> Vec<u8> {
+    let mut v = oob(S2C_CHALLENGE);
+    v.extend_from_slice(&challenge.to_le_bytes());
     v
 }
 
@@ -400,6 +425,13 @@ mod tests {
         assert!(err.is::<Rejected>());
         let info = Info { name: "relay", map: "cp_badlands", players: 1, max_players: 8, build: "11138802" };
         assert_eq!(parse_a2s_version(&build_info(&info)).unwrap(), "11138802");
+        let mut query = oob(A2S_INFO);
+        query.extend_from_slice(A2S_QUERY);
+        assert_eq!(parse_from_client(&query), Some(FromClient::Info { challenge: None }));
+        let reply = build_info_challenge(77);
+        assert!(reply.len() < query.len(), "the challenge is no larger than the query");
+        query.extend_from_slice(&reply[A2S_CHALLENGE]);
+        assert_eq!(parse_from_client(&query), Some(FromClient::Info { challenge: Some(77) }));
     }
 
     #[test]

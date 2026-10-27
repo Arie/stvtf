@@ -1,5 +1,5 @@
-//! A `SourceTV` relay (proof of concept): one connection to a `SourceTV` server, passed on to
-//! the TF2 clients (or stvtf watchers) that connect to us, as `tv_relay` does.
+//! A `SourceTV` relay: the connection a watch already has, passed on to the TF2 clients (or
+//! stvtf watchers) that connect to us, as `tv_relay` does. It costs the server no slot.
 //!
 //! Nothing is re-encoded: every client gets the server's own message bits.
 //!
@@ -15,6 +15,10 @@
 //!   update, and we ask the server.
 //! - A map change re-runs the server's signon on our connection: the log starts again, and
 //!   every client signs on again with it.
+//! - A client in the game gets one packet per server datagram, as from the server itself.
+//!
+//! Connectionless replies are never larger than what asked for them, unless the address proved
+//! it is real by answering a challenge, so the relay cannot be used to reflect traffic.
 
 use crate::capture::{self, Record};
 use crate::decode::{Lifecycle, Tables};
@@ -27,11 +31,13 @@ use crate::net::reliable::{
     FRAGMENT_COUNT_BITS, FRAGMENT_SIZE, SIZE_BITS, START_FRAGMENT_BITS, SUBCHANNEL_BITS, SUBCHANNELS,
 };
 use crate::net::{MAX_DATAGRAM, compress, split};
-use crate::output::Line;
+use crate::output::{Line, Status};
 use crate::session::{self, Options, Tap};
 use crate::watch::{Watch, WatchError};
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
+use std::fmt;
+use std::hash::{BuildHasher, RandomState};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,7 +63,10 @@ const SVC_CREATESTRINGTABLE: u8 = 12;
 const SVC_UPDATESTRINGTABLE: u8 = 13;
 const SVC_PACKETENTITIES: u8 = 26;
 
-const MAX_CLIENTS: usize = 64;
+/// Clients a relay takes unless told otherwise.
+pub const DEFAULT_SLOTS: usize = 10;
+/// A slot count fits the `A2S_INFO` reply's byte.
+const MAX_SLOTS: usize = 255;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
 /// A client hears from us at least this often, so its connection does not time out.
 const KEEPALIVE: Duration = Duration::from_millis(100);
@@ -71,8 +80,11 @@ const MAX_KEYFRAME: usize = 64;
 const FRAGMENTS_PER_PACKET: usize = 4;
 /// Message bytes per reliable transfer, well under the engine's `NET_MAX_PAYLOAD`.
 const MAX_TRANSFER: usize = 60_000;
-/// Challenges kept for clients that have not connected yet.
-const MAX_CHALLENGES: usize = 4096;
+/// After a full update, the next is asked of the server no sooner than this, however many
+/// clients want one: each costs the server a full snapshot.
+const FULL_UPDATE_GAP: Duration = Duration::from_secs(2);
+/// Characters of a generated password.
+const PASSWORD_LEN: usize = 10;
 /// Longest string read from a client message.
 const MAX_STRING: usize = 4096;
 
@@ -200,6 +212,8 @@ impl Outgoing {
 struct Client {
     name: String,
     challenge: u32,
+    /// The nonce of the client's connect: another one from the same address is a new connection.
+    nonce: u32,
     rx: Receiver,
     out_seq: i32,
     /// Our ack bits for the client's reliable subchannels.
@@ -227,10 +241,11 @@ struct Client {
 }
 
 impl Client {
-    fn new(name: String, challenge: u32, now: Instant) -> Self {
+    fn new(name: String, challenge: u32, nonce: u32, now: Instant) -> Self {
         Client {
             name,
             challenge,
+            nonce,
             rx: Receiver::new(Some(challenge)),
             out_seq: 1,
             in_reliable_state: 0,
@@ -391,8 +406,11 @@ fn read_client_messages(r: &mut BitReader<'_>, nbits: usize, out: &mut Vec<Clien
 /// Everything the upstream and client threads share.
 struct Hub {
     sock: UdpSocket,
+    password: String,
+    slots: usize,
+    /// Keys the challenge of each address, so none need be stored before it connects.
+    challenge_key: RandomState,
     clients: HashMap<SocketAddr, Client>,
-    challenges: HashMap<SocketAddr, u32>,
     log: Vec<Logged>,
     /// Every reliable message joins the log until the first entities after a signon starts.
     signon_open: bool,
@@ -405,15 +423,19 @@ struct Hub {
     build: String,
     split_group: i32,
     seen_client: bool,
+    /// When the last full update came, to space out asking for more.
+    last_full: Option<Instant>,
     traced: Instant,
 }
 
 impl Hub {
-    fn new(sock: UdpSocket) -> Self {
+    fn new(sock: UdpSocket, config: &RelayConfig) -> Self {
         Hub {
             sock,
+            password: config.password.clone(),
+            slots: config.slots.min(MAX_SLOTS),
+            challenge_key: RandomState::new(),
             clients: HashMap::new(),
-            challenges: HashMap::new(),
             log: Vec::new(),
             signon_open: true,
             tail: None,
@@ -423,6 +445,7 @@ impl Hub {
             build: crate::CURRENT_BUILD.to_string(),
             split_group: 0,
             seen_client: false,
+            last_full: None,
             traced: Instant::now(),
         }
     }
@@ -491,6 +514,9 @@ impl Hub {
         let now = Instant::now();
         let tail = self.tail.take();
         let full = std::mem::take(&mut self.tail_full);
+        if full {
+            self.last_full = Some(now);
+        }
         if let Some(t) = &tail {
             if full {
                 self.keyframe = Some(vec![t.clone()]);
@@ -565,7 +591,7 @@ impl Hub {
             }
         }
         if let Some(reason) = &c.gone {
-            eprintln!("relay: {} ({from}) left: {}", c.name.escape_debug(), reason.escape_debug());
+            trace!("{} ({from}) left: {}", c.name.escape_debug(), reason.escape_debug());
             self.clients.remove(&from);
             return;
         }
@@ -587,45 +613,46 @@ impl Hub {
             data.len(),
             String::from_utf8_lossy(&data[5.min(data.len())..data.len().min(40)])
         );
+        let expected = self.challenge_key.hash_one(from) as u32;
         let reply = match handshake::parse_from_client(data) {
-            Some(FromClient::GetChallenge { nonce }) => {
-                if self.challenges.len() >= MAX_CHALLENGES {
-                    self.challenges.clear();
+            Some(FromClient::GetChallenge { nonce }) => handshake::build_challenge(expected, nonce),
+            Some(FromClient::Connect { protocol, challenge, nonce, name, password }) => {
+                if challenge != expected {
+                    // Not from the address that got the challenge: no reply at all.
+                    return;
                 }
-                let challenge = crate::net::random_u64() as u32;
-                self.challenges.insert(from, challenge);
-                handshake::build_challenge(challenge, nonce)
-            }
-            Some(FromClient::Connect { protocol, challenge, nonce, name, .. }) => {
                 if let Some(c) = self.clients.get(&from)
-                    && c.challenge == challenge
+                    && c.nonce == nonce
                 {
                     // Our accept was lost and the client asks again.
                     handshake::build_accept(nonce)
-                } else if self.challenges.get(&from) != Some(&challenge) {
-                    handshake::build_reject(nonce, "Bad challenge.")
                 } else if protocol != handshake::PROTOCOL_VERSION {
                     handshake::build_reject(
                         nonce,
                         &format!("This relay speaks protocol {}", handshake::PROTOCOL_VERSION),
                     )
-                } else if self.clients.len() >= MAX_CLIENTS {
+                } else if !self.password.is_empty() && password != self.password {
+                    trace!("{} ({from}) gave a wrong password", name.escape_debug());
+                    handshake::build_reject(nonce, "#GameUI_ServerRejectBadPassword")
+                } else if self.clients.len() >= self.slots && !self.clients.contains_key(&from) {
                     handshake::build_reject(nonce, "#GameUI_ServerRejectServerFull")
                 } else {
-                    eprintln!("relay: {} ({from}) connected", name.escape_debug());
-                    self.challenges.remove(&from);
-                    self.clients.insert(from, Client::new(name, challenge, now));
+                    trace!("{} ({from}) connected", name.escape_debug());
+                    self.clients.insert(from, Client::new(name, challenge, nonce, now));
                     self.seen_client = true;
                     handshake::build_accept(nonce)
                 }
             }
-            Some(FromClient::Info) => handshake::build_info(&handshake::Info {
-                name: "stvtf relay",
-                map: &self.map,
-                players: self.clients.len().min(255) as u8,
-                max_players: MAX_CLIENTS as u8,
-                build: &self.build,
-            }),
+            Some(FromClient::Info { challenge }) if challenge == Some(expected) => {
+                handshake::build_info(&handshake::Info {
+                    name: "stvtf relay",
+                    map: &self.map,
+                    players: self.clients.len() as u8,
+                    max_players: self.slots as u8,
+                    build: &self.build,
+                })
+            }
+            Some(FromClient::Info { .. }) => handshake::build_info_challenge(expected),
             None => return,
         };
         let _ = self.sock.send_to(&reply, from);
@@ -636,7 +663,7 @@ impl Hub {
         self.clients.retain(|addr, c| {
             let alive = now.duration_since(c.last_heard) < CLIENT_TIMEOUT;
             if !alive {
-                eprintln!("relay: {} ({addr}) timed out", c.name.escape_debug());
+                trace!("{} ({addr}) timed out", c.name.escape_debug());
             }
             alive
         });
@@ -736,6 +763,42 @@ fn burst(sock: &UdpSocket, split_group: &mut i32, addr: SocketAddr, c: &mut Clie
     }
 }
 
+/// Where a relay listens and whom it lets in. `Debug` keeps the password out of logs.
+#[derive(Clone)]
+pub struct RelayConfig {
+    /// HOST:PORT to listen on; port 0 picks one (the `relay` status line says which).
+    pub listen: String,
+    /// What clients must give as the server password; empty lets anyone in.
+    pub password: String,
+    /// How many clients at once, up to 255.
+    pub slots: usize,
+}
+
+impl RelayConfig {
+    /// [`DEFAULT_SLOTS`] slots and a new random password.
+    pub fn new(listen: &str) -> Self {
+        RelayConfig { listen: listen.to_string(), password: random_password(), slots: DEFAULT_SLOTS }
+    }
+}
+
+impl fmt::Debug for RelayConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RelayConfig")
+            .field("listen", &self.listen)
+            .field("password", &"<redacted>")
+            .field("slots", &self.slots)
+            .finish()
+    }
+}
+
+/// A password of letters and digits, hard to guess and easy to type in a console.
+pub fn random_password() -> String {
+    const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
+    (0..PASSWORD_LEN)
+        .map(|_| char::from(ALPHABET[(crate::net::random_u64() % ALPHABET.len() as u64) as usize]))
+        .collect()
+}
+
 /// A relay: a socket clients connect to, fed by one upstream session.
 pub struct Relay {
     sock: UdpSocket,
@@ -743,10 +806,10 @@ pub struct Relay {
 }
 
 impl Relay {
-    /// Listens for clients on `listen` (HOST:PORT; port 0 picks one).
-    pub fn bind(listen: &str) -> Result<Relay> {
-        let sock = UdpSocket::bind(listen).with_context(|| format!("binding {listen}"))?;
-        let hub = Mutex::new(Hub::new(sock.try_clone()?));
+    /// Listens for clients as `config` says.
+    pub fn bind(config: &RelayConfig) -> Result<Relay> {
+        let sock = UdpSocket::bind(&config.listen).with_context(|| format!("binding {}", config.listen))?;
+        let hub = Mutex::new(Hub::new(sock.try_clone()?, config));
         Ok(Relay { sock, hub })
     }
 
@@ -764,6 +827,7 @@ impl Relay {
         if let Some(b) = &w.build {
             self.hub().build.clone_from(b);
         }
+        self.announce(emit)?;
         self.serving(stop, || crate::watch::watch_with(w, stop, Some(self), emit))
     }
 
@@ -786,10 +850,16 @@ impl Relay {
             .map(|r| (r.t_us, r.data))
             .collect();
         let opt = Options { snapshot_hz: 0.0, ..Options::default() };
+        self.announce(emit)?;
         let hold = || self.hub().hold();
         self.serving(stop, || {
             session::replay_paced(challenge, &datagrams, tables, &opt, speed, self, &hold, stop, emit)
         })
+    }
+
+    fn announce(&self, emit: &mut dyn FnMut(Line)) -> Result<()> {
+        emit(Line::Status(Status::Relay { listen: self.local_addr()?.to_string() }));
+        Ok(())
     }
 
     /// Serves clients on another thread while `upstream` runs.
@@ -829,7 +899,9 @@ impl Tap for Relay {
     }
 
     fn want_full_update(&self) -> bool {
-        self.hub().clients.values().any(|c| c.phase == Phase::WaitingFull)
+        let hub = self.hub();
+        hub.last_full.is_none_or(|t| t.elapsed() >= FULL_UPDATE_GAP)
+            && hub.clients.values().any(|c| c.phase == Phase::WaitingFull)
     }
 }
 
@@ -895,7 +967,7 @@ mod tests {
             })
             .collect();
         let mut queue = vec![BitBuf::from_bytes(noise)];
-        let mut c = Client::new("x".into(), 1, Instant::now());
+        let mut c = Client::new("x".into(), 1, 2, Instant::now());
         c.queue.append(&mut queue);
         let first = c.next_region(1).unwrap();
         assert!(c.next_region(2).is_none(), "nothing before the first block is acked");

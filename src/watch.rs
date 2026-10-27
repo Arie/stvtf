@@ -4,6 +4,7 @@ use crate::capture::Recorder;
 use crate::decode::Tables;
 use crate::net::handshake::{self, GamePort, Rejected};
 use crate::output::{Line, Status};
+use crate::relay::{Relay, RelayConfig};
 use crate::session::DEFAULT_SNAPSHOT_HZ;
 use crate::session::{self, End, Fatal, Options};
 use anyhow::{Context, Result, anyhow, bail};
@@ -48,6 +49,8 @@ pub struct Watch {
     pub duration: Option<Duration>,
     /// Save the raw inbound datagrams here (see `capture`). The file must not exist yet.
     pub record: Option<PathBuf>,
+    /// Pass the server on to clients that connect here (see [`crate::relay`]).
+    pub relay: Option<RelayConfig>,
 }
 
 impl Watch {
@@ -63,6 +66,7 @@ impl Watch {
             build: None,
             duration: None,
             record: None,
+            relay: None,
         }
     }
 }
@@ -79,6 +83,7 @@ impl fmt::Debug for Watch {
             .field("build", &self.build)
             .field("duration", &self.duration)
             .field("record", &self.record)
+            .field("relay", &self.relay)
             .finish()
     }
 }
@@ -157,8 +162,12 @@ pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
 
 /// Runs until `stop`, the duration, or a rejection that reconnecting cannot fix,
 /// passing every event and snapshot to `emit`. Blocks the calling thread.
+/// With [`Watch::relay`] set, the relay serves clients for as long as this runs.
 pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
-    watch_with(w, stop, None, emit)
+    match &w.relay {
+        Some(config) => Relay::bind(config)?.watch(w, stop, emit),
+        None => watch_with(w, stop, None, emit),
+    }
 }
 
 /// [`watch`], passing the server's traffic to a tap as well.
@@ -274,7 +283,9 @@ mod tests {
 
     #[test]
     fn debug_hides_the_password() {
-        let w = Watch::new("127.0.0.1:27020", "hunter2");
+        let mut w = Watch::new("127.0.0.1:27020", "hunter2");
+        w.relay = Some(RelayConfig { password: "swordfish".into(), ..RelayConfig::new("0.0.0.0:0") });
         assert!(!format!("{w:?}").contains("hunter2"));
+        assert!(!format!("{w:?}").contains("swordfish"));
     }
 }

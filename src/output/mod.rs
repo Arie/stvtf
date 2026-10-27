@@ -293,6 +293,11 @@ pub enum Status {
         /// Why.
         reason: String,
     },
+    /// The relay is up: clients can watch through `listen` (see [`crate::relay`]).
+    Relay {
+        /// The address it listens on.
+        listen: String,
+    },
 }
 
 /// The server, at every signon.
