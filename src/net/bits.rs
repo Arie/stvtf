@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 /// A bit stream packed from bit 0: `bytes` holds exactly `nbits` bits, the last byte
 /// possibly partial. Only `BitWriter`, `from_bytes` and `read_remaining` build one,
 /// which keeps the two fields consistent.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct BitBuf {
     bytes: Vec<u8>,
     nbits: usize,

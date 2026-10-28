@@ -35,7 +35,7 @@ use crate::output::{Line, Status};
 use crate::session::{self, Options, Tap};
 use crate::watch::{Watch, WatchError};
 use anyhow::{Context, Result, bail};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{BuildHasher, RandomState};
 use std::io::ErrorKind;
@@ -287,6 +287,12 @@ impl Client {
         self.phase != Phase::Signon && self.cursor == log.len()
     }
 
+    /// Whether the client has acked the whole log. Only then can it take entities: those of a
+    /// class whose baseline it lacks stop a game client.
+    fn has_log(&self, log: &[Logged]) -> bool {
+        self.cursor == log.len() && self.queue.is_empty() && self.outgoing.is_none()
+    }
+
     /// The region to send in the packet of sequence `seq`, if a transfer block can go.
     fn next_region(&mut self, seq: i32) -> Option<BitBuf> {
         if self.outgoing.is_none() && !self.queue.is_empty() {
@@ -412,6 +418,8 @@ struct Hub {
     challenge_key: RandomState,
     clients: HashMap<SocketAddr, Client>,
     log: Vec<Logged>,
+    /// The string table messages logged from unreliable parts, which come again until acked.
+    logged_unreliable: HashSet<BitBuf>,
     /// Every reliable message joins the log until the first entities after a signon starts.
     signon_open: bool,
     /// This datagram's unreliable part, and whether it holds a full update.
@@ -437,6 +445,7 @@ impl Hub {
             challenge_key: RandomState::new(),
             clients: HashMap::new(),
             log: Vec::new(),
+            logged_unreliable: HashSet::new(),
             signon_open: true,
             tail: None,
             tail_full: false,
@@ -453,6 +462,7 @@ impl Hub {
     /// The server started a signon (connected, or a new map): so does every client.
     fn restart_signon(&mut self, now: Instant) {
         self.log.clear();
+        self.logged_unreliable.clear();
         self.signon_open = true;
         self.keyframe = None;
         for c in self.clients.values_mut() {
@@ -485,6 +495,13 @@ impl Hub {
             }
             w.write_buf(&BitReader::slice(bits.bytes(), 0..end));
             self.tail = Some(w.finish());
+            // The server sends string table changes (new instance baselines among them) in the
+            // unreliable part, again in each datagram until acked. A client that joins later
+            // needs them: without an entity class's baseline, a game client stops with
+            // "GetDynamicBaseline: FindStringIndex failed".
+            for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)) {
+                self.log_unreliable(BitReader::slice(bits.bytes(), span.bits.clone()));
+            }
             return;
         }
         for span in &life.spans {
@@ -509,6 +526,23 @@ impl Hub {
         }
     }
 
+    /// Logs a string table message from a datagram's unreliable part, once. A client already
+    /// getting every datagram has it from there, so its cursor only moves past it.
+    fn log_unreliable(&mut self, msg: BitBuf) {
+        if !self.logged_unreliable.insert(msg.clone()) {
+            return;
+        }
+        trace!("logged a string table change of {} bits from a datagram", msg.nbits());
+        self.log.push(Logged { bits: msg, gate: None });
+        for c in self.clients.values_mut() {
+            if c.phase == Phase::Active && c.cursor + 1 == self.log.len() {
+                c.cursor += 1;
+            } else {
+                c.pump(&self.log);
+            }
+        }
+    }
+
     /// Sends what the upstream datagram brought.
     fn upstream_flush(&mut self) {
         let now = Instant::now();
@@ -529,7 +563,8 @@ impl Hub {
             }
         }
         for (addr, c) in &mut self.clients {
-            if full && c.phase == Phase::WaitingFull {
+            if full && c.phase == Phase::WaitingFull && c.has_log(&self.log) {
+                trace!("{addr} gets a full update of {} bits", tail.as_ref().map_or(0, BitBuf::nbits));
                 c.set_phase(Phase::Active, now);
             }
             if c.phase == Phase::Active {
@@ -545,14 +580,17 @@ impl Hub {
     /// A client is ready for entities: from the kept datagrams if there are, or a full update.
     fn wants_entities(&mut self, addr: SocketAddr, now: Instant) {
         let Some(c) = self.clients.get_mut(&addr) else { return };
-        match &self.keyframe {
-            Some(frames) => {
-                c.set_phase(Phase::Active, now);
-                for t in frames {
-                    send(&self.sock, &mut self.split_group, addr, c, Some(t), false, now);
-                }
+        if let Some(frames) = &self.keyframe
+            && c.has_log(&self.log)
+        {
+            trace!("{addr} gets entities from the {} datagrams kept since the last full update", frames.len());
+            c.set_phase(Phase::Active, now);
+            for t in frames {
+                send(&self.sock, &mut self.split_group, addr, c, Some(t), false, now);
             }
-            None => c.set_phase(Phase::WaitingFull, now),
+        } else {
+            trace!("{addr} waits for a full update");
+            c.set_phase(Phase::WaitingFull, now);
         }
     }
 
@@ -663,7 +701,12 @@ impl Hub {
         self.clients.retain(|addr, c| {
             let alive = now.duration_since(c.last_heard) < CLIENT_TIMEOUT;
             if !alive {
-                trace!("{} ({addr}) timed out", c.name.escape_debug());
+                trace!(
+                    "{} ({addr}) timed out, {:?} for {:.1} s when last heard",
+                    c.name.escape_debug(),
+                    c.phase,
+                    c.last_heard.saturating_duration_since(c.since).as_secs_f32()
+                );
             }
             alive
         });
@@ -908,6 +951,7 @@ impl Tap for Relay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decode::Span;
     use crate::net::reliable::Reassembler;
 
     #[test]
@@ -1016,6 +1060,45 @@ mod tests {
         }
         assert_eq!(done.len(), 1);
         assert_eq!(done[0].len(), 20_000);
+    }
+
+    /// A string table change the server sends in a datagram's unreliable part, and again in
+    /// the next ones until acked.
+    fn datagram_with_table_change() -> (BitBuf, Lifecycle) {
+        let mut w = BitWriter::new();
+        w.write_bits(u32::from(SVC_UPDATESTRINGTABLE), TYPE_BITS);
+        w.write_bits(0xabcd, 16);
+        let bits = w.finish();
+        let life = Lifecycle {
+            spans: vec![Span { id: SVC_UPDATESTRINGTABLE, bits: 0..bits.nbits() }],
+            ..Lifecycle::default()
+        };
+        (bits, life)
+    }
+
+    #[test]
+    fn a_late_client_gets_the_table_changes_once_and_one_in_the_game_skips_them() {
+        let config = RelayConfig::new("127.0.0.1:0");
+        let mut hub = Hub::new(UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
+        let now = Instant::now();
+        let active: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let mut c = Client::new("in".into(), 1, 1, now);
+        c.gate = None;
+        c.set_phase(Phase::Active, now);
+        hub.clients.insert(active, c);
+        let (bits, life) = datagram_with_table_change();
+        for _ in 0..3 {
+            hub.upstream_stream(&bits, false, &life);
+            hub.upstream_flush();
+        }
+        assert_eq!(hub.log.len(), 1, "logged once, however often it comes");
+        let c = &hub.clients[&active];
+        assert_eq!((c.cursor, c.queue.len()), (1, 0), "a client in the game has it from the datagram");
+        let mut late = Client::new("late".into(), 2, 2, now);
+        late.gate = None;
+        late.pump(&hub.log);
+        assert_eq!(late.queue, [bits]);
+        assert!(!late.has_log(&hub.log), "no entities before the change is acked");
     }
 
     #[test]
