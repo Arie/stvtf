@@ -250,11 +250,8 @@ pub enum Status {
     Connecting {
         /// The address connected to.
         server: String,
-        /// The build whose tables are used.
+        /// The build offered to the server.
         build: String,
-        /// The build the server reported when it is not one that can be used.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        server_build: Option<String>,
     },
     /// Signon progress.
     New,

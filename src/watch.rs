@@ -28,6 +28,8 @@ const EXIT_INTERRUPTED: i32 = 130;
 /// How long to wait for the server's build (`A2S_INFO`), and for it to accept us.
 const A2S_TIMEOUT: Duration = Duration::from_secs(3);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
+/// How many digits a TF2 build has, generously.
+const BUILD_DIGITS: std::ops::RangeInclusive<usize> = 7..=10;
 
 /// What to watch and how. `Debug` is implemented by hand to keep the password out of logs.
 pub struct Watch {
@@ -178,27 +180,9 @@ pub(crate) fn watch_with(
     emit: &mut dyn FnMut(Line),
 ) -> Result<(), WatchError> {
     let mut server = resolve(&w.target)?;
-    // A2S_INFO is unauthenticated (and taken from any address, see handshake), so a
-    // build we cannot use falls back to the current one: a forged reply must not end the
-    // watch, and a server really on another build refuses our class tables anyway.
-    let usable = |b: &str| crate::builtin(b).is_some() || (w.crc.is_some() && w.tables.is_some());
-    let mut server_build = None;
-    let build = match &w.build {
-        Some(b) => b.clone(),
-        None => match handshake::a2s_version(server, A2S_TIMEOUT) {
-            Ok(b) if usable(&b) => b,
-            Ok(b) => {
-                server_build = Some(b);
-                crate::CURRENT_BUILD.to_string()
-            }
-            Err(_) => crate::CURRENT_BUILD.to_string(),
-        },
-    };
-    let Some(crc) = w.crc.or_else(|| crate::builtin(&build).map(|b| b.crc)) else {
-        return Err(anyhow!("no known SendTable CRC for build {build}; pass --crc").into());
-    };
-    let tables = tables(&build, w.tables.as_deref())?;
-    let opt = Options { name: w.name.clone(), crc, snapshot_hz: w.snapshot_hz, ..Options::default() };
+    let mut build = crate::CURRENT_BUILD.to_string();
+    let mut opt = Options { name: w.name.clone(), snapshot_hz: w.snapshot_hz, ..Options::default() };
+    let mut loaded: Option<(String, Tables)> = None;
     let deadline = w.duration.map(|d| Instant::now() + d);
     let mut recorder = w.record.as_deref().map(Recorder::create).transpose()?;
     let mut backoff = BACKOFF_MIN;
@@ -207,13 +191,31 @@ pub(crate) fn watch_with(
         if deadline.is_some_and(|d| Instant::now() >= d) || stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        emit(Line::Status(Status::Connecting {
-            server: server.to_string(),
-            build: build.clone(),
-            server_build: server_build.clone(),
-        }));
+        // The server refuses any build but its own, and may update while we watch, so ask each
+        // time. A2S_INFO is unauthenticated (and taken from any address, see handshake), but a
+        // forged build only gets this attempt refused, so it cannot end the watch.
+        build = match &w.build {
+            Some(b) => b.clone(),
+            None => match handshake::a2s_version(server, A2S_TIMEOUT) {
+                Ok(b) if plausible_build(&b) => b,
+                _ => build,
+            },
+        };
+        // Most updates keep the class tables, so a build we have no data for gets the current
+        // one's; if they did change, the server says so and that is fatal.
+        let known = w.build.is_some() || crate::builtin(&build).is_some();
+        let source = if known { build.as_str() } else { crate::CURRENT_BUILD };
+        let Some(crc) = w.crc.or_else(|| crate::builtin(source).map(|b| b.crc)) else {
+            return Err(anyhow!("no known SendTable CRC for build {source}; pass --crc").into());
+        };
+        opt.crc = crc;
+        let (_, class_tables) = match loaded.take() {
+            Some((s, t)) if s == source => loaded.insert((s, t)),
+            _ => loaded.insert((source.to_string(), tables(source, w.tables.as_deref())?)),
+        };
+        emit(Line::Status(Status::Connecting { server: server.to_string(), build: build.clone() }));
         let streamed = match handshake::connect(server, &opt.name, &w.password, &build, CONNECT_TIMEOUT) {
-            Ok(conn) => match session::run(&conn, &tables, &opt, recorder.as_mut(), stop, deadline, tap, emit)? {
+            Ok(conn) => match session::run(&conn, class_tables, &opt, recorder.as_mut(), stop, deadline, tap, emit)? {
                 End::Stopped => return Ok(()),
                 End::Broken(b) => {
                     if let Some(kind) = b.fatal {
@@ -262,6 +264,11 @@ pub(crate) fn watch_with(
     }
 }
 
+/// Whether an `A2S_INFO` version looks like a TF2 build, and so is fit to send back.
+fn plausible_build(build: &str) -> bool {
+    BUILD_DIGITS.contains(&build.len()) && build.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// ± `JITTER`, so watchers of many servers that dropped together do not retry in lockstep.
 fn jitter(d: Duration) -> Duration {
     const STEPS: u64 = 1000;
@@ -272,6 +279,18 @@ fn jitter(d: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_plausible_builds_are_offered() {
+        assert!(plausible_build("1000000"));
+        assert!(plausible_build("11185272"));
+        assert!(plausible_build("1234567890"));
+        assert!(!plausible_build("999999"));
+        assert!(!plausible_build("12345678901"));
+        assert!(!plausible_build("1118527a"));
+        assert!(!plausible_build(""));
+        assert!(!plausible_build("11185272\"; quit"));
+    }
 
     #[test]
     fn jitter_stays_within_twenty_percent() {

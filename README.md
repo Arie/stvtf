@@ -46,20 +46,18 @@ zero-width characters). Escape them before display.
 
 SourceTV sends no class tables: the client builds them from its game DLL and proves it with
 a SendTable CRC at signon. Both are compiled in for the current build (`CURRENT_BUILD` and
-`builtin` in `src/lib.rs`, tables in `assets/`). The build comes from the STV port's A2S_INFO
-reply, falling back to the current build. A reported build it has neither built in nor been
-given `--tables` and `--crc` for also falls back (anyone can forge that reply), and is shown
-as `server_build` in the `connecting` status; the server then refuses the class tables if it
-really runs that build.
+`builtin` in `src/lib.rs`, tables in `assets/`). The server refuses any build but its own, so
+each connection attempt offers the build from the STV port's A2S_INFO reply, shown in the
+`connecting` status. Without a usable reply it offers the last build it did, or the current one.
+A build it has no data for gets the current build's tables and CRC, since most TF2 updates keep
+them; when an update does change them, the server answers "Server uses different class tables".
 
 For another build, pass `--tables` (any STV or POV demo of that build) and `--crc` (its
 SendTable CRC; a wrong one gets "Server uses different class tables"). To find the CRC, run
 that build's dedicated server and read `g_SendTableCRC` from `engine_srv.so` (offset via
 `readelf -sW`), as `tools/read_crc.py` in [stv-watch](https://github.com/dmitry-ra/stv-watch)
 does. To compile a build in, cut a demo of it after its first `DataTables` packet into
-`assets/tables_BUILD.dem` and add a `builtin` arm. An update that keeps the CRC and data tables
-only needs `CURRENT_BUILD` changed: the server refuses any other build string
-(`#GameUI_ServerRejectNewVersion`).
+`assets/tables_BUILD.dem` and add a `builtin` arm.
 
 ## Output
 

@@ -40,11 +40,7 @@ fn a_kill_is_written_as_documented() {
 
 #[test]
 fn statuses_are_tagged_by_state() {
-    let connecting = Line::Status(Status::Connecting {
-        server: "1.2.3.4:27020".into(),
-        build: "11138802".into(),
-        server_build: None,
-    });
+    let connecting = Line::Status(Status::Connecting { server: "1.2.3.4:27020".into(), build: "11138802".into() });
     let expected = json!({"type": "status", "state": "connecting", "server": "1.2.3.4:27020", "build": "11138802"});
     assert_eq!(value(&connecting), expected);
     assert_eq!(back(&expected), connecting);
