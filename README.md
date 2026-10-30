@@ -57,7 +57,9 @@ SendTable CRC; a wrong one gets "Server uses different class tables"). To find t
 that build's dedicated server and read `g_SendTableCRC` from `engine_srv.so` (offset via
 `readelf -sW`), as `tools/read_crc.py` in [stv-watch](https://github.com/dmitry-ra/stv-watch)
 does. To compile a build in, cut a demo of it after its first `DataTables` packet into
-`assets/tables_BUILD.dem` and add a `builtin` arm.
+`assets/tables_BUILD.dem` and add a `builtin` arm. An update that keeps the CRC and data tables
+only needs `CURRENT_BUILD` changed: the server refuses any other build string
+(`#GameUI_ServerRejectNewVersion`).
 
 ## Output
 
@@ -73,7 +75,7 @@ lower-case names (`scout` … `engineer`, `unknown`).
 ### Connection
 
 ```json
-{"type":"status","state":"connecting","server":"1.2.3.4:27020","build":"11138802"}
+{"type":"status","state":"connecting","server":"1.2.3.4:27020","build":"11185272"}
 {"type":"status","state":"new"}                      // signon progress: new, prespawn, spawn
 {"type":"status","state":"full","map":"cp_badlands"}  // data flowing
 {"type":"status","state":"changelevel"}               // the server announced a map change

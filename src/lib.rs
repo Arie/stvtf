@@ -24,7 +24,7 @@ pub use session::{Fatal, Options, parse_snapshot_hz};
 pub const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
 /// The TF2 server build whose tables and CRC are compiled in.
-pub const CURRENT_BUILD: &str = "11138802";
+pub const CURRENT_BUILD: &str = "11185272";
 
 /// Compiled-in data for one TF2 server build.
 #[derive(Debug, Clone, Copy)]
@@ -38,6 +38,7 @@ pub struct Build {
 /// Compiled-in data for known TF2 server builds (`A2S_INFO` `version`).
 pub fn builtin(build: &str) -> Option<Build> {
     match build {
+        // 11185272 kept the data tables and CRC of 11138802.
         CURRENT_BUILD => Some(Build { crc: 0x5FCD_4733, tables: include_bytes!("../assets/tables_11138802.dem") }),
         _ => None,
     }
