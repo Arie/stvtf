@@ -2044,12 +2044,19 @@ impl Extractor {
                 }));
             }
             UserMessage::SayText2(m) => {
+                // Not chat: the parser reads a game message's format string (such as
+                // #TF_Halloween_Underworld, "has escaped the underworld") as ChatAll, and its name
+                // as the sender, leaving no text.
+                let text = strip_colors(m.text.as_ref());
+                if text.is_empty() {
+                    return;
+                }
                 let player = self.user_of_entity(u32::from(m.client));
                 self.push(Line::Chat(out::Chat {
                     tick: self.server_tick,
                     player,
                     name: m.from.as_ref().map(ToString::to_string),
-                    text: strip_colors(m.text.as_ref()),
+                    text,
                     parts: color_parts(m.text.as_ref()),
                     kind: chat_kind(m.kind),
                 }));
@@ -2144,6 +2151,30 @@ impl BorrowMessageHandler for Extractor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn say_text2(kind: ChatMessageKind, from: &str, text: &str) -> Vec<Line> {
+        let mut x = Extractor::default();
+        x.user_message(&UserMessage::SayText2(Box::new(tf_demo_parser::demo::message::usermessage::SayText2Message {
+            client: EntityId::from(5u32),
+            raw: 0,
+            kind,
+            from: Some(from.into()),
+            text: text.into(),
+        })));
+        x.drain()
+    }
+
+    #[test]
+    fn a_chat_line_keeps_its_text() {
+        let lines = say_text2(ChatMessageKind::ChatAll, "Korra", "xddxdx");
+        assert!(matches!(&lines[..], [Line::Chat(c)] if c.text == "xddxdx"), "{lines:?}");
+    }
+
+    // #TF_Halloween_Underworld and the like name a player but have no text; they are not chat.
+    #[test]
+    fn a_game_message_without_text_is_no_chat_line() {
+        assert_eq!(say_text2(ChatMessageKind::ChatAll, "Korra", ""), vec![]);
+    }
 
     #[test]
     fn strips_chat_colors() {
