@@ -24,39 +24,97 @@ fn data(lines: &[Line]) -> Vec<&Line> {
     lines.iter().filter(|l| !matches!(l, Line::Status(_))).collect()
 }
 
+/// One go of a client of a relay replaying a capture.
+struct Attempt {
+    speed: f64,
+    lines: Vec<Line>,
+    /// Why it could not even be compared.
+    failed: Option<String>,
+}
+
+impl Attempt {
+    /// The client's count of packets it never got, once it has disconnected.
+    fn lost(&self) -> Option<u64> {
+        self.lines.iter().find_map(|l| match l {
+            Line::Status(Status::Disconnected { lost, .. }) => Some(*lost),
+            _ => None,
+        })
+    }
+
+    /// What went wrong against `want`, in a line: none if it all matches.
+    fn difference(&self, want: &[&Line]) -> Option<String> {
+        if let Some(failed) = &self.failed {
+            return Some(failed.clone());
+        }
+        let got = data(&self.lines);
+        if got == want {
+            return None;
+        }
+        let at = got.iter().zip(want).position(|(g, w)| g != w).unwrap_or(got.len().min(want.len()));
+        Some(format!(
+            "{} of {} lines, {:?} packets lost, first difference at line {at}: got {}, wanted {}",
+            got.len(),
+            want.len(),
+            self.lost(),
+            brief(got.get(at).copied()),
+            brief(want.get(at).copied()),
+        ))
+    }
+}
+
+/// A line's type and tick: a whole snapshot says too much to read.
+fn brief(line: Option<&Line>) -> String {
+    line.map_or("nothing".to_string(), |l| {
+        let v = serde_json::to_value(l).unwrap();
+        format!("{} at tick {}", v["type"].as_str().unwrap_or("?"), v["tick"])
+    })
+}
+
 /// What a client of a relay replaying `records` at `speed` decodes.
-fn through_relay(records: &[capture::Record<'_>], opt: &Options, speed: f64) -> Vec<Line> {
+fn through_relay(records: &[capture::Record<'_>], opt: &Options, speed: f64) -> Attempt {
     let relay = Relay::bind(&config("pw", 10)).unwrap();
-    let mut w = Watch::new(&relay.local_addr().unwrap().to_string(), "pw");
+    let listen = relay.local_addr().unwrap().to_string();
+    let mut w = Watch::new(&listen, "pw");
     // No build given: the client asks the relay's A2S_INFO, through its challenge.
     w.snapshot_hz = opt.snapshot_hz;
     // A bound on a broken relay.
     w.duration = Some(Duration::from_secs(60));
     let (relay_stop, client_stop) = (AtomicBool::new(false), AtomicBool::new(false));
-    let mut got = Vec::new();
+    let mut lines = Vec::new();
     let mut relay_lines = Vec::new();
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            relay.replay(records, &tables(), speed, &relay_stop, &mut |l| relay_lines.push(l)).unwrap();
+    let (replay_result, watch_result) = std::thread::scope(|s| {
+        let replaying = s.spawn(|| {
+            let out = relay.replay(records, &tables(), speed, &relay_stop, &mut |l| relay_lines.push(l));
             client_stop.store(true, Ordering::Relaxed);
+            out
         });
-        watch::watch(&w, &client_stop, &mut |l| got.push(l)).unwrap();
+        let out = watch::watch(&w, &client_stop, &mut |l| lines.push(l));
+        relay_stop.store(true, Ordering::Relaxed);
+        (replaying.join().unwrap(), out)
     });
-    let listen = relay.local_addr().unwrap().to_string();
-    assert_eq!(relay_lines.first(), Some(&Line::Status(Status::Relay { listen })));
-    let connecting = got.iter().find_map(|l| match l {
+    let connecting = lines.iter().find_map(|l| match l {
         Line::Status(Status::Connecting { build, .. }) => Some(build.as_str()),
         _ => None,
     });
-    assert_eq!(connecting, Some(stvtf::CURRENT_BUILD), "the build, from the relay's A2S_INFO");
-    got
+    let failed = if let Err(e) = replay_result {
+        Some(format!("the relay failed: {e:#}"))
+    } else if let Err(e) = watch_result {
+        Some(format!("the client failed: {e}"))
+    } else if relay_lines.first() != Some(&Line::Status(Status::Relay { listen })) {
+        Some(format!("the relay's first line was {}", brief(relay_lines.first())))
+    } else if connecting != Some(stvtf::CURRENT_BUILD) {
+        Some(format!("the build from the relay's A2S_INFO was {connecting:?}"))
+    } else {
+        None
+    };
+    Attempt { speed, lines, failed }
 }
 
 /// The relay sends one reliable transfer at a time, each waiting for its ack, while datagrams go
 /// out on the capture's clock. At a replay's speed, a slow or busy client sees reliable events
 /// some ticks late, or overflows its socket's buffer and loses frames. So a difference only counts
-/// at the speed of the last try, where a client has plenty of time; a bug in the relay shows at
-/// any speed.
+/// if it stays at the slowest speed, where a client has plenty of time; a bug in the relay shows
+/// at any speed. The failure message says what each speed got.
 #[test]
 fn a_client_of_the_relay_decodes_what_the_capture_holds() {
     let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
@@ -66,18 +124,14 @@ fn a_client_of_the_relay_decodes_what_the_capture_holds() {
     capture::replay(&records, &tables(), &opt, &mut |l| want.push(l)).unwrap();
     let want = data(&want);
 
+    let mut tried = Vec::new();
     // The capture runs 29 s: here 4 s, then 7 s, then 15 s.
-    for speed in [8.0, 4.0] {
-        if data(&through_relay(&records, &opt, speed)) == want {
-            return;
-        }
+    for speed in [8.0, 4.0, 2.0] {
+        let attempt = through_relay(&records, &opt, speed);
+        let Some(difference) = attempt.difference(&want) else { return };
+        tried.push(format!("at {}x: {difference}", attempt.speed));
     }
-    let got = through_relay(&records, &opt, 2.0);
-    let got = data(&got);
-    for (n, (g, w)) in got.iter().zip(&want).enumerate() {
-        assert_eq!(g, w, "line {n}");
-    }
-    assert_eq!(got.len(), want.len(), "number of lines");
+    panic!("no speed gave what the capture holds:\n{}", tried.join("\n"));
 }
 
 fn config(password: &str, slots: usize) -> RelayConfig {
