@@ -532,7 +532,11 @@ pub fn run(
                 }
                 Ok(Next::Datagram(n))
             }
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(Next::Idle),
+            // Ctrl-C or SIGTERM during a read: the stop is noticed on the next turn. Reported as
+            // a socket error, it would end the session with the wrong reason.
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => {
+                Ok(Next::Idle)
+            }
             // E.g. ConnectionRefused: an ICMP port unreachable, the server is gone.
             Err(e) => Ok(Next::Failed(format!("socket error: {e}"))),
         }
