@@ -330,14 +330,14 @@ impl Client {
 
 /// A client's messages the relay acts on.
 #[derive(Debug, PartialEq)]
-enum ClientMsg {
+pub(crate) enum ClientMsg {
     Signon(Signon),
     Tick(i32),
     Disconnect(String),
 }
 
 /// The messages of one client stream, up to the first it cannot skip.
-fn client_messages(bits: &BitBuf) -> Vec<ClientMsg> {
+pub(crate) fn client_messages(bits: &BitBuf) -> Vec<ClientMsg> {
     let mut out = Vec::new();
     let mut r = BitReader::new(bits.bytes());
     let _ = read_client_messages(&mut r, bits.nbits(), &mut out);

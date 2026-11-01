@@ -13,6 +13,8 @@ pub mod decode;
 mod hostile;
 mod net;
 pub mod output;
+#[cfg(test)]
+mod recovery;
 pub mod relay;
 mod session;
 pub mod watch;
