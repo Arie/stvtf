@@ -131,7 +131,7 @@ fn read_block(br: &mut BitReader<'_>, st: &mut Transfer) -> Result<Option<Vec<u8
         bail!("fragments {start_frag}+{num_frags} past transfer end");
     }
     let mut length = num_frags * FRAGMENT_SIZE;
-    if start_frag + num_frags == st.total_frags {
+    if num_frags > 0 && start_frag + num_frags == st.total_frags {
         let trim = st.nbytes % FRAGMENT_SIZE;
         if trim != 0 {
             length -= FRAGMENT_SIZE - trim;
@@ -324,5 +324,19 @@ mod tests {
     fn the_subchannel_can_be_read_from_a_region_that_does_not_parse() {
         assert_eq!(latch_subchannel(&[0b101], 0), Some(5));
         assert_eq!(latch_subchannel(&[], 0), None);
+    }
+
+    /// Found by fuzzing: no fragments, at the very end of a transfer whose last one is short.
+    #[test]
+    fn a_block_of_no_fragments_at_the_end_of_a_transfer_is_nothing() {
+        let mut r = Reassembler::default();
+        let first = multi_fragment(1, 0, 1, 300, &[7; 256]);
+        assert_eq!(r.feed(&first, 0).unwrap().completed.len(), 0);
+        let empty = multi_fragment(1, 2, 0, 0, &[]);
+        assert_eq!(r.feed(&empty, 0).unwrap().completed.len(), 0);
+        let last = multi_fragment(1, 1, 1, 0, &[8; 44]);
+        let done = r.feed(&last, 0).unwrap().completed;
+        assert_eq!(done.len(), 1, "the transfer is still whole");
+        assert_eq!(done[0].len(), 300);
     }
 }
