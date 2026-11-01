@@ -205,6 +205,9 @@ pub(crate) fn watch_with(
                 _ => build,
             },
         };
+        if let Some(tap) = tap {
+            tap.server_build(&build);
+        }
         // Most updates keep the class tables, so a build we have no data for gets the current
         // one's; if they did change, the server says so and that is fatal.
         let known = w.build.is_some() || crate::builtin(&build).is_some();

@@ -31,6 +31,9 @@ const HELPER_LIMIT: Duration = Duration::from_secs(70);
 /// Snapshots to see after a full update before calling it recovered.
 const SNAPSHOTS: usize = 5;
 
+/// The build the fake server says it is: unknown, as any newer server's is.
+const FAKE_BUILD: &str = "99999999";
+
 /// A capture as plain channel packets.
 struct Recording {
     challenge: u32,
@@ -135,7 +138,14 @@ impl FakeServer {
                             client = Some(from);
                             handshake::build_accept(nonce)
                         }
-                        _ => continue,
+                        Some(FromClient::Info { .. }) => handshake::build_info(&handshake::Info {
+                            name: "fake",
+                            map: "cp_badlands",
+                            players: 0,
+                            max_players: 8,
+                            build: FAKE_BUILD,
+                        }),
+                        None => continue,
                     };
                     self.sock.send_to(&reply, from).unwrap();
                 } else if let Some(got) = rx.feed(data, Instant::now()) {
@@ -384,4 +394,36 @@ fn a_client_joining_a_relay_late_gets_a_full_update_asked_for_it() {
     let players = |l: &Line| matches!(l, Line::Snapshot(s) if !s.players.is_empty());
     assert!(lines.iter().any(players), "entities through a full update");
     assert_eq!(server.answered.load(Ordering::Relaxed), 1);
+}
+
+/// The relay must say what its server says, not what stvtf was built for: found on a live server
+/// of an older build. A client deciding by it, or a relay of this relay, would offer the wrong one.
+#[test]
+fn a_relay_reports_the_build_of_its_server() {
+    let server = FakeServer::new();
+    let relay = Relay::bind(&RelayConfig { password: String::new(), ..RelayConfig::new("127.0.0.1:0") }).unwrap();
+    let addr = relay.local_addr().unwrap();
+    let mut upstream = watch_of(server.addr());
+    upstream.build = None;
+    upstream.snapshot_hz = 0.0;
+    let stop = AtomicBool::new(false);
+    let lines = std::thread::scope(|s| {
+        s.spawn(|| server.run());
+        s.spawn(|| relay.watch(&upstream, &stop, &mut |_| {}).unwrap());
+        let limit = Instant::now() + LIMIT;
+        while server.position.load(Ordering::Relaxed) == 0 && Instant::now() < limit {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut client = watch_of(addr);
+        client.build = None;
+        let lines = client_until(&client, || {}, |l| matches!(l, Line::Status(Status::Connecting { .. })));
+        stop.store(true, Ordering::Relaxed);
+        server.stop.store(true, Ordering::Relaxed);
+        lines
+    });
+    let offered = lines.iter().find_map(|l| match l {
+        Line::Status(Status::Connecting { build, .. }) => Some(build.as_str()),
+        _ => None,
+    });
+    assert_eq!(offered, Some(FAKE_BUILD));
 }

@@ -870,9 +870,6 @@ impl Relay {
 
     /// Relays a `SourceTV` server, reconnecting as [`crate::watch::watch`] does, until `stop`.
     pub fn watch(&self, w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
-        if let Some(b) = &w.build {
-            self.hub().build.clone_from(b);
-        }
         self.announce(emit)?;
         self.serving(stop, || crate::watch::watch_with(w, stop, Some(self), emit))
     }
@@ -948,6 +945,45 @@ impl Tap for Relay {
         let hub = self.hub();
         hub.last_full.is_none_or(|t| t.elapsed() >= FULL_UPDATE_GAP)
             && hub.clients.values().any(|c| c.phase == Phase::WaitingFull)
+    }
+
+    fn server_build(&self, build: &str) {
+        self.hub().build = build.to_string();
+    }
+}
+
+/// A relay with one client in, for `crate::fuzzing`.
+#[cfg(fuzzing)]
+pub(crate) struct FuzzBench {
+    hub: Hub,
+    client: SocketAddr,
+    challenge: u32,
+    now: Instant,
+}
+
+#[cfg(fuzzing)]
+impl FuzzBench {
+    pub(crate) fn new() -> Self {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let client: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let config = RelayConfig { password: String::new(), ..RelayConfig::new("127.0.0.1:0") };
+        let mut hub = Hub::new(sock, &config);
+        let now = Instant::now();
+        let challenge = hub.challenge_key.hash_one(client) as u32;
+        hub.clients.insert(client, Client::new("fuzz".to_string(), challenge, 1, now));
+        FuzzBench { hub, client, challenge, now }
+    }
+
+    pub(crate) fn challenge(&self) -> u32 {
+        self.challenge
+    }
+
+    pub(crate) fn datagram(&mut self, data: &[u8]) {
+        self.hub.datagram(self.client, data, self.now);
+    }
+
+    pub(crate) fn service(&mut self) {
+        self.hub.service(self.now);
     }
 }
 

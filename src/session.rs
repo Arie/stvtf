@@ -128,6 +128,8 @@ pub(crate) trait Tap {
     fn flush(&self);
     /// Tick acks ask for a full update while this holds.
     fn want_full_update(&self) -> bool;
+    /// The build the server says it is, before each connection to it.
+    fn server_build(&self, build: &str);
 }
 
 struct Session<'o> {
