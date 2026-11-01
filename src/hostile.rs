@@ -1,6 +1,7 @@
 //! Whatever comes off the network or out of a file may be garbage or forged: it must never
-//! panic. The inputs are random but seeded, so a failure repeats. `STVTF_FUZZ_ROUNDS` multiplies
-//! how many are tried, for a longer hunt.
+//! panic. The inputs are random but seeded, so a failure repeats. For a longer hunt,
+//! `STVTF_FUZZ_ROUNDS` multiplies how many are tried and `STVTF_FUZZ_SEED` picks other inputs;
+//! the same two values give the same inputs again.
 
 use crate::capture;
 use crate::decode::{self, Decoder, Tables};
@@ -23,6 +24,13 @@ fn rounds(default: u64) -> u64 {
 struct Rng(u64);
 
 impl Rng {
+    /// The inputs numbered `n`, of those `STVTF_FUZZ_SEED` picks.
+    fn seeded(n: u64) -> Self {
+        let run = std::env::var("STVTF_FUZZ_SEED").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        // xorshift never leaves 0.
+        Rng((n ^ run.wrapping_mul(0x9E37_79B9_7F4A_7C15)).max(1))
+    }
+
     fn next(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
@@ -80,7 +88,7 @@ const PREFIXES: [&[u8]; 8] = [
 
 #[test]
 fn packets_out_of_band_never_panic() {
-    let mut rng = Rng(1);
+    let mut rng = Rng::seeded(1);
     for _ in 0..rounds(20_000) {
         let mut data = PREFIXES[rng.below(PREFIXES.len())].to_vec();
         data.extend(rng.bytes(80));
@@ -92,7 +100,7 @@ fn packets_out_of_band_never_panic() {
 
 #[test]
 fn packets_of_a_connection_never_panic() {
-    let mut rng = Rng(2);
+    let mut rng = Rng::seeded(2);
     let mut rx = Receiver::new(Some(7));
     let now = Instant::now();
     let markers: [&[u8]; 4] = [
@@ -111,7 +119,7 @@ fn packets_of_a_connection_never_panic() {
 /// Past the checksum and the challenge, into the reliable and unreliable parts.
 #[test]
 fn sealed_garbage_never_panics() {
-    let mut rng = Rng(3);
+    let mut rng = Rng::seeded(3);
     let mut rx = Receiver::new(Some(7));
     let now = Instant::now();
     for n in 1..=rounds(20_000) {
@@ -128,7 +136,7 @@ fn sealed_garbage_never_panics() {
 
 #[test]
 fn captures_never_panic() {
-    let mut rng = Rng(4);
+    let mut rng = Rng::seeded(4);
     let real = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
     let real = &real[..real.len().min(4096)];
     for _ in 0..rounds(5_000) {
@@ -144,7 +152,7 @@ fn captures_never_panic() {
 #[test]
 fn garbage_for_the_decoder_never_panics_the_process() {
     let tables = tables();
-    let mut rng = Rng(5);
+    let mut rng = Rng::seeded(5);
     for _ in 0..rounds(40) {
         let arena = Arena::new();
         let mut dec = Decoder::new(&arena, &tables, 20.0).unwrap();
@@ -169,7 +177,7 @@ fn corrupted_sessions_never_panic_the_process() {
     let opt = Options { snapshot_hz: 5.0, ..Options::default() };
     let (mut errors, mut snapshots) = (0, 0);
     for seed in 1..=rounds(8) {
-        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut rng = Rng::seeded(seed.wrapping_mul(0xD6E8_FEB8_6659_FD93));
         let every = 1 + rng.below(40);
         let mutated: Vec<Vec<u8>> = datagrams
             .iter()
@@ -199,7 +207,7 @@ fn corrupted_demos_never_panic() {
     let real = std::fs::read(format!("{FIXTURES}/tc_hydro.dem")).unwrap();
     // Well past the header and data tables, into the packets.
     let real = &real[..real.len().min(1 << 20)];
-    let mut rng = Rng(6);
+    let mut rng = Rng::seeded(6);
     for _ in 0..rounds(4) {
         let mut data = real.to_vec();
         for _ in 0..=rng.below(30) {
