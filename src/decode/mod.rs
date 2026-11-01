@@ -347,4 +347,46 @@ mod tests {
         assert_eq!(snapshot_every(1000.0, 0.015), 1, "every tick");
         assert_eq!(snapshot_every(0.0, 0.015), 0);
     }
+
+    fn tables() -> Tables {
+        Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap()
+    }
+
+    #[test]
+    fn tables_come_only_from_a_readable_demo() {
+        assert!(Tables::from_demo(std::path::Path::new("/nonexistent.dem")).is_err());
+        assert!(Tables::from_demo_bytes(b"not a demo").is_err());
+    }
+
+    #[test]
+    fn a_message_that_does_not_parse_counts_and_asks_for_a_full_update() {
+        let tables = tables();
+        let arena = Arena::new();
+        let mut dec = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let life = dec.feed(&[0xff; 64], 64 * 8);
+        assert!(life.lost_frame);
+        assert!(dec.parse_errors() >= 1);
+        assert_eq!(life.spans.last().map(|s| s.id), Some(UNPARSED));
+    }
+
+    #[test]
+    fn too_few_bits_for_a_message_are_nothing() {
+        let tables = tables();
+        let arena = Arena::new();
+        let mut dec = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let life = dec.feed(&[0xff], 3);
+        assert!(!life.lost_frame && life.spans.is_empty());
+        assert_eq!(dec.parse_errors(), 0);
+    }
+
+    /// The server tells us to leave in a message the parser has no type for.
+    #[test]
+    fn a_disconnect_gives_its_reason() {
+        let tables = tables();
+        let arena = Arena::new();
+        let mut dec = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let bye = crate::net::messages::disconnect("Server shutting down");
+        let life = dec.feed(bye.bytes(), bye.nbits());
+        assert_eq!(life.disconnect.as_deref(), Some("Server shutting down"));
+    }
 }

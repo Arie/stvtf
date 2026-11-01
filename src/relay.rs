@@ -1109,4 +1109,311 @@ mod tests {
         let got = Reassembler::default().feed(o.region(0, 0, o.frags).bytes(), 0).unwrap().completed;
         assert_eq!(got, [vec![7u8; 5000]]);
     }
+
+    /// The relay's protocol from the client's side, without threads or clocks.
+    struct Bench {
+        hub: Hub,
+        client: UdpSocket,
+        addr: SocketAddr,
+        challenge: u32,
+        nonce: u32,
+    }
+
+    impl Bench {
+        fn new(password: &str, slots: usize) -> Self {
+            let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let config = RelayConfig { password: password.into(), slots, ..RelayConfig::new("127.0.0.1:0") };
+            let hub = Hub::new(sock, &config);
+            let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+            client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let addr = client.local_addr().unwrap();
+            let challenge = hub.challenge_key.hash_one(addr) as u32;
+            Bench { hub, client, addr, challenge, nonce: 7 }
+        }
+
+        fn connect_packet(&self, password: &str, protocol: i32) -> Vec<u8> {
+            let mut p = handshake::build_connect(self.nonce, self.challenge, "me", password, "1");
+            p[5..9].copy_from_slice(&protocol.to_le_bytes());
+            p
+        }
+
+        fn connect_with(&mut self, packet: &[u8]) -> Vec<u8> {
+            self.hub.datagram(self.addr, packet, Instant::now());
+            self.reply()
+        }
+
+        fn connect(&mut self) {
+            let packet = self.connect_packet("", handshake::PROTOCOL_VERSION);
+            assert_eq!(self.connect_with(&packet)[4], b'B', "accepted");
+        }
+
+        fn reply(&self) -> Vec<u8> {
+            let mut buf = vec![0u8; MAX_DATAGRAM];
+            let n = self.client.recv(&mut buf).unwrap();
+            buf.truncate(n);
+            buf
+        }
+
+        fn client_state(&mut self) -> &mut Client {
+            self.hub.clients.get_mut(&self.addr).unwrap()
+        }
+
+        /// A channel packet from the client carrying `messages`.
+        fn client_sends(&mut self, sequence: i32, messages: &BitBuf) {
+            let header = OutHeader { sequence, ack: 0, challenge: self.challenge, reliable_state: 0 };
+            let packet = netchan::build_packet(&header, None, Some(messages));
+            self.hub.datagram(self.addr, &packet, Instant::now());
+        }
+    }
+
+    #[test]
+    fn the_accept_goes_again_when_a_client_asks_again() {
+        let mut b = Bench::new("", 1);
+        b.connect();
+        b.client_state().cursor = 3;
+        b.connect();
+        assert_eq!(b.client_state().cursor, 3, "the same connection, not a new one");
+    }
+
+    #[test]
+    fn a_connect_of_another_protocol_is_refused_saying_ours() {
+        let mut b = Bench::new("", 1);
+        let packet = b.connect_packet("", handshake::PROTOCOL_VERSION + 1);
+        let reply = b.connect_with(&packet);
+        assert_eq!(reply[4], b'9');
+        let text = String::from_utf8_lossy(&reply);
+        assert!(text.contains(&format!("protocol {}", handshake::PROTOCOL_VERSION)), "{text}");
+        assert!(b.hub.clients.is_empty());
+    }
+
+    #[test]
+    fn a_goodbye_frees_the_slot() {
+        let mut b = Bench::new("", 1);
+        b.connect();
+        b.client_sends(1, &messages::goodbye());
+        assert!(b.hub.clients.is_empty());
+    }
+
+    #[test]
+    fn a_client_not_heard_from_times_out() {
+        let mut b = Bench::new("", 1);
+        b.connect();
+        let now = Instant::now();
+        b.hub.service(now);
+        assert_eq!(b.hub.clients.len(), 1);
+        b.hub.service(now + CLIENT_TIMEOUT);
+        assert!(b.hub.clients.is_empty());
+    }
+
+    #[test]
+    fn a_client_in_the_game_hears_from_us_at_least_every_keepalive() {
+        let mut b = Bench::new("", 1);
+        b.connect();
+        let now = Instant::now();
+        let c = b.client_state();
+        c.set_phase(Phase::Active, now);
+        c.last_sent = now;
+        let seq = c.out_seq;
+        b.hub.service(now);
+        assert_eq!(b.client_state().out_seq, seq, "not yet");
+        b.hub.service(now + KEEPALIVE * 2);
+        assert_eq!(b.client_state().out_seq, seq + 1);
+        assert!(netchan::verify_checksum(&b.reply()));
+    }
+
+    /// A client acks -1 until the full update reaches it, so only an ack -1 well after that
+    /// is a request for another.
+    #[test]
+    fn a_client_asks_for_another_full_update_only_after_the_grace() {
+        let mut b = Bench::new("", 1);
+        b.connect();
+        let now = Instant::now();
+        b.client_state().set_phase(Phase::Active, now);
+        b.client_sends(1, &messages::tick(-1));
+        assert_eq!(b.client_state().phase, Phase::Active);
+        b.client_state().since = now.checked_sub(FULL_UPDATE_GRACE * 2).unwrap();
+        b.client_sends(2, &messages::tick(-1));
+        assert_eq!(b.client_state().phase, Phase::WaitingFull);
+    }
+
+    #[test]
+    fn the_server_is_asked_for_a_full_update_when_needed_and_not_too_often() {
+        let mut b = Bench::new("", 1);
+        let relay = |hub: Hub| Relay { sock: UdpSocket::bind("127.0.0.1:0").unwrap(), hub: Mutex::new(hub) };
+        b.connect();
+        let now = Instant::now();
+        b.client_state().set_phase(Phase::Active, now);
+        let mut hub_of = relay(b.hub);
+        assert!(!hub_of.want_full_update(), "nobody needs one");
+        let wants = hub_of.hub.get_mut().unwrap();
+        wants.clients.get_mut(&b.addr).unwrap().set_phase(Phase::WaitingFull, now);
+        wants.last_full = Some(now);
+        assert!(!hub_of.want_full_update(), "the server just sent one");
+        hub_of.hub.get_mut().unwrap().last_full = now.checked_sub(FULL_UPDATE_GAP * 2);
+        assert!(hub_of.want_full_update());
+    }
+
+    #[test]
+    fn a_client_joining_soon_after_a_full_update_gets_the_datagrams_since() {
+        let mut b = Bench::new("", 2);
+        b.connect();
+        let tail = {
+            let mut w = BitWriter::new();
+            w.write_bits(0b101_010, TYPE_BITS);
+            w.finish()
+        };
+        b.hub.keyframe = Some(vec![tail.clone(), tail]);
+        let seq = b.client_state().out_seq;
+        let now = Instant::now();
+        b.hub.wants_entities(b.addr, now);
+        assert_eq!(b.client_state().phase, Phase::Active);
+        assert_eq!(b.client_state().out_seq, seq + 2);
+        assert!(netchan::verify_checksum(&b.reply()));
+    }
+
+    #[test]
+    fn a_client_joining_long_after_a_full_update_waits_for_the_next() {
+        let mut b = Bench::new("", 1);
+        b.connect();
+        b.hub.wants_entities(b.addr, Instant::now());
+        assert_eq!(b.client_state().phase, Phase::WaitingFull);
+    }
+
+    /// A map change: every client signs on again, except that what it was waiting to echo still
+    /// stands if that is the first step of signon.
+    #[test]
+    fn a_new_map_signs_every_client_on_again() {
+        let mut b = Bench::new("", 1);
+        b.connect();
+        let now = Instant::now();
+        let c = b.client_state();
+        c.set_phase(Phase::Active, now);
+        c.cursor = 5;
+        c.gate = Some(Signon::Spawn);
+        c.queue.push(BitBuf::default());
+        b.hub.log.push(Logged { bits: BitBuf::default(), gate: None });
+        b.hub.keyframe = Some(Vec::new());
+        b.hub.restart_signon(now);
+        assert!(b.hub.log.is_empty() && b.hub.keyframe.is_none() && b.hub.signon_open);
+        let c = b.client_state();
+        assert_eq!((c.phase, c.cursor, c.gate, c.queue.len()), (Phase::Signon, 0, None, 0));
+    }
+
+    /// Every message a game client sends is read past, to the ones the relay acts on after it.
+    #[test]
+    fn client_messages_a_game_client_sends_are_skipped() {
+        let mut w = BitWriter::new();
+        let msg = |w: &mut BitWriter, id: u32| w.write_bits(id, TYPE_BITS);
+        let string = |w: &mut BitWriter, s: &str| {
+            w.write_bytes(s.as_bytes());
+            w.write_bits(0, 8);
+        };
+        msg(&mut w, 0); // net_NOP
+        msg(&mut w, 2); // net_File
+        w.write_bits(1, 32);
+        string(&mut w, "maps/x.bsp");
+        w.write_bit(true);
+        msg(&mut w, 4); // net_StringCmd
+        string(&mut w, "status");
+        msg(&mut w, messages::NET_SETCONVAR);
+        w.write_bits(1, 8);
+        string(&mut w, "name");
+        string(&mut w, "value");
+        msg(&mut w, messages::CLC_CLIENTINFO);
+        w.write_bits(0, 32);
+        w.write_bits(0, 32);
+        w.write_bit(true);
+        w.write_bits(0, 32);
+        string(&mut w, "me");
+        for custom in [true, false, true, false] {
+            w.write_bit(custom);
+            if custom {
+                w.write_bits(9, 32);
+            }
+        }
+        w.write_bit(false);
+        msg(&mut w, 9); // clc_Move
+        w.write_bits(0, 7);
+        w.write_bits(12, 16);
+        w.write_bits(0, 12);
+        msg(&mut w, 10); // clc_VoiceData
+        w.write_bits(8, 16);
+        w.write_bits(0, 8);
+        msg(&mut w, 11); // clc_BaselineAck
+        w.write_bits(0, 32);
+        w.write_bit(false);
+        msg(&mut w, 12); // clc_ListenEvents
+        for _ in 0..16 {
+            w.write_bits(0, 32);
+        }
+        msg(&mut w, 13); // clc_RespondCvarValue
+        w.write_bits(0, 32);
+        w.write_bits(0, 4);
+        string(&mut w, "cvar");
+        string(&mut w, "1");
+        msg(&mut w, 16); // clc_CmdKeyValues
+        w.write_bits(1, 32);
+        w.write_bits(0, 8);
+        w.write_buf(&messages::tick(55));
+        assert_eq!(client_messages(&w.finish()), [ClientMsg::Tick(55)]);
+    }
+
+    #[test]
+    fn client_messages_stop_at_the_first_not_understood() {
+        let mut w = BitWriter::new();
+        w.write_buf(&messages::tick(1));
+        w.write_bits(31, TYPE_BITS);
+        w.write_buf(&messages::tick(2));
+        assert_eq!(client_messages(&w.finish()), [ClientMsg::Tick(1)]);
+    }
+
+    /// A client can claim any length: nothing it says makes the relay read past the packet.
+    #[test]
+    fn client_messages_with_lengths_past_the_end_stop_there() {
+        for id in [9, 10, 16] {
+            let mut w = BitWriter::new();
+            w.write_buf(&messages::tick(1));
+            w.write_bits(id, TYPE_BITS);
+            if id == 9 {
+                w.write_bits(0, 7);
+            }
+            w.write_bits(u32::MAX, 16);
+            w.write_bits(u32::MAX, 16);
+            assert_eq!(client_messages(&w.finish()), [ClientMsg::Tick(1)], "message {id}");
+        }
+    }
+
+    /// What anyone on the internet can send a relay: random, forged, or past the checksum.
+    #[test]
+    fn garbage_from_clients_never_panics_the_hub() {
+        let mut b = Bench::new("", 2);
+        b.connect();
+        let mut x = 0x1234_5678_9abc_def0_u64;
+        let mut noise = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let now = Instant::now();
+        for n in 0..5000 {
+            let len = (noise() % 200) as usize;
+            let body: Vec<u8> = (0..len).map(|_| noise() as u8).collect();
+            let mut prefixed = match n % 3 {
+                0 => Vec::new(),
+                1 => b"\xff\xff\xff\xff".to_vec(),
+                _ => {
+                    let mut w = BitWriter::new();
+                    w.write_bytes(&body);
+                    let header = OutHeader { sequence: n + 1, ack: 0, challenge: b.challenge, reliable_state: 0 };
+                    b.hub.datagram(b.addr, &netchan::build_packet(&header, None, Some(&w.finish())), now);
+                    continue;
+                }
+            };
+            prefixed.extend_from_slice(&body);
+            b.hub.datagram(b.addr, &prefixed, now);
+            let stranger: SocketAddr = "127.0.0.1:9".parse().unwrap();
+            b.hub.datagram(stranger, &prefixed, now);
+        }
+    }
 }

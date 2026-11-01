@@ -176,3 +176,64 @@ fn connectionless_replies_are_no_larger_than_their_queries_until_a_challenge_com
         assert!(sock.recv(&mut buf).is_err(), "no reply to a forged connect");
     });
 }
+
+/// Runs until `done` says so, or `LIMIT`, and gives the lines seen.
+fn watch_until(w: &Watch, mut done: impl FnMut(&Line) -> bool) -> Vec<Line> {
+    let stop = AtomicBool::new(false);
+    let mut lines = Vec::new();
+    watch::watch(w, &stop, &mut |l| {
+        stop.fetch_or(done(&l), Ordering::Relaxed);
+        lines.push(l);
+    })
+    .unwrap();
+    lines
+}
+
+fn has_players(l: &Line) -> bool {
+    matches!(l, Line::Snapshot(s) if !s.players.is_empty())
+}
+
+/// `connect --relay`: a watch passing its server on. Its upstream here is another relay, so
+/// the second-hand client must get what a client of the first would.
+#[test]
+fn a_relay_can_relay_a_relay() {
+    let client = with_relay(&config("up", 10), |upstream| {
+        let middle = Relay::bind(&config("down", 10)).unwrap();
+        let downstream = middle.local_addr().unwrap().to_string();
+        let mut w = bounded_watch(&upstream, "up");
+        w.snapshot_hz = 0.0;
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| middle.watch(&w, &stop, &mut |_| {}).unwrap());
+            let lines = watch_until(&bounded_watch(&downstream, "down"), has_players);
+            stop.store(true, Ordering::Relaxed);
+            lines
+        })
+    });
+    assert!(client.iter().any(has_players), "{:?}", &client[..client.len().min(5)]);
+}
+
+/// A map change restarts signon on the upstream connection, and so on every client's.
+#[test]
+fn a_client_of_the_relay_follows_a_map_change() {
+    let bytes = std::fs::read(format!("{FIXTURES}/bots_map_change.cap")).unwrap();
+    let records = capture::read(&bytes).unwrap();
+    let relay = Relay::bind(&config("", 10)).unwrap();
+    let addr = relay.local_addr().unwrap().to_string();
+    let stop = AtomicBool::new(false);
+    let lines = std::thread::scope(|s| {
+        s.spawn(|| relay.replay(&records, &tables(), 32.0, &stop, &mut |_| {}).unwrap());
+        let (mut changed, mut full_again) = (false, false);
+        let lines = watch_until(&bounded_watch(&addr, ""), |l| {
+            changed |= matches!(l, Line::Status(Status::MapChange));
+            full_again |= changed && matches!(l, Line::Status(Status::Full { .. }));
+            full_again && has_players(l)
+        });
+        stop.store(true, Ordering::Relaxed);
+        lines
+    });
+    let change = lines.iter().position(|l| matches!(l, Line::Status(Status::MapChange))).expect("a map change");
+    let after = &lines[change..];
+    assert!(after.iter().any(|l| matches!(l, Line::Status(Status::Full { .. }))), "signon again");
+    assert!(after.iter().any(has_players), "and entities after it");
+}

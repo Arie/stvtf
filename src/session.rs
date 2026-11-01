@@ -626,8 +626,11 @@ const PACE_POLL: Duration = Duration::from_millis(2);
 
 #[cfg(test)]
 mod tests {
-    use super::{Fatal, Options, Session};
+    use super::{Fatal, Options, RESEND_AFTER, Session};
     use crate::decode::Lifecycle;
+    use crate::net::messages::{self, Signon};
+    use crate::output::{Line, Status};
+    use std::time::Duration;
 
     #[test]
     fn a_lost_frame_asks_for_a_full_update_until_one_comes() {
@@ -651,5 +654,51 @@ mod tests {
         assert_eq!(Fatal::from_reason("Server uses different class tables\n"), Some(Fatal::ClassTables));
         assert_eq!(Fatal::from_reason("#GameUI_ServerRejectServerFull"), None);
         assert_eq!(Fatal::from_reason("Kicked: password changed, reconnect"), None);
+    }
+
+    #[test]
+    fn silence_ends_the_session() {
+        let opt = Options { silence: Duration::ZERO, ..Options::default() };
+        let mut s = Session::new(None, 0, &opt);
+        std::thread::sleep(Duration::from_millis(1));
+        s.poll(&mut |_| {});
+        assert!(s.broke.is_some_and(|(why, fatal)| why.starts_with("no data") && fatal.is_none()));
+    }
+
+    #[test]
+    fn a_reliable_message_goes_again_until_acked() {
+        let opt = Options::default();
+        let mut s = Session::new(None, 0, &opt);
+        s.send_reliable(&messages::tick(1), Some(0));
+        let sent = s.out_seq;
+        s.poll(&mut |_| {});
+        assert_eq!(s.out_seq, sent, "not yet");
+        s.pending.as_mut().unwrap().sent_at -= RESEND_AFTER * 2;
+        s.poll(&mut |_| {});
+        assert_eq!(s.out_seq, sent + 1);
+    }
+
+    #[test]
+    fn a_change_of_level_is_announced_and_leaves_the_signon_state() {
+        let opt = Options::default();
+        let mut s = Session::new(None, 0, &opt);
+        let mut lines = Vec::new();
+        s.advance(Signon::ChangeLevel, &mut |l| lines.push(l));
+        assert_eq!(lines, [Line::Status(Status::Changelevel)]);
+        assert_eq!(s.state, Signon::Connected);
+    }
+
+    #[test]
+    fn a_new_map_restarts_the_tick_count() {
+        let opt = Options::default();
+        let mut s = Session::new(None, 0, &opt);
+        let mut emit = |_| {};
+        let info = |count| Lifecycle { server_info: Some((count, "cp_x".into())), ..Lifecycle::default() };
+        s.lifecycle(info(1), &mut emit);
+        s.lifecycle(Lifecycle { tick: Some(500), ..Lifecycle::default() }, &mut emit);
+        s.lifecycle(info(1), &mut emit);
+        assert_eq!(s.ack_tick(), 500, "the same map again");
+        s.lifecycle(info(2), &mut emit);
+        assert_eq!(s.ack_tick(), 0);
     }
 }

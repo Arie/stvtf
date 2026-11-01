@@ -616,4 +616,13 @@ mod tests {
         }
         assert_eq!(read_raw(USER_MESSAGE_HINT_TEXT, b""), None);
     }
+
+    #[test]
+    fn score_methods_of_robot_destruction() {
+        assert_eq!(score_method(0), ScoreMethod::ReactorCaptured);
+        assert_eq!(score_method(1), ScoreMethod::CoresCollected);
+        assert_eq!(score_method(2), ScoreMethod::ReactorReturned);
+        assert_eq!(score_method(3), ScoreMethod::ReactorStolen);
+        assert_eq!(score_method(4), ScoreMethod::Unknown);
+    }
 }

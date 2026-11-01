@@ -348,3 +348,34 @@ fn votes_start_and_pass() {
     assert_eq!(passed.len(), 1);
     assert_eq!((passed[0].issue.as_str(), passed[0].details.as_str()), ("#TF_vote_passed_nextlevel", "pl_goldrush"));
 }
+
+/// `Line::players` is how a reader follows one player: it must not miss anyone a line is about.
+#[test]
+fn a_kill_names_everyone_in_it_as_players() {
+    let mut kills = 0;
+    for line in EVENTS.iter().chain(CTF.iter()) {
+        if let Line::Kill(k) = line {
+            kills += 1;
+            let players: Vec<_> = line.players().collect();
+            assert!(players.contains(&k.victim));
+            assert!(k.attacker.is_none_or(|a| players.contains(&a)));
+            assert!(k.assister.is_none_or(|a| players.contains(&a)));
+        }
+    }
+    assert!(kills > 0);
+}
+
+/// Every event with a player names one the scoreboard knows of, on every kind of line.
+#[test]
+fn players_of_every_line_appear_in_the_match() {
+    let in_snapshots: HashSet<_> = of!(EVENTS, Snapshot).flat_map(|s| s.players.iter().map(|p| p.id)).collect();
+    let (mut named, mut known) = (0, 0);
+    for line in EVENTS.iter() {
+        for id in line.players() {
+            named += 1;
+            known += usize::from(in_snapshots.contains(&id));
+        }
+    }
+    assert!(named > 1000, "{named}");
+    assert!(known * 100 >= named * 99, "{known} of {named} named players seen in a snapshot");
+}

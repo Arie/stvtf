@@ -158,4 +158,28 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"precious");
         std::fs::remove_file(&path).unwrap();
     }
+
+    #[test]
+    fn what_is_recorded_reads_back() {
+        let path = std::env::temp_dir().join(format!("stvtf_recorder_{}.cap", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut r = Recorder::create(&path).unwrap();
+        r.session(0x0102_0304).unwrap();
+        r.datagram(b"one").unwrap();
+        r.datagram(b"").unwrap();
+        drop(r);
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let recs = read(&bytes).unwrap();
+        let got: Vec<(u8, &[u8])> = recs.iter().map(|r| (r.kind, r.data)).collect();
+        assert_eq!(
+            got,
+            [
+                (Kind::Session as u8, [4, 3, 2, 1].as_slice()),
+                (Kind::Datagram as u8, b"one".as_slice()),
+                (Kind::Datagram as u8, b"".as_slice())
+            ]
+        );
+        assert!(recs.windows(2).all(|w| w[0].t_us <= w[1].t_us), "time only moves on");
+    }
 }

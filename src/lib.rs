@@ -9,6 +9,8 @@
 
 pub mod capture;
 pub mod decode;
+#[cfg(test)]
+mod hostile;
 mod net;
 pub mod output;
 pub mod relay;

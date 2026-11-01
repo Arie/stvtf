@@ -2582,4 +2582,11 @@ mod cap_tests {
         assert!((p - (0.1005 + 0.15 * 1.005)).abs() < 0.01, "{p}");
         assert_eq!(point(0, 0, 0).progress_at(1000, DEFAULT_TICK_INTERVAL), 0.0);
     }
+
+    #[test]
+    fn vaccinator_resistances() {
+        assert_eq!(resist(RESIST_BULLET), Resist::Bullet);
+        assert_eq!(resist(RESIST_BLAST), Resist::Blast);
+        assert_eq!(resist(2), Resist::Fire);
+    }
 }

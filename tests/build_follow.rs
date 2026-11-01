@@ -124,3 +124,46 @@ fn an_explicit_build_wins() {
     });
     assert_eq!(got, ["1234567"]);
 }
+
+/// Given a game port (which asks for Steam auth), a watch tries `SourceTV`'s default next to it.
+#[test]
+fn a_game_port_leads_to_the_tv_port_beside_it() {
+    const AUTH_STEAM: u32 = 3;
+    const TV_PORT_OFFSET: u16 = 5;
+    let (game, tv) = std::iter::repeat_with(|| {
+        let game = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = game.local_addr().unwrap().port().checked_add(TV_PORT_OFFSET)?;
+        Some((game, UdpSocket::bind(("127.0.0.1", port)).ok()?))
+    })
+    .flatten()
+    .next()
+    .unwrap();
+    let mut w = Watch::new(&game.local_addr().unwrap().to_string(), "tv");
+    w.build = Some(stvtf::CURRENT_BUILD.to_string());
+    w.duration = Some(LIMIT);
+    let answer = |sock: &UdpSocket, auth: u32| {
+        sock.set_read_timeout(Some(LIMIT)).unwrap();
+        let mut buf = [0u8; 2048];
+        let (_, from) = sock.recv_from(&mut buf).unwrap();
+        let mut reply = challenge(&buf[OOB.len() + 1..OOB.len() + 5]);
+        let at = reply.len() - 4;
+        reply[at..].copy_from_slice(&auth.to_le_bytes());
+        sock.send_to(&reply, from).unwrap();
+    };
+    let err = std::thread::scope(|s| {
+        s.spawn(|| answer(&game, AUTH_STEAM));
+        s.spawn(|| {
+            answer(&tv, AUTH_HASHEDCDKEY);
+            let mut buf = [0u8; 2048];
+            let (n, from) = tv.recv_from(&mut buf).unwrap();
+            let (nonce, _) = connect_fields(&buf[..n]);
+            let mut refused = OOB.to_vec();
+            refused.push(b'9');
+            refused.extend_from_slice(nonce);
+            refused.extend_from_slice(b"#GameUI_ServerRejectBadPassword\0");
+            tv.send_to(&refused, from).unwrap();
+        });
+        watch::watch(&w, &AtomicBool::new(false), &mut |_| {}).unwrap_err()
+    });
+    assert!(matches!(err, watch::WatchError::Rejected { kind: stvtf::Fatal::BadPassword, .. }), "{err}");
+}

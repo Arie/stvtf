@@ -412,3 +412,13 @@ fn teams_and_kinds_use_the_documented_spellings() {
     assert_eq!(s(HealSource::OnHit), json!("on_hit"));
     assert_eq!(s(ChatKind::SayText), json!("SayText"));
 }
+
+#[test]
+fn a_line_names_its_players_and_tick() {
+    let voice = Line::VoiceCommand(VoiceCommand { tick: 9, player: PlayerId(4), menu: 0, item: 1 });
+    assert_eq!(voice.players().collect::<Vec<_>>(), [PlayerId(4)]);
+    assert_eq!(voice.tick(), Some(9));
+    let status = Line::Status(Status::Changelevel);
+    assert_eq!(status.players().count(), 0);
+    assert_eq!(status.tick(), None);
+}

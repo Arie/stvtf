@@ -311,4 +311,32 @@ mod tests {
         assert!(!format!("{w:?}").contains("hunter2"));
         assert!(!format!("{w:?}").contains("swordfish"));
     }
+
+    #[test]
+    fn a_rejection_cannot_drive_the_terminal() {
+        let e = WatchError::Rejected { kind: Fatal::BadPassword, reason: "bad\x1b[2Jpassword\n".into() };
+        assert_eq!(e.to_string(), "bad\\u{1b}[2Jpassword\\n");
+        assert!(std::error::Error::source(&e).is_none());
+    }
+
+    #[test]
+    fn other_errors_keep_their_chain() {
+        let e = WatchError::from(anyhow!("the cause").context("the effect"));
+        assert_eq!(e.to_string(), "the effect: the cause");
+        assert!(std::error::Error::source(&e).is_some());
+    }
+
+    #[test]
+    fn only_ipv4_addresses_resolve() {
+        assert_eq!(resolve("127.0.0.1:27020").unwrap().port(), 27020);
+        assert!(resolve("127.0.0.1").unwrap_err().to_string().contains("resolving"));
+        assert!(resolve("[::1]:27020").unwrap_err().to_string().contains("no IPv4 address"));
+    }
+
+    #[test]
+    fn a_build_without_data_needs_a_demo() {
+        assert!(tables(crate::CURRENT_BUILD, None).is_ok());
+        assert!(tables("1", None).err().unwrap().to_string().contains("--tables"));
+        assert!(tables(crate::CURRENT_BUILD, Some(Path::new("/nonexistent.dem"))).is_err(), "a given demo counts");
+    }
 }

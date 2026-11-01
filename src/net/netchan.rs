@@ -136,6 +136,15 @@ pub fn build_packet(h: &OutHeader, reliable_region: Option<&BitBuf>, unreliable:
     out
 }
 
+/// Puts a packet's checksum right after a test changed the packet.
+#[cfg(test)]
+pub fn reseal(packet: &mut [u8]) {
+    if packet.len() >= HEADER_MIN {
+        let sum = fold_checksum(&packet[CHECKSUM_START..]);
+        packet[CHECKSUM_AT..CHECKSUM_START].copy_from_slice(&sum.to_le_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +195,26 @@ mod tests {
         // 3-bit reliable region followed by an 8-bit unreliable byte lands unaligned.
         let pkt = build_packet(&header(1, 1, 1, 0), Some(&bits(0b101, 3)), Some(&bits(0xff, 8)));
         assert_eq!(&pkt[16..], &[0b1111_1101, 0b0000_0111]);
+    }
+
+    #[test]
+    fn short_and_truncated_headers_are_errors() {
+        assert!(decode_header(&[0; HEADER_MIN - 1]).is_err());
+        assert!(!verify_checksum(&[0; HEADER_MIN - 1]));
+        let mut d = [0; HEADER_MIN];
+        d[FLAGS_AT] = FLAG_CHOKED;
+        assert!(decode_header(&d).unwrap_err().to_string().contains("choked"));
+        d[FLAGS_AT] = FLAG_CHALLENGE;
+        assert!(decode_header(&d).unwrap_err().to_string().contains("challenge"));
+    }
+
+    #[test]
+    fn choked_comes_before_the_challenge() {
+        let mut d = vec![0; HEADER_MIN];
+        d[FLAGS_AT] = FLAG_CHOKED | FLAG_CHALLENGE;
+        d.push(3);
+        d.extend_from_slice(&9u32.to_le_bytes());
+        let h = decode_header(&d).unwrap();
+        assert_eq!((h.choked, h.challenge, h.body_offset), (Some(3), Some(9), d.len()));
     }
 }

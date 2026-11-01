@@ -223,4 +223,58 @@ mod tests {
         assert_eq!(r.read_bits(6).unwrap(), messages::NET_TICK);
         assert_eq!(r.read_i32().unwrap(), 42);
     }
+
+    #[test]
+    fn bad_compressed_packets_are_counted_and_dropped() {
+        let mut rx = Receiver::new(Some(77));
+        let now = Instant::now();
+        let marker = (-3i32).to_le_bytes();
+        assert!(rx.feed(&[marker.as_slice(), b"NOPE"].concat(), now).is_none());
+        let garbled = [marker.as_slice(), compress::SNAPPY_MAGIC, &[0xff; 8]].concat();
+        assert!(rx.feed(&garbled, now).is_none());
+        assert_eq!(rx.counters.compressed_bad, 2);
+        assert_eq!(rx.in_seq, 0);
+    }
+
+    #[test]
+    fn out_of_band_packets_are_not_for_the_channel() {
+        let mut rx = Receiver::new(Some(77));
+        assert!(rx.feed(b"\xff\xff\xff\xffjunk", Instant::now()).is_none());
+    }
+
+    /// The subchannel's bit must still flip, or the server resends the block forever. What
+    /// follows a reliable part that did not parse cannot be found: it is not read as messages.
+    #[test]
+    fn a_bad_reliable_part_still_names_its_subchannel_and_loses_the_tail() {
+        let mut w = crate::net::bits::BitWriter::new();
+        w.write_bits(5, reliable::SUBCHANNEL_BITS);
+        w.write_bit(true);
+        w.write_bit(true);
+        w.write_bits(3, reliable::START_FRAGMENT_BITS); // a fragment of a transfer never opened
+        w.write_bits(1, reliable::FRAGMENT_COUNT_BITS);
+        let tick = messages::tick(1000);
+        let pkt = packet(5, 77, Some(&w.finish()), Some(&tick));
+        let mut rx = Receiver::new(Some(77));
+        let got = rx.feed(&pkt, Instant::now()).unwrap();
+        assert!(!got.reliable_ok);
+        assert_eq!(got.subchannel, Some(5));
+        assert!(got.streams.is_empty());
+        assert_eq!(rx.counters.reliable_errors, 1);
+    }
+
+    #[test]
+    fn choked_packets_are_not_counted_as_lost() {
+        let mut rx = Receiver::new(None);
+        let mut with_choked = |sequence: i32, choked: u8| {
+            let mut d = vec![0; netchan::CHECKSUM_START];
+            d[..4].copy_from_slice(&sequence.to_le_bytes());
+            d[8] = netchan::FLAG_CHOKED;
+            d.extend_from_slice(&[0, choked]);
+            netchan::reseal(&mut d);
+            rx.feed(&d, Instant::now()).unwrap();
+        };
+        with_choked(10, 0);
+        with_choked(14, 1);
+        assert_eq!(rx.counters.lost, 2, "of the 3 packets skipped, the server says it choked one");
+    }
 }

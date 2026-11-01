@@ -269,7 +269,7 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
     Err(anyhow!("A2S_INFO challenge loop"))
 }
 
-fn parse_a2s_version(data: &[u8]) -> Result<String> {
+pub(crate) fn parse_a2s_version(data: &[u8]) -> Result<String> {
     if data.len() < A2S_STRINGS || data[..OOB_KIND] != OOB_PREFIX || data[OOB_KIND] != S2A_INFO {
         bail!("not an A2S_INFO reply");
     }
@@ -544,5 +544,105 @@ mod tests {
         d.extend_from_slice(b"11138802\0");
         assert_eq!(parse_a2s_version(&d).unwrap(), "11138802");
         assert!(parse_a2s_version(&d[..d.len() - 15]).is_err(), "truncated");
+    }
+
+    #[test]
+    fn replies_that_are_no_challenge_are_errors() {
+        let nonce = 5;
+        assert!(parse_challenge(b"\x01\x02\x03\x04\x05", nonce).is_err());
+        assert!(parse_challenge(b"\xff\xff\xff\xffZ", nonce).is_err());
+        let good = build_challenge(9, nonce);
+        assert!(parse_challenge(&good[..CHALLENGE_LEN - 1], nonce).unwrap_err().to_string().contains("truncated"));
+        let mut bad_magic = good.clone();
+        bad_magic[CHALLENGE_MAGIC] ^= 1;
+        assert!(parse_challenge(&bad_magic, nonce).unwrap_err().to_string().contains("magic"));
+        assert_eq!(parse_challenge(&good, nonce + 1).unwrap(), None, "someone else's");
+    }
+
+    #[test]
+    fn a_game_port_says_what_to_do() {
+        let message = GamePort("1.2.3.4:27015".parse().unwrap()).to_string();
+        assert!(message.contains("1.2.3.4:27015") && message.contains("tv_port"), "{message}");
+    }
+
+    /// A server that answers `connect`'s getchallenge as `reply` says, and its connect as `after`.
+    fn fake_server(
+        reply: impl FnOnce(u32) -> Vec<u8> + Send + 'static,
+        after: impl FnOnce(&UdpSocket, SocketAddr) + Send + 'static,
+    ) -> (SocketAddr, std::thread::JoinHandle<()>) {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let addr = server.local_addr().unwrap();
+        let thread = std::thread::spawn(move || {
+            let mut buf = [0u8; 2048];
+            let (_, client) = server.recv_from(&mut buf).unwrap();
+            let nonce = u32::from_le_bytes(buf[OOB_KIND + 1..OOB_KIND + 5].try_into().unwrap());
+            server.send_to(&reply(nonce), client).unwrap();
+            after(&server, client);
+        });
+        (addr, thread)
+    }
+
+    #[test]
+    fn a_server_wanting_another_auth_protocol_is_refused() {
+        let reply = |nonce| {
+            let mut c = build_challenge(9, nonce);
+            c[CHALLENGE_AUTH..CHALLENGE_AUTH + 4].copy_from_slice(&99u32.to_le_bytes());
+            c
+        };
+        let (addr, server) = fake_server(reply, |_, _| {});
+        let err = connect(addr, "me", "", "1", Duration::from_secs(5)).err().unwrap();
+        assert!(err.to_string().contains("auth protocol 99"), "{err}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn no_reply_to_a_getchallenge_times_out() {
+        let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = silent.local_addr().unwrap();
+        let err = connect(addr, "me", "", "1", Duration::from_millis(50)).err().unwrap();
+        assert!(err.to_string().contains("no challenge reply"), "{err}");
+    }
+
+    /// We may hold a slot on the server without knowing: it is given back before giving up.
+    #[test]
+    fn no_accept_times_out_and_says_goodbye() {
+        let (addr, server) = fake_server(
+            |nonce| build_challenge(9, nonce),
+            |sock, _| {
+                let mut buf = [0u8; 2048];
+                sock.recv_from(&mut buf).unwrap(); // the connect
+                let (n, _) = sock.recv_from(&mut buf).unwrap();
+                assert!(netchan::verify_checksum(&buf[..n]), "a channel packet");
+                let h = netchan::decode_header(&buf[..n]).unwrap();
+                assert_eq!(h.challenge, Some(9));
+                let body = crate::net::bits::BitReader::at(&buf[..n], h.body_offset * 8)
+                    .read_bits(messages::TYPE_BITS)
+                    .unwrap();
+                assert_eq!(body, messages::NET_DISCONNECT);
+            },
+        );
+        let err = connect(addr, "me", "", "1", Duration::from_millis(50)).err().unwrap();
+        assert!(err.to_string().contains("no accept"), "{err}");
+        server.join().unwrap();
+    }
+
+    /// The accept was lost and the server's first channel packet came instead: it is kept.
+    #[test]
+    fn channel_data_before_the_accept_counts_as_one() {
+        let (addr, server) = fake_server(
+            |nonce| build_challenge(9, nonce),
+            |sock, client| {
+                let mut buf = [0u8; 2048];
+                sock.recv_from(&mut buf).unwrap();
+                sock.send_to(&[1], client).unwrap(); // too short to be anything: skipped
+                sock.send_to(b"\xff\xff\xff\xffZ", client).unwrap(); // out of band, of no use
+                sock.send_to(&[1, 0, 0, 0, 0, 0], client).unwrap();
+            },
+        );
+        let conn = connect(addr, "me", "", "1", Duration::from_secs(5)).unwrap();
+        assert_eq!(conn.pending.as_deref(), Some([1, 0, 0, 0, 0, 0].as_slice()));
+        assert_eq!(conn.challenge, 9);
+        server.join().unwrap();
     }
 }

@@ -265,4 +265,64 @@ mod tests {
         let region = Reassembler::default().feed(&w.into_bytes(), 0).unwrap();
         assert_eq!(region.completed, vec![body]);
     }
+
+    /// The start of a one-fragment block with the given flags, up to its size.
+    fn opening(file: Option<&str>, uncompressed: Option<u32>, nbytes: usize) -> BitWriter {
+        let mut w = BitWriter::new();
+        w.write_bits(2, SUBCHANNEL_BITS);
+        w.write_bit(true);
+        w.write_bit(true);
+        w.write_bits(0, START_FRAGMENT_BITS);
+        w.write_bits(1, FRAGMENT_COUNT_BITS);
+        w.write_bit(file.is_some());
+        if let Some(name) = file {
+            w.write_bits(77, TRANSFER_ID_BITS);
+            w.write_bytes(name.as_bytes());
+            w.write_bits(0, 8);
+        }
+        w.write_bit(uncompressed.is_some());
+        if let Some(size) = uncompressed {
+            w.write_bits(size, SIZE_BITS);
+        }
+        w.write_bits(nbytes as u32, SIZE_BITS);
+        w
+    }
+
+    #[test]
+    fn a_transfer_declared_over_the_cap_is_refused() {
+        let w = opening(None, None, MAX_TRANSFER + 1);
+        let err = Reassembler::default().feed(&w.into_bytes(), 0).unwrap_err();
+        assert!(err.to_string().contains("over cap"), "{err}");
+    }
+
+    #[test]
+    fn a_file_header_is_read_past() {
+        let mut w = opening(Some("maps/x.bsp"), None, 5);
+        w.write_bytes(b"hello");
+        w.write_bit(false);
+        let region = Reassembler::default().feed(&w.into_bytes(), 0).unwrap();
+        assert_eq!(region.completed, [b"hello".to_vec()]);
+    }
+
+    #[test]
+    fn a_transfer_must_inflate_to_the_size_it_declared() {
+        let data = vec![7; 200];
+        let packed = compress::snappy_transfer(&data);
+        for (declared, ok) in [(200, true), (199, false)] {
+            let mut w = opening(None, Some(declared), packed.len());
+            w.write_bytes(&packed);
+            w.write_bit(false);
+            let got = Reassembler::default().feed(&w.into_bytes(), 0);
+            assert_eq!(got.is_ok(), ok, "declared {declared}");
+            if ok {
+                assert_eq!(got.unwrap().completed, std::slice::from_ref(&data));
+            }
+        }
+    }
+
+    #[test]
+    fn the_subchannel_can_be_read_from_a_region_that_does_not_parse() {
+        assert_eq!(latch_subchannel(&[0b101], 0), Some(5));
+        assert_eq!(latch_subchannel(&[], 0), None);
+    }
 }

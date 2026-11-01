@@ -157,4 +157,34 @@ mod tests {
         let later = t0 + Duration::from_secs(6);
         assert!(r.feed(&part(9, 2, 1, 2, b"cd"), later).is_none(), "first part expired");
     }
+
+    #[test]
+    fn a_part_too_short_for_its_header_is_dropped() {
+        let mut r = SplitReassembler::default();
+        assert!(r.feed(&[0xfe, 0xff, 0xff, 0xff], Instant::now()).is_none());
+        assert_eq!(r.dropped, 1);
+    }
+
+    #[test]
+    fn a_group_declared_anew_starts_over() {
+        let mut r = SplitReassembler::default();
+        let now = Instant::now();
+        assert!(r.feed(&part(1, 3, 0, 4, b"old!"), now).is_none());
+        assert!(r.feed(&part(1, 2, 0, 4, b"abcd"), now).is_none());
+        assert_eq!(r.feed(&part(1, 2, 1, 4, b"ef"), now).unwrap(), b"abcdef");
+    }
+
+    #[test]
+    fn too_many_open_groups_drop_the_oldest() {
+        let mut r = SplitReassembler::default();
+        let start = Instant::now();
+        for gid in 0..=MAX_OPEN as i32 {
+            let at = start + Duration::from_millis(gid as u64);
+            assert!(r.feed(&part(gid, 2, 0, 4, b"abcd"), at).is_none());
+        }
+        assert_eq!(r.dropped, 1);
+        let at = start + Duration::from_millis(100);
+        assert_eq!(r.feed(&part(1, 2, 1, 4, b"ef"), at).unwrap(), b"abcdef", "a newer group still joins");
+        assert!(r.feed(&part(0, 2, 1, 4, b"ef"), at).is_none(), "the oldest group's first part is gone");
+    }
 }
