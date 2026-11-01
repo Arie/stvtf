@@ -16,6 +16,9 @@
 //! - A map change re-runs the server's signon on our connection: the log starts again, and
 //!   every client signs on again with it.
 //! - A client in the game gets one packet per server datagram, as from the server itself.
+//! - Reliable messages go one transfer at a time, the next when the last is acked, so they can
+//!   reach a client up to about a round trip behind the datagrams: 12 ticks at most, on 8% of
+//!   a capture's lines, with 200 ms of ping. Their own order stays.
 //!
 //! Connectionless replies are never larger than what asked for them, unless the address proved
 //! it is real by answering a challenge, so the relay cannot be used to reflect traffic.

@@ -53,9 +53,10 @@ fn through_relay(records: &[capture::Record<'_>], opt: &Options, speed: f64) -> 
 }
 
 /// The relay sends one reliable transfer at a time, each waiting for its ack, while datagrams go
-/// out on the capture's clock. At a replay's speed, a busy machine sees reliable events some
-/// ticks late, or frames lost. So a difference only counts at the speed of the last try, where
-/// a client has plenty of time; a bug in the relay shows at any speed.
+/// out on the capture's clock. At a replay's speed, a slow or busy client sees reliable events
+/// some ticks late, or overflows its socket's buffer and loses frames. So a difference only counts
+/// at the speed of the last try, where a client has plenty of time; a bug in the relay shows at
+/// any speed.
 #[test]
 fn a_client_of_the_relay_decodes_what_the_capture_holds() {
     let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
