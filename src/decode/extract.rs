@@ -2589,4 +2589,92 @@ mod cap_tests {
         assert_eq!(resist(RESIST_BLAST), Resist::Blast);
         assert_eq!(resist(2), Resist::Fire);
     }
+
+    #[test]
+    fn round_states() {
+        let want = [
+            (0, Round::Init),
+            (1, Round::Pregame),
+            (2, Round::StartGame),
+            (3, Round::Preround),
+            (4, Round::Running),
+            (5, Round::TeamWin),
+            (6, Round::Restart),
+            (7, Round::Stalemate),
+            (8, Round::GameOver),
+            (9, Round::Bonus),
+            (10, Round::BetweenRounds),
+        ];
+        for (raw, round) in want {
+            assert_eq!(round_from_raw(raw), round, "{raw}");
+        }
+    }
+
+    #[test]
+    fn chat_kinds() {
+        let want = [
+            (ChatMessageKind::ChatAll, ChatKind::ChatAll),
+            (ChatMessageKind::ChatTeam, ChatKind::ChatTeam),
+            (ChatMessageKind::ChatAllDead, ChatKind::ChatAllDead),
+            (ChatMessageKind::ChatTeamDead, ChatKind::ChatTeamDead),
+            (ChatMessageKind::ChatAllSpec, ChatKind::ChatAllSpec),
+            (ChatMessageKind::NameChange, ChatKind::NameChange),
+            (ChatMessageKind::Empty, ChatKind::Empty),
+        ];
+        for (kind, chat) in want {
+            assert_eq!(chat_kind(kind), chat);
+        }
+    }
+
+    #[test]
+    fn ubers_by_condition_the_stronger_first() {
+        use PlayerCondition::{
+            CritBoosted, Invulnerable, MedigunUberBlastResist, MedigunUberBulletResist, MedigunUberFireResist, MegaHeal,
+        };
+        let words = |conds: &[PlayerCondition]| {
+            let mut w = [0; COND_WORDS];
+            for c in conds {
+                let n = *c as usize;
+                let word = if n < COND_BITS { 0 } else { n / COND_BITS + 1 };
+                w[word] |= 1 << (n % COND_BITS);
+            }
+            w
+        };
+        let want = [
+            (Invulnerable, Ubered::Uber),
+            (MegaHeal, Ubered::Quickfix),
+            (MedigunUberBulletResist, Ubered::VaccinatorBullet),
+            (MedigunUberBlastResist, Ubered::VaccinatorBlast),
+            (MedigunUberFireResist, Ubered::VaccinatorFire),
+            (CritBoosted, Ubered::Kritz),
+        ];
+        for (cond, uber) in want {
+            assert_eq!(ubered(&words(&[cond])), Some(uber));
+        }
+        assert_eq!(ubered(&words(&[])), None);
+        assert_eq!(ubered(&words(&[CritBoosted, Invulnerable])), Some(Ubered::Uber));
+    }
+
+    #[test]
+    fn stalemate_and_overtime_are_moments() {
+        use tf_demo_parser::demo::gameevent_gen::{TeamPlayOvertimeBeginEvent, TeamPlayRoundStalemateEvent};
+        let stalemate = GameEvent::TeamPlayRoundStalemate(TeamPlayRoundStalemateEvent { reason: 0 });
+        let overtime = GameEvent::TeamPlayOvertimeBegin(TeamPlayOvertimeBeginEvent {});
+        assert_eq!(round_event(&stalemate, 5), Some(Line::Stalemate(out::Moment { tick: 5 })));
+        assert_eq!(round_event(&overtime, 6), Some(Line::Overtime(out::Moment { tick: 6 })));
+    }
+
+    #[test]
+    fn building_kinds_by_number() {
+        let want = [
+            (0, BuildingKind::Dispenser),
+            (1, BuildingKind::Teleporter),
+            (2, BuildingKind::Sentry),
+            (3, BuildingKind::Sapper),
+            (4, BuildingKind::Unknown),
+        ];
+        for (object, kind) in want {
+            assert_eq!(building_kind(object), kind, "{object}");
+        }
+    }
 }

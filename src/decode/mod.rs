@@ -389,4 +389,21 @@ mod tests {
         let life = dec.feed(bye.bytes(), bye.nbits());
         assert_eq!(life.disconnect.as_deref(), Some("Server shutting down"));
     }
+
+    #[test]
+    fn signon_states_map_one_to_one() {
+        let want = [
+            (SignOnState::None, Signon::None),
+            (SignOnState::Challenge, Signon::Challenge),
+            (SignOnState::Connected, Signon::Connected),
+            (SignOnState::New, Signon::New),
+            (SignOnState::PreSpawn, Signon::PreSpawn),
+            (SignOnState::Spawn, Signon::Spawn),
+            (SignOnState::Full, Signon::Full),
+            (SignOnState::ChangeLevel, Signon::ChangeLevel),
+        ];
+        for (state, signon_state) in want {
+            assert_eq!(signon(&state), signon_state);
+        }
+    }
 }

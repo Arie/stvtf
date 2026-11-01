@@ -422,3 +422,50 @@ fn a_line_names_its_players_and_tick() {
     assert_eq!(status.players().count(), 0);
     assert_eq!(status.tick(), None);
 }
+
+/// How a reader follows one player: a line must give everyone it is about.
+#[test]
+fn every_kind_of_line_gives_its_players() {
+    let (a, b) = (PlayerId(1), PlayerId(2));
+    let tick = 1;
+    let team = Team::Red;
+    let change = ObjectChange { tick, player: a, object: BuildingKind::Sentry, id: 1 };
+    let vote = VoteStarted {
+        tick,
+        team,
+        caller: Some(a),
+        issue: String::new(),
+        details: String::new(),
+        yes_no: true,
+        target: Some(b),
+    };
+    let flag = Flag { tick, event: FlagAction::Pickup, player: Some(a), carrier: Some(b), team };
+    let both: Vec<Line> = vec![
+        Line::PassFree(PassFree { tick, player: a, attacker: Some(b) }),
+        Line::PassCaught(PassCaught { tick, passer: a, catcher: b, dist: 0.0, duration: 0.0 }),
+        Line::PassScore(PassScore { tick, scorer: a, assister: Some(b), points: 1 }),
+        Line::PassStolen(PassStolen { tick, victim: a, attacker: b }),
+        Line::PassBlocked(PassBlocked { tick, owner: a, blocker: b }),
+        Line::TeamLeaderKilled(TeamLeaderKilled { tick, killer: Some(a), victim: b }),
+        Line::VoteStarted(vote),
+        Line::Flag(flag),
+        Line::MedicDefended(MedicDefended { tick, player: a, medic: b }),
+    ];
+    for line in &both {
+        assert_eq!(line.players().collect::<Vec<_>>(), [a, b], "{line:?}");
+    }
+    let one: Vec<Line> = vec![
+        Line::RobotKilled(RobotKilled { tick, attacker: Some(a), weapon: String::new() }),
+        Line::TeamChange(TeamChange { tick, player: a, team, old_team: team, disconnect: false }),
+        Line::PlayerLeave(PlayerLeave { tick, player: a, name: String::new(), reason: String::new() }),
+        Line::Build(change.clone()),
+        Line::BuildingDetonated(change),
+        Line::PassGet(PassGet { tick, player: a }),
+        Line::PointsScored(PointsScored { tick, player: a, method: ScoreMethod::Unknown, amount: 1 }),
+        Line::SpecialScore(PlayerMoment { tick, player: a }),
+        Line::VoteCast(VoteCast { tick, player: Some(a), option: 0, team }),
+    ];
+    for line in &one {
+        assert_eq!(line.players().collect::<Vec<_>>(), [a], "{line:?}");
+    }
+}

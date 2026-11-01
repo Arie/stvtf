@@ -626,7 +626,7 @@ const PACE_POLL: Duration = Duration::from_millis(2);
 
 #[cfg(test)]
 mod tests {
-    use super::{Fatal, Options, RESEND_AFTER, Session};
+    use super::{End, Fatal, Next, Options, RESEND_AFTER, Session, drive, finish, replay};
     use crate::decode::Lifecycle;
     use crate::net::messages::{self, Signon};
     use crate::output::{Line, Status};
@@ -700,5 +700,46 @@ mod tests {
         assert_eq!(s.ack_tick(), 500, "the same map again");
         s.lifecycle(info(2), &mut emit);
         assert_eq!(s.ack_tick(), 0);
+    }
+
+    fn tables() -> crate::decode::Tables {
+        crate::decode::Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap()
+    }
+
+    #[test]
+    fn a_failing_source_ends_the_session_saying_why() {
+        let opt = Options::default();
+        let mut s = Session::new(None, 0, &opt);
+        let mut next = |_: &mut [u8]| Ok(Next::Failed("socket error: gone".to_string()));
+        let outcome = drive(&mut s, &tables(), None, &mut next, &mut |_| {}).unwrap();
+        assert!(matches!(outcome.end, End::Broken(b) if b.reason == "socket error: gone" && !b.streamed));
+    }
+
+    /// `connect` can return with the first packet of the channel already read, when the accept
+    /// was lost: it counts as if it came next.
+    #[test]
+    fn a_packet_read_while_connecting_is_decoded_first() {
+        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bots_cp_badlands.cap")).unwrap();
+        let records = crate::capture::read(&bytes).unwrap();
+        let challenge = u32::from_le_bytes(records[0].data.try_into().unwrap());
+        let datagrams: Vec<&[u8]> = records[1..].iter().map(|r| r.data).take(200).collect();
+        let tables = tables();
+        let opt = Options::default();
+        let mut whole = Vec::new();
+        replay(challenge, &datagrams, &tables, &opt, &mut |l| whole.push(l)).unwrap();
+
+        let mut s = Session::new(None, challenge, &opt);
+        let mut rest = datagrams[1..].iter();
+        let mut next = |buf: &mut [u8]| {
+            Ok(rest.next().map_or(Next::Stop, |d| {
+                buf[..d.len()].copy_from_slice(d);
+                Next::Datagram(d.len())
+            }))
+        };
+        let mut lines = Vec::new();
+        let outcome = drive(&mut s, &tables, Some(datagrams[0]), &mut next, &mut |l| lines.push(l)).unwrap();
+        finish(&s, &outcome, &mut |l| lines.push(l));
+        assert!(lines.len() > 1, "{lines:?}");
+        assert_eq!(lines, whole);
     }
 }

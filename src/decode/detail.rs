@@ -625,4 +625,60 @@ mod tests {
         assert_eq!(score_method(3), ScoreMethod::ReactorStolen);
         assert_eq!(score_method(4), ScoreMethod::Unknown);
     }
+
+    /// The line of an event, with entity 10 being player 12 and users as they are.
+    fn line_of(event: &GameEvent) -> Option<Line> {
+        with_lookup(|ent| (ent == 10).then_some(PlayerId(12)), &RawNames::new(), |look| game_event(event, look))
+    }
+
+    #[test]
+    fn rocket_pack_flights_are_jumps() {
+        use tf_demo_parser::demo::gameevent_gen::{RocketPackLandedEvent, RocketPackLaunchEvent};
+        let line = |phase| Some(jump(3, 4, JumpKind::RocketPack, phase));
+        let launch = GameEvent::RocketPackLaunch(RocketPackLaunchEvent { user_id: 4, play_sound: true });
+        assert_eq!(line_of(&launch), line(JumpPhase::Start));
+        let landed = GameEvent::RocketPackLanded(RocketPackLandedEvent { user_id: 4 });
+        assert_eq!(line_of(&landed), line(JumpPhase::Land));
+    }
+
+    #[test]
+    fn points_lock_and_unlock() {
+        use tf_demo_parser::demo::gameevent_gen::{TeamPlayPointLockedEvent, TeamPlayPointUnlockedEvent};
+        let name = || "Second".into();
+        let locked = GameEvent::TeamPlayPointLocked(TeamPlayPointLockedEvent { cp: 1, cp_name: name(), team: 2 });
+        let unlocked = GameEvent::TeamPlayPointUnlocked(TeamPlayPointUnlockedEvent { cp: 1, cp_name: name(), team: 2 });
+        for (event, want) in [(locked, true), (unlocked, false)] {
+            let Some(Line::PointLocked(p)) = line_of(&event) else { panic!("{event:?}") };
+            assert_eq!((p.tick, p.point, p.name.as_str(), p.locked), (3, 1, "Second", want));
+        }
+    }
+
+    #[test]
+    fn time_remaining_and_detonated_buildings() {
+        use tf_demo_parser::demo::gameevent_gen::{ObjectDetonatedEvent, TfMapTimeRemainingEvent};
+        let time = GameEvent::TfMapTimeRemaining(TfMapTimeRemainingEvent { seconds: 60 });
+        let Some(Line::TimeRemaining(t)) = line_of(&time) else { panic!() };
+        assert_eq!((t.tick, t.seconds), (3, 60));
+        let gone = GameEvent::ObjectDetonated(ObjectDetonatedEvent { user_id: 4, object_type: 2, index: 9 });
+        assert_eq!(
+            line_of(&gone),
+            Some(Line::BuildingDetonated(ObjectChange {
+                tick: 3,
+                player: PlayerId(4),
+                object: crate::output::BuildingKind::Sentry,
+                id: 9
+            }))
+        );
+    }
+
+    #[test]
+    fn a_blocked_pass_needs_both_players_known() {
+        use tf_demo_parser::demo::gameevent_gen::PassBallBlockedEvent;
+        let blocked = |owner, blocker| GameEvent::PassBallBlocked(PassBallBlockedEvent { owner, blocker });
+        assert_eq!(
+            line_of(&blocked(10, 10)),
+            Some(Line::PassBlocked(PassBlocked { tick: 3, owner: PlayerId(12), blocker: PlayerId(12) }))
+        );
+        assert_eq!(line_of(&blocked(10, 11)), None);
+    }
 }

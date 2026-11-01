@@ -220,6 +220,9 @@ fn relay_connect_record_terminate_and_replay() {
     assert_eq!(reason, "stopped");
     let exit = client.0.wait().unwrap();
     assert!(exit.success(), "{exit:?}");
+    send_signal(&relay, "-TERM");
+    let exit = relay.0.wait().unwrap();
+    assert!(exit.success(), "the relay stops as cleanly: {exit:?}");
 
     // A recording is never overwritten.
     fails_with(&["connect", "127.0.0.1:1", "--record", cap.to_str().unwrap()], "creating capture");
