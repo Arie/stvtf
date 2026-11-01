@@ -2,7 +2,7 @@
 
 use crate::capture::Recorder;
 use crate::decode::Tables;
-use crate::net::handshake::{self, GamePort, Rejected};
+use crate::net::handshake::{self, GamePort, Rejected, Stopped, Wait};
 use crate::output::{Line, Status};
 use crate::relay::{Relay, RelayConfig};
 use crate::session::DEFAULT_SNAPSHOT_HZ;
@@ -188,6 +188,7 @@ pub(crate) fn watch_with(
     let mut opt = Options { name: w.name.clone(), snapshot_hz: w.snapshot_hz, ..Options::default() };
     let mut loaded: Option<(String, Tables)> = None;
     let deadline = w.duration.map(|d| Instant::now() + d);
+    let wait = Wait { stop, until: deadline };
     let mut recorder = w.record.as_deref().map(Recorder::create).transpose()?;
     let mut backoff = w.retry_after;
     let mut tried_tv_port = false;
@@ -200,7 +201,7 @@ pub(crate) fn watch_with(
         // forged build only gets this attempt refused, so it cannot end the watch.
         build = match &w.build {
             Some(b) => b.clone(),
-            None => match handshake::a2s_version(server, A2S_TIMEOUT) {
+            None => match handshake::a2s_version(server, A2S_TIMEOUT, wait) {
                 Ok(b) if plausible_build(&b) => b,
                 _ => build,
             },
@@ -221,7 +222,7 @@ pub(crate) fn watch_with(
             _ => loaded.insert((source.to_string(), tables(source, w.tables.as_deref())?)),
         };
         emit(Line::Status(Status::Connecting { server: server.to_string(), build: build.clone() }));
-        let streamed = match handshake::connect(server, &opt.name, &w.password, &build, CONNECT_TIMEOUT) {
+        let streamed = match handshake::connect(server, &opt.name, &w.password, &build, CONNECT_TIMEOUT, wait) {
             Ok(conn) => match session::run(&conn, class_tables, &opt, recorder.as_mut(), stop, deadline, tap, emit)? {
                 End::Stopped => return Ok(()),
                 End::Broken(b) => {
@@ -231,6 +232,15 @@ pub(crate) fn watch_with(
                     b.streamed
                 }
             },
+            Err(e) if e.is::<Stopped>() => {
+                emit(Line::Status(Status::Disconnected {
+                    reason: "stopped".to_string(),
+                    decode_errors: 0,
+                    packets: 0,
+                    lost: 0,
+                }));
+                return Ok(());
+            }
             Err(e) => {
                 emit(Line::Status(Status::ConnectFailed { reason: e.to_string() }));
                 // Given the game port, try SourceTV's default place next to it: game port + 5.

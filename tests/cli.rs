@@ -234,3 +234,109 @@ fn relay_connect_record_terminate_and_replay() {
     assert!(replayed.iter().any(|l| l["type"] == "snapshot"), "and holds entities");
     std::fs::remove_file(&cap).unwrap();
 }
+
+/// A `SourceTV` that takes a connect and then says nothing, or nothing at all if `answers` is false.
+struct SilentServer {
+    addr: String,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SilentServer {
+    fn start(answers: bool) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        const OOB: [u8; 4] = [0xff; 4];
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        let addr = sock.local_addr().unwrap().to_string();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 2048];
+            while !stopping.load(Ordering::Relaxed) {
+                let Ok((n, from)) = sock.recv_from(&mut buf) else { continue };
+                if answers && n >= 9 && buf[..4] == OOB && buf[4] == b'q' {
+                    let mut reply = OOB.to_vec();
+                    reply.push(b'A');
+                    reply.extend_from_slice(&0x5A4F_4933u32.to_le_bytes());
+                    reply.extend_from_slice(&7u32.to_le_bytes());
+                    reply.extend_from_slice(&buf[5..9]);
+                    reply.extend_from_slice(&2u32.to_le_bytes());
+                    sock.send_to(&reply, from).unwrap();
+                }
+            }
+        });
+        SilentServer { addr, stop }
+    }
+}
+
+impl Drop for SilentServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn watch_silent(server: &SilentServer, extra: &[&str]) -> Running {
+    Running(
+        stvtf()
+            .args(["connect", &server.addr, "--build", stvtf::CURRENT_BUILD])
+            .args(extra)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    )
+}
+
+/// The statuses a program wrote, once it has exited, and how long that took from `started`.
+fn statuses_at_exit(mut child: Running, started: std::time::Instant) -> (Vec<String>, Duration) {
+    let mut out = Vec::new();
+    child.0.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    let exit = child.0.wait().unwrap();
+    assert!(exit.success(), "{exit:?}");
+    let states = lines(&out).iter().filter_map(|l| l["state"].as_str().map(str::to_string)).collect();
+    (states, started.elapsed())
+}
+
+/// `--seconds` is a promise to whoever runs this: a connect takes up to 6 s, and must not overrun.
+#[test]
+fn seconds_are_kept_while_connecting() {
+    for answers in [false, true] {
+        let server = SilentServer::start(answers);
+        let started = std::time::Instant::now();
+        let child = watch_silent(&server, &["--seconds", "1"]);
+        let (states, took) = statuses_at_exit(child, started);
+        assert!(took < Duration::from_secs(3), "answers {answers}: took {took:?}");
+        assert_eq!(states, ["connecting", "disconnected"], "answers {answers}");
+    }
+}
+
+/// Stopping while connecting is stopping: nothing failed to connect.
+#[cfg(unix)]
+#[test]
+fn a_stop_while_connecting_says_so() {
+    for answers in [false, true] {
+        let server = SilentServer::start(answers);
+        let child = watch_silent(&server, &[]);
+        std::thread::sleep(Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        send_signal(&child, "-TERM");
+        let (states, took) = statuses_at_exit(child, started);
+        assert!(took < Duration::from_secs(2), "answers {answers}: took {took:?}");
+        assert_eq!(states, ["connecting", "disconnected"], "answers {answers}");
+    }
+}
+
+/// Ctrl-Z and `fg`: the signal interrupts the read, which says nothing about the server.
+#[cfg(unix)]
+#[test]
+fn being_suspended_while_connecting_does_not_fail_the_attempt() {
+    let server = SilentServer::start(true);
+    let child = watch_silent(&server, &["--seconds", "2"]);
+    let started = std::time::Instant::now();
+    std::thread::sleep(Duration::from_millis(300));
+    send_signal(&child, "-STOP");
+    std::thread::sleep(Duration::from_millis(50));
+    send_signal(&child, "-CONT");
+    let (states, _) = statuses_at_exit(child, started);
+    assert_eq!(states, ["connecting", "disconnected"]);
+}

@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::fmt;
 
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const PROTOCOL_VERSION: i32 = 24;
@@ -154,7 +155,48 @@ pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
     Ok(Some(Challenge { challenge: word(CHALLENGE_SERVER), auth_proto: word(CHALLENGE_AUTH) }))
 }
 
-pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, timeout: Duration) -> Result<Connection> {
+/// How often a wait for a server looks up from the socket.
+const WAIT_POLL: Duration = Duration::from_millis(50);
+
+/// What ends a wait for a server early: asked to stop, or out of time as a whole.
+#[derive(Clone, Copy)]
+pub struct Wait<'a> {
+    pub stop: &'a AtomicBool,
+    pub until: Option<Instant>,
+}
+
+impl Wait<'_> {
+    pub fn over(&self) -> bool {
+        self.stop.load(Ordering::Relaxed) || self.until.is_some_and(|u| Instant::now() >= u)
+    }
+}
+
+/// [`connect`] gave up because of its [`Wait`], which says nothing about the server.
+#[derive(Debug)]
+pub struct Stopped;
+
+impl fmt::Display for Stopped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("stopped")
+    }
+}
+
+impl std::error::Error for Stopped {}
+
+/// A read that found nothing: its timeout, or a signal (even with a handler that asks to restart,
+/// a read with a timeout is interrupted). It says nothing about the server.
+fn nothing_yet(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted)
+}
+
+pub fn connect(
+    server: SocketAddr,
+    name: &str,
+    password: &str,
+    build: &str,
+    timeout: Duration,
+    wait: Wait<'_>,
+) -> Result<Connection> {
     let sock = UdpSocket::bind(ANY_ADDR)?;
     let nonce = random_u32();
     sock.send_to(&build_getchallenge(nonce), server)?;
@@ -165,7 +207,11 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     // than fail on them. The last that did not parse is named if no reply comes.
     let mut junk: Option<anyhow::Error> = None;
     let (ch, from) = loop {
-        let (n, from) = recv_from_port(&sock, server.port(), &mut buf, deadline).with_context(|| match &junk {
+        let got = recv_from_port(&sock, server.port(), &mut buf, deadline, wait);
+        if wait.over() {
+            return Err(Stopped.into());
+        }
+        let (n, from) = got.with_context(|| match &junk {
             Some(e) => format!("no challenge reply (ignored one: {e})"),
             None => "no challenge reply".to_string(),
         })?;
@@ -188,11 +234,15 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     loop {
         // Wait only for what is left of the timeout, however many datagrams arrive.
         let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
+        if left.is_zero() || wait.over() {
             break;
         }
-        sock.set_read_timeout(Some(left))?;
-        let Ok(n) = sock.recv(&mut buf) else { break };
+        sock.set_read_timeout(Some(left.min(WAIT_POLL)))?;
+        let n = match sock.recv(&mut buf) {
+            Ok(n) => n,
+            Err(e) if nothing_yet(&e) => continue,
+            Err(_) => break,
+        };
         let data = &buf[..n];
         if netchan::classify(data) == netchan::Kind::Oob && n > OOB_KIND {
             match data[OOB_KIND] {
@@ -211,6 +261,9 @@ pub fn connect(server: SocketAddr, name: &str, password: &str, build: &str, time
     let header = netchan::OutHeader { sequence: 1, ack: 0, challenge: ch.challenge, reliable_state: 0 };
     let pkt = netchan::build_packet(&header, None, Some(&bye));
     let _ = sock.send(&pkt);
+    if wait.over() {
+        return Err(Stopped.into());
+    }
     bail!("no accept within {timeout:?}")
 }
 
@@ -224,16 +277,19 @@ fn recv_from_port(
     port: u16,
     buf: &mut [u8],
     deadline: Instant,
+    wait: Wait<'_>,
 ) -> std::io::Result<(usize, SocketAddr)> {
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
+        if left.is_zero() || wait.over() {
             return Err(std::io::ErrorKind::TimedOut.into());
         }
-        sock.set_read_timeout(Some(left))?;
-        let (n, from) = sock.recv_from(buf)?;
-        if from.port() == port {
-            return Ok((n, from));
+        sock.set_read_timeout(Some(left.min(WAIT_POLL)))?;
+        match sock.recv_from(buf) {
+            Ok((n, from)) if from.port() == port => return Ok((n, from)),
+            Ok(_) => {}
+            Err(e) if nothing_yet(&e) => {}
+            Err(e) => return Err(e),
         }
     }
 }
@@ -244,7 +300,7 @@ fn random_u32() -> u32 {
 }
 
 /// The server build (`A2S_INFO` `version`), following the challenge some servers require.
-pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
+pub fn a2s_version(server: SocketAddr, timeout: Duration, wait: Wait<'_>) -> Result<String> {
     let sock = UdpSocket::bind(ANY_ADDR)?;
     let deadline = Instant::now() + timeout;
     let mut server = server;
@@ -258,7 +314,7 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration) -> Result<String> {
         msg.extend_from_slice(&extra);
         sock.send_to(&msg, server)?;
         let n;
-        (n, server) = recv_from_port(&sock, server.port(), &mut buf, deadline).context("no A2S_INFO reply")?;
+        (n, server) = recv_from_port(&sock, server.port(), &mut buf, deadline, wait).context("no A2S_INFO reply")?;
         let data = &buf[..n];
         if n >= A2S_CHALLENGE.end && data[..OOB_KIND] == OOB_PREFIX && data[OOB_KIND] == S2C_CHALLENGE {
             extra = data[A2S_CHALLENGE].to_vec();
@@ -404,6 +460,12 @@ pub fn build_info(info: &Info<'_>) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// A wait only its own timeout ends.
+    fn no_end() -> Wait<'static> {
+        static NEVER: AtomicBool = AtomicBool::new(false);
+        Wait { stop: &NEVER, until: None }
+    }
+
     #[test]
     fn server_side_handshake_meets_the_client() {
         let nonce = 0x1234_5678;
@@ -478,12 +540,12 @@ mod tests {
     fn junk_from_other_ports_does_not_hold_off_the_timeout() {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let to = sock.local_addr().unwrap();
-        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = std::sync::Arc::new(AtomicBool::new(false));
         let spam_done = done.clone();
         let spam = std::thread::spawn(move || {
             let junk = UdpSocket::bind("127.0.0.1:0").unwrap();
             let until = Instant::now() + Duration::from_secs(1);
-            while Instant::now() < until && !spam_done.load(std::sync::atomic::Ordering::Relaxed) {
+            while Instant::now() < until && !spam_done.load(Ordering::Relaxed) {
                 let _ = junk.send_to(b"junk", to);
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -491,9 +553,9 @@ mod tests {
         let start = Instant::now();
         let mut buf = [0u8; 64];
         // Port 9 is not the spammer's, so nothing it sends is accepted.
-        let got = recv_from_port(&sock, 9, &mut buf, start + Duration::from_millis(200));
+        let got = recv_from_port(&sock, 9, &mut buf, start + Duration::from_millis(200), no_end());
         let elapsed = start.elapsed();
-        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        done.store(true, Ordering::Relaxed);
         spam.join().unwrap();
         let kind = got.unwrap_err().kind();
         assert!(matches!(kind, std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock), "{kind:?}");
@@ -517,7 +579,7 @@ mod tests {
             server.send_to(&reply, client).unwrap();
         });
         // A game server's challenge ends the attempt as soon as it is parsed.
-        let err = connect(addr, "stv.tf", "", "1", Duration::from_secs(2)).err().unwrap();
+        let err = connect(addr, "stv.tf", "", "1", Duration::from_secs(2), no_end()).err().unwrap();
         assert!(err.is::<GamePort>(), "{err:#}");
         fake.join().unwrap();
     }
@@ -591,7 +653,7 @@ mod tests {
             c
         };
         let (addr, server) = fake_server(reply, |_, _| {});
-        let err = connect(addr, "me", "", "1", Duration::from_secs(5)).err().unwrap();
+        let err = connect(addr, "me", "", "1", Duration::from_secs(5), no_end()).err().unwrap();
         assert!(err.to_string().contains("auth protocol 99"), "{err}");
         server.join().unwrap();
     }
@@ -600,7 +662,7 @@ mod tests {
     fn no_reply_to_a_getchallenge_times_out() {
         let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = silent.local_addr().unwrap();
-        let err = connect(addr, "me", "", "1", Duration::from_millis(50)).err().unwrap();
+        let err = connect(addr, "me", "", "1", Duration::from_millis(50), no_end()).err().unwrap();
         assert!(err.to_string().contains("no challenge reply"), "{err}");
     }
 
@@ -622,7 +684,7 @@ mod tests {
                 assert_eq!(body, messages::NET_DISCONNECT);
             },
         );
-        let err = connect(addr, "me", "", "1", Duration::from_millis(50)).err().unwrap();
+        let err = connect(addr, "me", "", "1", Duration::from_millis(50), no_end()).err().unwrap();
         assert!(err.to_string().contains("no accept"), "{err}");
         server.join().unwrap();
     }
@@ -640,9 +702,46 @@ mod tests {
                 sock.send_to(&[1, 0, 0, 0, 0, 0], client).unwrap();
             },
         );
-        let conn = connect(addr, "me", "", "1", Duration::from_secs(5)).unwrap();
+        let conn = connect(addr, "me", "", "1", Duration::from_secs(5), no_end()).unwrap();
         assert_eq!(conn.pending.as_deref(), Some([1, 0, 0, 0, 0, 0].as_slice()));
         assert_eq!(conn.challenge, 9);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn a_stop_ends_a_wait_at_once_and_says_so() {
+        let (addr, server) = fake_server(
+            |nonce| build_challenge(9, nonce),
+            |sock, _| {
+                let mut buf = [0u8; 2048];
+                sock.recv_from(&mut buf).unwrap(); // the connect
+                let (n, _) = sock.recv_from(&mut buf).unwrap();
+                assert!(netchan::verify_checksum(&buf[..n]), "a goodbye: the server may have given us a slot");
+            },
+        );
+        let stop = AtomicBool::new(false);
+        let started = Instant::now();
+        let err = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                stop.store(true, Ordering::Relaxed);
+            });
+            connect(addr, "me", "", "1", Duration::from_secs(20), Wait { stop: &stop, until: None }).err().unwrap()
+        });
+        assert!(err.is::<Stopped>(), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn the_time_left_ends_a_wait_for_the_challenge_and_says_so() {
+        let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = silent.local_addr().unwrap();
+        let stop = AtomicBool::new(false);
+        let until = Some(Instant::now() + Duration::from_millis(50));
+        let wait = Wait { stop: &stop, until };
+        let err = connect(addr, "me", "", "1", Duration::from_secs(20), wait).err().unwrap();
+        assert!(err.is::<Stopped>(), "{err}");
+        assert!(a2s_version(addr, Duration::from_secs(20), wait).is_err(), "no wait for an answer either");
     }
 }
