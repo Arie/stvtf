@@ -1,0 +1,60 @@
+[package]
+name = "stvtf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+stvtf = { path = ".." }
+
+# Its own workspace: the fuzz targets need nightly, and nothing else should build them.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "channel"
+path = "fuzz_targets/channel.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "out_of_band"
+path = "fuzz_targets/out_of_band.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_messages"
+path = "fuzz_targets/client_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relay_hub"
+path = "fuzz_targets/relay_hub.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decoder"
+path = "fuzz_targets/decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seed"
+path = "seed.rs"
+test = false
+doc = false
+bench = false

@@ -137,7 +137,7 @@ pub fn build_packet(h: &OutHeader, reliable_region: Option<&BitBuf>, unreliable:
 }
 
 /// Puts a packet's checksum right after a test changed the packet.
-#[cfg(test)]
+#[cfg(any(test, fuzzing))]
 pub fn reseal(packet: &mut [u8]) {
     if packet.len() >= HEADER_MIN {
         let sum = fold_checksum(&packet[CHECKSUM_START..]);

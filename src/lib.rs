@@ -9,6 +9,8 @@
 
 pub mod capture;
 pub mod decode;
+#[cfg(fuzzing)]
+pub mod fuzzing;
 #[cfg(test)]
 mod hostile;
 mod net;

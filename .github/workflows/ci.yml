@@ -66,6 +66,32 @@ jobs:
           STVTF_FUZZ_ROUNDS: 100
           STVTF_FUZZ_SEED: ${{ github.run_id }}
 
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [channel, out_of_band, client_messages, relay_hub, decoder]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo +nightly run --quiet --manifest-path fuzz/Cargo.toml --bin seed
+        env:
+          RUSTFLAGS: --cfg fuzzing
+      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300 -timeout=20 -rss_limit_mb=4096
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts
+
   docs:
     name: Docs
     runs-on: ubuntu-latest

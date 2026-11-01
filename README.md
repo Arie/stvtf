@@ -383,7 +383,11 @@ control matches. `src/recovery.rs` loses packets on purpose against a fake serve
 requests for full updates. `tests/relay.rs` connects clients to a relay, and `tests/cli.rs` runs the program
 itself, from a made-up relay password to `connect --record` and a replay of the recording.
 `src/hostile.rs` feeds every parser seeded garbage and corrupted traffic; `STVTF_FUZZ_ROUNDS=100`
-multiplies how much and `STVTF_FUZZ_SEED=N` picks other inputs; CI does both weekly. `cargo llvm-cov` measures coverage. `cargo run --example cut_demo -- IN.dem OUT.dem N`
+multiplies how much and `STVTF_FUZZ_SEED=N` picks other inputs; CI does both weekly. `fuzz/` holds coverage-guided
+fuzz targets for the same parsers, which CI also runs weekly (a crash's input is kept as a build
+artifact): with nightly Rust and `cargo install cargo-fuzz`, write the starting inputs with
+`RUSTFLAGS='--cfg fuzzing' cargo +nightly run --manifest-path fuzz/Cargo.toml --bin seed`, then
+`cargo +nightly fuzz run channel`. `cargo llvm-cov` measures coverage. `cargo run --example cut_demo -- IN.dem OUT.dem N`
 cuts a demo after tick N, to make a fixture.
 
 ## Credits
