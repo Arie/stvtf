@@ -53,6 +53,8 @@ pub struct Watch {
     pub record: Option<PathBuf>,
     /// Pass the server on to clients that connect here (see [`crate::relay`]).
     pub relay: Option<RelayConfig>,
+    /// The wait before reconnecting; it doubles, up to 30 s, while connecting keeps failing.
+    pub retry_after: Duration,
 }
 
 impl Watch {
@@ -69,6 +71,7 @@ impl Watch {
             duration: None,
             record: None,
             relay: None,
+            retry_after: BACKOFF_MIN,
         }
     }
 }
@@ -86,6 +89,7 @@ impl fmt::Debug for Watch {
             .field("duration", &self.duration)
             .field("record", &self.record)
             .field("relay", &self.relay)
+            .field("retry_after", &self.retry_after)
             .finish()
     }
 }
@@ -185,7 +189,7 @@ pub(crate) fn watch_with(
     let mut loaded: Option<(String, Tables)> = None;
     let deadline = w.duration.map(|d| Instant::now() + d);
     let mut recorder = w.record.as_deref().map(Recorder::create).transpose()?;
-    let mut backoff = BACKOFF_MIN;
+    let mut backoff = w.retry_after;
     let mut tried_tv_port = false;
     loop {
         if deadline.is_some_and(|d| Instant::now() >= d) || stop.load(Ordering::Relaxed) {
@@ -247,12 +251,12 @@ pub(crate) fn watch_with(
         // dropped during signon backs off further, so a server that accepts and drops
         // us at once is not retried every 2 s forever.
         let wait = if streamed {
-            backoff = BACKOFF_MIN;
-            BACKOFF_MIN
+            backoff = w.retry_after;
+            w.retry_after
         } else {
-            let w = backoff;
+            let wait = backoff;
             backoff = (backoff * 2).min(BACKOFF_MAX);
-            w
+            wait
         };
         let mut until = Instant::now() + jitter(wait);
         if let Some(d) = deadline {

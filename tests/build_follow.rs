@@ -58,6 +58,7 @@ fn offered(reports: &[&str], connects: usize, setup: impl FnOnce(&mut Watch)) ->
     sock.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
     let mut w = Watch::new(&sock.local_addr().unwrap().to_string(), "tv");
     w.duration = Some(LIMIT);
+    w.retry_after = Duration::from_millis(10);
     setup(&mut w);
     let stop = AtomicBool::new(false);
     std::thread::scope(|s| {

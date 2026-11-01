@@ -363,7 +363,7 @@ Install Rust with [rustup](https://rustup.rs); `rust-toolchain.toml` picks stabl
 ```
 cargo fmt                                         # format (settings in rustfmt.toml)
 cargo clippy --all-targets -- -D warnings         # lint (lint set in Cargo.toml [lints])
-cargo test --release                              # tests
+cargo test                                        # tests
 cargo deny check                                  # advisories and licenses (cargo install cargo-deny)
 ```
 

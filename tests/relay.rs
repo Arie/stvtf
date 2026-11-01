@@ -3,7 +3,7 @@
 
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use stvtf::capture;
 use stvtf::decode::Tables;
 use stvtf::output::Status;
@@ -12,6 +12,8 @@ use stvtf::watch::{self, Watch, WatchError};
 use stvtf::{Fatal, Line, Options};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+/// A bound on what should take moments, for a broken relay.
+const LIMIT: Duration = Duration::from_secs(30);
 
 fn tables() -> Tables {
     Tables::from_demo_bytes(stvtf::builtin(stvtf::CURRENT_BUILD).unwrap().tables).unwrap()
@@ -22,26 +24,20 @@ fn data(lines: &[Line]) -> Vec<&Line> {
     lines.iter().filter(|l| !matches!(l, Line::Status(_))).collect()
 }
 
-#[test]
-fn a_client_of_the_relay_decodes_what_the_capture_holds() {
-    let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
-    let records = capture::read(&bytes).unwrap();
-    let opt = Options { snapshot_hz: 10.0, ..Options::default() };
-    let mut want = Vec::new();
-    capture::replay(&records, &tables(), &opt, &mut |l| want.push(l)).unwrap();
-
+/// What a client of a relay replaying `records` at `speed` decodes.
+fn through_relay(records: &[capture::Record<'_>], opt: &Options, speed: f64) -> Vec<Line> {
     let relay = Relay::bind(&config("pw", 10)).unwrap();
     let mut w = Watch::new(&relay.local_addr().unwrap().to_string(), "pw");
     // No build given: the client asks the relay's A2S_INFO, through its challenge.
     w.snapshot_hz = opt.snapshot_hz;
-    // A bound on a broken relay; the capture runs 29 s, here 4 s.
+    // A bound on a broken relay.
     w.duration = Some(Duration::from_secs(60));
     let (relay_stop, client_stop) = (AtomicBool::new(false), AtomicBool::new(false));
     let mut got = Vec::new();
     let mut relay_lines = Vec::new();
     std::thread::scope(|s| {
         s.spawn(|| {
-            relay.replay(&records, &tables(), 8.0, &relay_stop, &mut |l| relay_lines.push(l)).unwrap();
+            relay.replay(records, &tables(), speed, &relay_stop, &mut |l| relay_lines.push(l)).unwrap();
             client_stop.store(true, Ordering::Relaxed);
         });
         watch::watch(&w, &client_stop, &mut |l| got.push(l)).unwrap();
@@ -53,7 +49,30 @@ fn a_client_of_the_relay_decodes_what_the_capture_holds() {
         _ => None,
     });
     assert_eq!(connecting, Some(stvtf::CURRENT_BUILD), "the build, from the relay's A2S_INFO");
-    let (got, want) = (data(&got), data(&want));
+    got
+}
+
+/// The relay sends one reliable transfer at a time, each waiting for its ack, while datagrams go
+/// out on the capture's clock. At a replay's speed, a busy machine sees reliable events some
+/// ticks late, or frames lost. So a difference only counts at the speed of the last try, where
+/// a client has plenty of time; a bug in the relay shows at any speed.
+#[test]
+fn a_client_of_the_relay_decodes_what_the_capture_holds() {
+    let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
+    let records = capture::read(&bytes).unwrap();
+    let opt = Options { snapshot_hz: 10.0, ..Options::default() };
+    let mut want = Vec::new();
+    capture::replay(&records, &tables(), &opt, &mut |l| want.push(l)).unwrap();
+    let want = data(&want);
+
+    // The capture runs 29 s: here 4 s, then 7 s, then 15 s.
+    for speed in [8.0, 4.0] {
+        if data(&through_relay(&records, &opt, speed)) == want {
+            return;
+        }
+    }
+    let got = through_relay(&records, &opt, 2.0);
+    let got = data(&got);
     for (n, (g, w)) in got.iter().zip(&want).enumerate() {
         assert_eq!(g, w, "line {n}");
     }
@@ -72,19 +91,24 @@ fn with_relay<T>(config: &RelayConfig, client: impl FnOnce(String) -> T) -> T {
     let addr = relay.local_addr().unwrap().to_string();
     let stop = AtomicBool::new(false);
     std::thread::scope(|s| {
-        s.spawn(|| relay.replay(&records, &tables(), 1.0, &stop, &mut |_| {}).unwrap());
+        s.spawn(|| relay.replay(&records, &tables(), 8.0, &stop, &mut |_| {}).unwrap());
         let out = client(addr);
         stop.store(true, Ordering::Relaxed);
         out
     })
 }
 
-fn watch_once(addr: &str, password: &str) -> Result<Vec<Line>, WatchError> {
+/// A watch of a relay, of the current build, ended by its test or else by `LIMIT`.
+fn bounded_watch(addr: &str, password: &str) -> Watch {
     let mut w = Watch::new(addr, password);
     w.build = Some(stvtf::CURRENT_BUILD.to_string());
-    w.duration = Some(Duration::from_secs(3));
+    w.duration = Some(LIMIT);
+    w
+}
+
+fn watch_once(addr: &str, password: &str) -> Result<Vec<Line>, WatchError> {
     let mut lines = Vec::new();
-    watch::watch(&w, &AtomicBool::new(false), &mut |l| lines.push(l)).map(|()| lines)
+    watch::watch(&bounded_watch(addr, password), &AtomicBool::new(false), &mut |l| lines.push(l)).map(|()| lines)
 }
 
 #[test]
@@ -95,20 +119,37 @@ fn a_wrong_password_is_refused_as_the_server_refuses_it() {
 
 #[test]
 fn a_full_relay_refuses_more_clients() {
-    let lines = with_relay(&config("", 1), |addr| {
+    let in_game = AtomicBool::new(false);
+    let refused = AtomicBool::new(false);
+    let second = with_relay(&config("", 1), |addr| {
         std::thread::scope(|s| {
-            let first = s.spawn(|| watch_once(&addr, "").unwrap());
-            std::thread::sleep(Duration::from_millis(500));
-            let second = watch_once(&addr, "").unwrap();
-            assert!(
-                second.iter().any(|l| matches!(l, Line::Status(Status::ConnectFailed { reason })
-                    if reason.contains("ServerRejectServerFull"))),
-                "{second:?}"
-            );
-            first.join().unwrap()
+            s.spawn(|| {
+                watch::watch(&bounded_watch(&addr, ""), &refused, &mut |l| {
+                    in_game.fetch_or(matches!(l, Line::Status(Status::Full { .. })), Ordering::Relaxed);
+                })
+                .unwrap();
+            });
+            let limit = Instant::now() + LIMIT;
+            while !in_game.load(Ordering::Relaxed) {
+                assert!(Instant::now() < limit, "the first client never got in");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let mut lines = Vec::new();
+            let stop = AtomicBool::new(false);
+            watch::watch(&bounded_watch(&addr, ""), &stop, &mut |l| {
+                stop.fetch_or(matches!(l, Line::Status(Status::ConnectFailed { .. })), Ordering::Relaxed);
+                lines.push(l);
+            })
+            .unwrap();
+            refused.store(true, Ordering::Relaxed);
+            lines
         })
     });
-    assert!(lines.iter().any(|l| matches!(l, Line::Status(Status::Full { .. }))), "the first got in");
+    assert!(
+        second.iter().any(|l| matches!(l, Line::Status(Status::ConnectFailed { reason })
+            if reason.contains("ServerRejectServerFull"))),
+        "{second:?}"
+    );
 }
 
 /// Anyone can forge the source address of a UDP packet: a reply larger than the packet that

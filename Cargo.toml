@@ -23,6 +23,15 @@ flate2 = "1"
 [profile.release]
 debug = 1
 
+# Tests spend nearly all their CPU decoding fixtures in tf-demo-parser and bitbuffer: optimizing
+# dependencies makes them about 10x cheaper, while this crate keeps overflow and debug checks.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
 # Lints are checked by `cargo clippy` and enforced in CI (warnings fail the build).
 [lints.rust]
 unsafe_code = "forbid"

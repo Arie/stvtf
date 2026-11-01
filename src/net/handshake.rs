@@ -478,10 +478,12 @@ mod tests {
     fn junk_from_other_ports_does_not_hold_off_the_timeout() {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let to = sock.local_addr().unwrap();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spam_done = done.clone();
         let spam = std::thread::spawn(move || {
             let junk = UdpSocket::bind("127.0.0.1:0").unwrap();
             let until = Instant::now() + Duration::from_secs(1);
-            while Instant::now() < until {
+            while Instant::now() < until && !spam_done.load(std::sync::atomic::Ordering::Relaxed) {
                 let _ = junk.send_to(b"junk", to);
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -490,10 +492,12 @@ mod tests {
         let mut buf = [0u8; 64];
         // Port 9 is not the spammer's, so nothing it sends is accepted.
         let got = recv_from_port(&sock, 9, &mut buf, start + Duration::from_millis(200));
+        let elapsed = start.elapsed();
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        spam.join().unwrap();
         let kind = got.unwrap_err().kind();
         assert!(matches!(kind, std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock), "{kind:?}");
-        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
-        spam.join().unwrap();
+        assert!(elapsed < Duration::from_secs(1), "{elapsed:?}");
     }
 
     #[test]
