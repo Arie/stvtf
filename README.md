@@ -387,8 +387,10 @@ multiplies how much and `STVTF_FUZZ_SEED=N` picks other inputs; CI does both wee
 fuzz targets for the same parsers, which CI also runs weekly (a crash's input is kept as a build
 artifact): with nightly Rust and `cargo install cargo-fuzz`, write the starting inputs with
 `RUSTFLAGS='--cfg fuzzing' cargo +nightly run --manifest-path fuzz/Cargo.toml --bin seed`, then
-`cargo +nightly fuzz run channel`. `tools/live_check.py` runs what recordings cannot show against a real
-TF2 server with bots, in a throwaway Docker container: it is not part of `cargo test`.
+`cargo +nightly fuzz run channel`. `tests/live.rs` checks what recordings cannot show against a real TF2
+server with bots in a throwaway Docker container; it needs Docker, so it is ignored unless asked
+for: `cargo test --test live -- --ignored --nocapture` (`STVTF_LIVE_UPDATE=1` for the current
+TF2 build).
 `cargo llvm-cov` measures coverage. `cargo run --example cut_demo -- IN.dem OUT.dem N`
 cuts a demo after tick N, to make a fixture.
 
