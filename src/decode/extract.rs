@@ -148,6 +148,9 @@ const PROP_MAP_RESET_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRu
 const PROP_STATE_TRANSITION_TIME: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_flStateTransitionTime");
 const PROP_WEAPON_OWNER: SendPropIdentifier = prop_id("DT_BaseCombatWeapon", "m_hOwner");
 const PROP_ACTIVE_WEAPON: SendPropIdentifier = prop_id("DT_BaseCombatCharacter", "m_hActiveWeapon");
+const MY_WEAPON_SLOTS: usize = 48;
+static PROP_MY_WEAPONS: LazyLock<[SendPropIdentifier; MY_WEAPON_SLOTS]> =
+    LazyLock::new(|| std::array::from_fn(|i| SendPropIdentifier::new("m_hMyWeapons", &format!("{i:03}"))));
 const PROP_CLIP: SendPropIdentifier = prop_id("DT_LocalWeaponData", "m_iClip1");
 const PROP_ITEM_DEFINITION: SendPropIdentifier = prop_id("DT_ScriptCreatedItem", "m_iItemDefinitionIndex");
 const PROP_MEDIGUN_RELEASING: SendPropIdentifier = prop_id("DT_WeaponMedigun", "m_bChargeRelease");
@@ -206,6 +209,7 @@ per_entity! {
     flamethrowers: HashMap<u32, Flamethrower>,
     weapons: HashMap<u32, Weapon>,
     active_weapons: HashMap<u32, u32>,
+    my_weapons: HashMap<u32, [Option<u32>; MY_WEAPON_SLOTS]>,
     teams: BTreeMap<u32, TeamScore>,
     timers: BTreeMap<u32, RoundTimer>,
     /// Where each player entity last was while alive: a dead player's own position is
@@ -763,7 +767,8 @@ impl Extractor {
     }
 
     fn medigun_owned_by(&self, player_ent: u32) -> Option<&Medigun> {
-        self.ents.mediguns.values().find(|m| m.owner == Some(player_ent))
+        let held = self.ents.my_weapons.get(&player_ent)?;
+        held.iter().flatten().find_map(|w| self.ents.mediguns.get(w).filter(|m| m.owner == Some(player_ent)))
     }
 
     /// The team of a round timer: on king of the hill each team has its own.
@@ -1753,6 +1758,8 @@ impl Extractor {
                     Some(b) => self.carried.insert(idx, b),
                     None => self.carried.remove(&idx),
                 };
+            } else if let Some(slot) = PROP_MY_WEAPONS.iter().position(|id| *id == p.identifier) {
+                self.ents.my_weapons.entry(idx).or_insert([None; MY_WEAPON_SLOTS])[slot] = opt_handle(as_int(&p.value));
             }
         }
     }
@@ -2457,6 +2464,9 @@ mod medic_tests {
         });
         x.gs.state.players.push(p);
         x.ents.mediguns.insert(9, Medigun { owner: Some(5), item: 35, releasing, ..Default::default() });
+        let mut held = [None; MY_WEAPON_SLOTS];
+        held[1] = Some(9);
+        x.ents.my_weapons.insert(5, held);
         x
     }
 
@@ -2471,6 +2481,20 @@ mod medic_tests {
         x.ents.mediguns.get_mut(&9).unwrap().releasing = releasing;
         x.medic_changes();
         x.drain()
+    }
+
+    #[test]
+    fn the_weapon_list_props_are_known() {
+        assert!(PROP_MY_WEAPONS.iter().all(|id| id.names().is_some()));
+    }
+
+    #[test]
+    fn the_medigun_is_the_one_in_the_weapon_list() {
+        let mut x = with_medic(0, false);
+        x.ents.mediguns.insert(4, Medigun { owner: Some(5), item: 998, ..Default::default() });
+        assert_eq!(x.medigun_of(5).map(|m| m.kind), Some(MedigunKind::Kritzkrieg));
+        x.ents.my_weapons.get_mut(&5).unwrap()[1] = Some(4);
+        assert_eq!(x.medigun_of(5).map(|m| m.kind), Some(MedigunKind::Vaccinator));
     }
 
     #[test]
