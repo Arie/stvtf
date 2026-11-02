@@ -327,3 +327,14 @@ fn decoder_memory_budget_ends_the_session() {
         .unwrap();
     assert!(reason.contains("decoder holds over 1 MiB"), "{reason}");
 }
+
+/// Recorded from a live TF2 server (build 11191711): its first delta came in the datagram before
+/// the end of the full update it builds on, which a game client ignores, as it waits for a full
+/// update. Taken for an error, it cost a decode error, the rest of that datagram, and a request
+/// for another full update.
+#[test]
+fn a_delta_before_the_first_full_update_is_no_error() {
+    let ev = replay("delta_before_full_update.cap");
+    assert_eq!(decode_errors(ev), 0);
+    assert!(of!(ev, Snapshot).any(|s| !s.players.is_empty()), "entities from the full update on");
+}

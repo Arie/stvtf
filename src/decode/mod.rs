@@ -102,6 +102,8 @@ pub(crate) struct Decoder<'a> {
     parse_errors: u64,
     /// The parser panicked on some input; its state can no longer be trusted.
     panicked: bool,
+    /// Entities have come in full since this decoder started: until then a delta has no base.
+    seen_full_update: bool,
     out: Vec<Line>,
 }
 
@@ -118,6 +120,7 @@ impl<'a> Decoder<'a> {
             snapshots: SnapshotClock::default(),
             parse_errors: 0,
             panicked: false,
+            seen_full_update: false,
             out: Vec::new(),
         })
     }
@@ -167,7 +170,13 @@ impl<'a> Decoder<'a> {
             }
             let _ = stream.set_pos(start);
             let parsed = MessageType::read(&mut stream).map_err(tf_demo_parser::ParseError::from).and_then(|t| {
-                if state.should_parse_message(t) && t != MessageType::Empty {
+                // The server may send a delta in a datagram before the end of the full update it
+                // builds on, still coming reliably: a game client ignores one until it has entities
+                // in full, and so does this.
+                let early_delta = t == MessageType::PacketEntities && !self.seen_full_update && is_delta(&stream);
+                if early_delta {
+                    Message::skip_type(t, &mut stream, state).map(|()| None)
+                } else if state.should_parse_message(t) && t != MessageType::Empty {
                     Message::from_type(t, &mut stream, state).map(Some)
                 } else {
                     Message::skip_type(t, &mut stream, state).map(|()| None)
@@ -182,7 +191,8 @@ impl<'a> Decoder<'a> {
                 Err(e) => {
                     life.spans.push(Span { id: UNPARSED, bits: start..nbits });
                     if extract::debug("errors") {
-                        eprintln!("decode error at bit {start} of {nbits}, message id {id}: {e}");
+                        let tick = self.handler.borrow_output().server_tick;
+                        eprintln!("decode error at tick {tick}, bit {start} of {nbits}, message id {id}: {e}");
                     }
                     self.parse_errors += 1;
                     life.lost_frame = true;
@@ -199,6 +209,7 @@ impl<'a> Decoder<'a> {
                 Message::PacketEntities(pe) => {
                     has_entities = true;
                     life.full_update |= pe.delta.is_none();
+                    self.seen_full_update |= pe.delta.is_none();
                 }
                 _ => {}
             }
@@ -245,6 +256,13 @@ impl<'a> Decoder<'a> {
     pub(crate) fn panicked(&self) -> bool {
         self.panicked
     }
+}
+
+/// Whether the `svc_PacketEntities` at `stream`, just past its type, is a delta: after its 11-bit
+/// entry count comes whether a base tick follows.
+fn is_delta(stream: &BitReadStream<'_, LittleEndian>) -> bool {
+    let mut peek = stream.clone();
+    peek.skip_bits(11).is_ok() && peek.read_bool().unwrap_or(false)
 }
 
 fn signon(s: &SignOnState) -> Signon {
@@ -405,5 +423,31 @@ mod tests {
         for (state, signon_state) in want {
             assert_eq!(signon(&state), signon_state);
         }
+    }
+
+    /// What makes a session ask for a full update: nothing in a signon that was going well.
+    #[test]
+    fn a_delta_before_the_first_full_update_asks_for_nothing() {
+        use crate::net::netchan::{self, Kind};
+        use crate::net::receiver::Receiver;
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/delta_before_full_update.cap");
+        let bytes = std::fs::read(path).unwrap();
+        let records = crate::capture::read(&bytes).unwrap();
+        let challenge = u32::from_le_bytes(records[0].data.try_into().unwrap());
+        let tables = tables();
+        let arena = Arena::new();
+        let mut dec = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let mut rx = Receiver::new(Some(challenge));
+        let now = std::time::Instant::now();
+        let mut full_updates = 0;
+        for r in records.iter().skip(1).filter(|r| netchan::classify(r.data) != Kind::Oob) {
+            let Some(got) = rx.feed(r.data, now) else { continue };
+            for s in &got.streams {
+                let life = dec.feed(s.bits.bytes(), s.bits.nbits());
+                assert!(!life.lost_frame, "after {full_updates} full updates");
+                full_updates += usize::from(life.full_update);
+            }
+        }
+        assert_eq!(full_updates, 1);
     }
 }
