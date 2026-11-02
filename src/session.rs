@@ -26,7 +26,6 @@ use std::io::ErrorKind;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use typed_arena::Arena;
 
 /// How a session behaves.
 #[derive(Debug, Clone)]
@@ -39,27 +38,17 @@ pub struct Options {
     pub snapshot_hz: f32,
     /// Give up on a connection after this long without a valid packet.
     pub silence: Duration,
-    /// Reconnect once the decoder holds this many bytes of one map's messages (it can
-    /// only release them at a map change), so a map that never ends cannot exhaust memory.
-    pub max_decoder_bytes: usize,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options {
-            name: DEFAULT_NAME.to_string(),
-            crc: 0,
-            snapshot_hz: DEFAULT_SNAPSHOT_HZ,
-            silence: DEFAULT_SILENCE,
-            max_decoder_bytes: DEFAULT_MAX_DECODER_BYTES,
-        }
+        Options { name: DEFAULT_NAME.to_string(), crc: 0, snapshot_hz: DEFAULT_SNAPSHOT_HZ, silence: DEFAULT_SILENCE }
     }
 }
 
 /// The spectator name shown on the server unless asked otherwise.
 pub(crate) const DEFAULT_NAME: &str = "stv.tf";
 const DEFAULT_SILENCE: Duration = Duration::from_secs(15);
-const DEFAULT_MAX_DECODER_BYTES: usize = 1 << 30;
 
 const RESEND_AFTER: Duration = Duration::from_millis(500);
 /// Snapshots per second unless asked otherwise.
@@ -320,7 +309,7 @@ impl<'o> Session<'o> {
         }
     }
 
-    fn datagram(&mut self, data: &[u8], dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Line)) {
+    fn datagram(&mut self, data: &[u8], dec: &mut Decoder, emit: &mut dyn FnMut(Line)) {
         let now = Instant::now();
         let Some(pkt) = self.rx.feed(data, now) else { return };
         // Only a packet that passed the checksum, challenge and sequence checks proves
@@ -377,7 +366,7 @@ impl<'o> Session<'o> {
             self.send(None, Some(&body));
         }
     }
-    fn feed(&mut self, stream: &MsgStream, dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Line)) {
+    fn feed(&mut self, stream: &MsgStream, dec: &mut Decoder, emit: &mut dyn FnMut(Line)) {
         let life = dec.feed(stream.bits.bytes(), stream.bits.nbits());
         if let Some(tap) = self.tap {
             tap.stream(&stream.bits, stream.reliable, &life);
@@ -387,7 +376,7 @@ impl<'o> Session<'o> {
 
     /// Feeds the streams held since signon restarted into the new map's decoder. False when
     /// signon restarted once more: the rest is held again, for the map after this one.
-    fn replay_streams(&mut self, streams: Vec<MsgStream>, dec: &mut Decoder<'_>, emit: &mut dyn FnMut(Line)) -> bool {
+    fn replay_streams(&mut self, streams: Vec<MsgStream>, dec: &mut Decoder, emit: &mut dyn FnMut(Line)) -> bool {
         let mut rest = streams.into_iter();
         for stream in rest.by_ref() {
             self.feed(&stream, dec, emit);
@@ -414,7 +403,7 @@ impl<'o> Session<'o> {
     /// Follows the current map until the session stops or breaks, or None when the map changes.
     fn follow(
         &mut self,
-        dec: &mut Decoder<'_>,
+        dec: &mut Decoder,
         first: Option<&[u8]>,
         next: &mut dyn FnMut(&mut [u8]) -> Result<Next>,
         buf: &mut [u8],
@@ -435,11 +424,6 @@ impl<'o> Session<'o> {
             }
             if dec.panicked() {
                 self.break_with("decoder failed".to_string(), None);
-            } else if dec.bytes() > self.opt.max_decoder_bytes {
-                self.break_with(
-                    format!("decoder holds over {} MiB for this map", self.opt.max_decoder_bytes >> 20),
-                    None,
-                );
             }
             if let Some((reason, fatal)) = self.broke.take() {
                 return Ok(Some(End::Broken(Broken { reason, fatal, streamed: self.reached_full })));
@@ -477,9 +461,8 @@ fn drive(
     let mut first = first;
     let mut buf = vec![0u8; crate::net::MAX_DATAGRAM];
     let end = loop {
-        // One decoder (and arena) per map; the netchannel state survives map changes.
-        let arena = Arena::new();
-        let mut dec = Decoder::new(&arena, tables, s.opt.snapshot_hz)?;
+        // One decoder per map; the netchannel state survives map changes.
+        let mut dec = Decoder::new(tables, s.opt.snapshot_hz)?;
         let replayed = s.remap.take().is_none_or(|streams| s.replay_streams(streams, &mut dec, emit));
         let end = if replayed { s.follow(&mut dec, first.take(), next, &mut buf, emit)? } else { None };
         decode_errors += dec.parse_errors();

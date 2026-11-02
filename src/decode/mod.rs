@@ -25,7 +25,6 @@ use tf_demo_parser::demo::packet::datatable::DataTablePacket;
 use tf_demo_parser::demo::packet::message::{MessagePacket, MessagePacketMeta};
 use tf_demo_parser::demo::parser::DemoHandler;
 use tf_demo_parser::demo::parser::RawPacketStream;
-use typed_arena::Arena;
 
 /// The entity class tables of one server build, taken from a demo of that build.
 pub struct Tables {
@@ -92,11 +91,8 @@ pub(crate) struct Span {
 /// The type of a span that could not be decoded.
 pub(crate) const UNPARSED: u8 = u8::MAX;
 
-pub(crate) struct Decoder<'a> {
-    arena: &'a Arena<u8>,
-    /// Bytes copied into `arena`: it is only released with the decoder.
-    arena_bytes: usize,
-    handler: DemoHandler<'a, Extractor>,
+pub(crate) struct Decoder {
+    handler: DemoHandler<Extractor>,
     snapshot_hz: f32,
     snapshots: SnapshotClock,
     parse_errors: u64,
@@ -107,14 +103,12 @@ pub(crate) struct Decoder<'a> {
     out: Vec<Line>,
 }
 
-impl<'a> Decoder<'a> {
-    pub(crate) fn new(arena: &'a Arena<u8>, tables: &Tables, snapshot_hz: f32) -> Result<Self> {
+impl Decoder {
+    pub(crate) fn new(tables: &Tables, snapshot_hz: f32) -> Result<Self> {
         let mut handler = DemoHandler::with_analyser(Extractor::default());
         handler.handle_header(&tables.header);
         handler.handle_packet(Packet::DataTables(tables.datatables.clone()))?;
         Ok(Decoder {
-            arena,
-            arena_bytes: 0,
             handler,
             snapshot_hz,
             snapshots: SnapshotClock::default(),
@@ -150,9 +144,7 @@ impl<'a> Decoder<'a> {
             return life;
         }
         let nbytes = nbits.div_ceil(8);
-        let bytes: &'a [u8] = self.arena.alloc_extend(data[..nbytes].iter().copied());
-        self.arena_bytes += nbytes;
-        let mut outer = BitReadStream::new(BitReadBuffer::new(bytes, LittleEndian));
+        let mut outer = BitReadStream::new(BitReadBuffer::new(&data[..nbytes], LittleEndian));
         let Ok(mut stream) = outer.read_bits(nbits) else { return life };
         let state = self.handler.get_parser_state();
         let mut messages = Vec::new();
@@ -246,11 +238,6 @@ impl<'a> Decoder<'a> {
 
     pub(crate) fn parse_errors(&self) -> u64 {
         self.parse_errors
-    }
-
-    /// Message bytes held for the parser since this decoder was created.
-    pub(crate) fn bytes(&self) -> usize {
-        self.arena_bytes
     }
 
     pub(crate) fn panicked(&self) -> bool {
@@ -379,8 +366,7 @@ mod tests {
     #[test]
     fn a_message_that_does_not_parse_counts_and_asks_for_a_full_update() {
         let tables = tables();
-        let arena = Arena::new();
-        let mut dec = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let mut dec = Decoder::new(&tables, 0.0).unwrap();
         let life = dec.feed(&[0xff; 64], 64 * 8);
         assert!(life.lost_frame);
         assert!(dec.parse_errors() >= 1);
@@ -390,8 +376,7 @@ mod tests {
     #[test]
     fn too_few_bits_for_a_message_are_nothing() {
         let tables = tables();
-        let arena = Arena::new();
-        let mut dec = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let mut dec = Decoder::new(&tables, 0.0).unwrap();
         let life = dec.feed(&[0xff], 3);
         assert!(!life.lost_frame && life.spans.is_empty());
         assert_eq!(dec.parse_errors(), 0);
@@ -401,8 +386,7 @@ mod tests {
     #[test]
     fn a_disconnect_gives_its_reason() {
         let tables = tables();
-        let arena = Arena::new();
-        let mut dec = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let mut dec = Decoder::new(&tables, 0.0).unwrap();
         let bye = crate::net::messages::disconnect("Server shutting down");
         let life = dec.feed(bye.bytes(), bye.nbits());
         assert_eq!(life.disconnect.as_deref(), Some("Server shutting down"));
@@ -435,8 +419,7 @@ mod tests {
         let records = crate::capture::read(&bytes).unwrap();
         let challenge = u32::from_le_bytes(records[0].data.try_into().unwrap());
         let tables = tables();
-        let arena = Arena::new();
-        let mut dec = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let mut dec = Decoder::new(&tables, 0.0).unwrap();
         let mut rx = Receiver::new(Some(challenge));
         let now = std::time::Instant::now();
         let mut full_updates = 0;

@@ -555,7 +555,6 @@ dependencies = [
  "serde_json",
  "snap",
  "tf-demo-parser",
- "typed-arena",
 ]
 
 [[package]]
@@ -583,8 +582,7 @@ dependencies = [
 [[package]]
 name = "tf-demo-parser"
 version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fa6a4f0b2248d6d098d8612eef8673186c4f630cbbe592ad752e0affc313ec0"
+source = "git+https://codeberg.org/Kanarie/parser.git?rev=579f9f6bb32a93d019f760928535383f2e541c52#579f9f6bb32a93d019f760928535383f2e541c52"
 dependencies = [
  "bitbuffer",
  "const-fnv1a-hash",
@@ -652,12 +650,6 @@ checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
-
-[[package]]
-name = "typed-arena"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
 name = "unicode-ident"

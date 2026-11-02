@@ -10,7 +10,6 @@ use crate::net::receiver::Receiver;
 use crate::relay;
 use std::sync::LazyLock;
 use std::time::Instant;
-use typed_arena::Arena;
 
 const CHALLENGE: u32 = 7;
 
@@ -81,8 +80,7 @@ static TABLES: LazyLock<Tables> =
 
 /// Message streams into a new decoder, as they come out of a channel.
 pub fn decoder(data: &[u8]) {
-    let arena = Arena::new();
-    let mut decoder = Decoder::new(&arena, &TABLES, 20.0).unwrap();
+    let mut decoder = Decoder::new(&TABLES, 20.0).unwrap();
     for piece in pieces(data) {
         let _ = decoder.feed(piece, piece.len() * 8);
     }

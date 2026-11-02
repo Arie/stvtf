@@ -12,7 +12,6 @@ use crate::net::receiver::Receiver;
 use crate::output::{Line, Status};
 use crate::session::{self, Options};
 use std::time::Instant;
-use typed_arena::Arena;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
@@ -154,8 +153,7 @@ fn garbage_for_the_decoder_never_panics_the_process() {
     let tables = tables();
     let mut rng = Rng::seeded(5);
     for _ in 0..rounds(40) {
-        let arena = Arena::new();
-        let mut dec = Decoder::new(&arena, &tables, 20.0).unwrap();
+        let mut dec = Decoder::new(&tables, 20.0).unwrap();
         for _ in 0..50 {
             let data = rng.bytes(300);
             let _ = dec.feed(&data, data.len() * 8);

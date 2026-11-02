@@ -328,8 +328,6 @@ the 64-datagram window gets no entities, since a capture cannot be asked for a f
   the tool always disconnects when it stops or reconnects.
 - After a map change the server may drop the client or restart signon a few times within
   `tv_delay`; the tool follows until the delayed stream reaches the new map.
-- Memory grows with the current map's data (about 26 MB for a 3-minute 6v6) and is freed at each
-  map change. Past 1 GiB (`Options::max_decoder_bytes`) the tool reconnects to start afresh.
 - SourceTV relays often send deltas from a frame a few ticks back, so a projectile that came and
   went in between is never deleted. Like a game client, the tool builds each frame's entities from
   the base frame's and drops the projectiles and buildings left out of it.

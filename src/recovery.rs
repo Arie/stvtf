@@ -16,7 +16,6 @@ use crate::watch::{self, Watch};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use typed_arena::Arena;
 
 /// A bound on what should take moments.
 const LIMIT: Duration = Duration::from_secs(30);
@@ -67,8 +66,7 @@ impl Recording {
         }
 
         let tables = tables();
-        let arena = Arena::new();
-        let mut decoder = Decoder::new(&arena, &tables, 0.0).unwrap();
+        let mut decoder = Decoder::new(&tables, 0.0).unwrap();
         let mut rx = Receiver::new(Some(challenge));
         let complete = packets
             .iter()

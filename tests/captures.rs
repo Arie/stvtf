@@ -314,20 +314,6 @@ fn spawn_events_carry_the_spawn_position() {
     assert!(near * 10 >= total * 9, "{near} of {total} spawns where the player appears");
 }
 
-#[test]
-fn decoder_memory_budget_ends_the_session() {
-    let opt = Options { snapshot_hz: 10.0, max_decoder_bytes: 1 << 20, ..Options::default() };
-    let events = replay_with("bots_engineers.cap", &opt);
-    let reason = of!(events, Status)
-        .filter_map(|s| match s {
-            Status::Disconnected { reason, .. } => Some(reason),
-            _ => None,
-        })
-        .next_back()
-        .unwrap();
-    assert!(reason.contains("decoder holds over 1 MiB"), "{reason}");
-}
-
 /// Recorded from a live TF2 server (build 11191711): its first delta came in the datagram before
 /// the end of the full update it builds on, which a game client ignores, as it waits for a full
 /// update. Taken for an error, it cost a decode error, the rest of that datagram, and a request
