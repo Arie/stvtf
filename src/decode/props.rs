@@ -102,7 +102,16 @@ mod tests {
     /// with a typo in its table or name would silently match nothing.
     #[test]
     fn every_prop_identifier_names_a_known_prop() {
-        let sources = [include_str!("extract.rs"), include_str!("modes.rs"), include_str!("detail.rs")];
+        let sources = [
+            include_str!("extract/mod.rs"),
+            include_str!("extract/convert.rs"),
+            include_str!("extract/entities.rs"),
+            include_str!("extract/events.rs"),
+            include_str!("extract/snapshot.rs"),
+            include_str!("extract/state.rs"),
+            include_str!("modes.rs"),
+            include_str!("detail.rs"),
+        ];
         let quoted = |args: &str| -> Vec<String> { args.split('"').skip(1).step_by(2).map(str::to_string).collect() };
         let mut checked = 0;
         for source in sources {

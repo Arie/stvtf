@@ -271,7 +271,7 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
 - `src/session.rs`: the signon state machine, reliable send/ack, tick acks every 100 ms, silence
   timeout and in-place map changes; the same driver runs live and over captures.
 - `src/decode`: [tf-demo-parser](https://crates.io/crates/tf-demo-parser) parses each message
-  stream with the same-build send tables; `extract.rs` turns its game state into the JSON above.
+  stream with the same-build send tables; `extract/` turns its game state into the JSON above.
 
 
 ## Relay
