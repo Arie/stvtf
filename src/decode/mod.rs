@@ -6,6 +6,7 @@
 //! message stream is then wrapped as a demo `Message` packet and handed to the
 //! same `DemoHandler` a demo file would use.
 
+mod crc;
 mod detail;
 mod extract;
 mod modes;
@@ -30,6 +31,7 @@ use tf_demo_parser::demo::parser::RawPacketStream;
 pub struct Tables {
     header: Header,
     datatables: DataTablePacket,
+    crc: u32,
 }
 
 impl Tables {
@@ -47,7 +49,8 @@ impl Tables {
         let mut packets = RawPacketStream::new(stream);
         while let Some(packet) = packets.next(handler.get_parser_state())? {
             if let Packet::DataTables(dt) = packet {
-                return Ok(Tables { header, datatables: dt });
+                let crc = crc::sendtable_crc(&dt)?;
+                return Ok(Tables { header, datatables: dt, crc });
             }
         }
         bail!("no data tables in demo")
@@ -61,6 +64,11 @@ impl Tables {
     /// The number of send tables.
     pub fn send_table_count(&self) -> usize {
         self.datatables.tables.len()
+    }
+
+    /// The `SendTable` CRC of the build, as the server checks it at signon.
+    pub fn sendtable_crc(&self) -> u32 {
+        self.crc
     }
 }
 
@@ -361,6 +369,15 @@ mod tests {
     fn tables_come_only_from_a_readable_demo() {
         assert!(Tables::from_demo(std::path::Path::new("/nonexistent.dem")).is_err());
         assert!(Tables::from_demo_bytes(b"not a demo").is_err());
+    }
+
+    /// Read from `g_SendTableCRC` in that build's `engine_srv.so`.
+    #[test]
+    fn the_crc_is_the_engines() {
+        assert_eq!(tables().sendtable_crc(), 0x5FCD_4733);
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem");
+        let full_demo = Tables::from_demo(std::path::Path::new(fixture)).unwrap();
+        assert_eq!(full_demo.sendtable_crc(), 0x5FCD_4733, "any demo of the build");
     }
 
     #[test]

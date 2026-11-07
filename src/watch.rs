@@ -43,7 +43,7 @@ pub struct Watch {
     pub snapshot_hz: f32,
     /// A demo of the server's build, for builds whose tables are not compiled in.
     pub tables: Option<PathBuf>,
-    /// The build's `SendTable` CRC, for builds not compiled in.
+    /// The build's `SendTable` CRC, to use instead of the one its tables give.
     pub crc: Option<u32>,
     /// The server build; asked from the server (`A2S_INFO`) when not set.
     pub build: Option<String>,
@@ -213,14 +213,11 @@ pub(crate) fn watch_with(
         // one's; if they did change, the server says so and that is fatal.
         let known = w.build.is_some() || crate::builtin(&build).is_some();
         let source = if known { build.as_str() } else { crate::CURRENT_BUILD };
-        let Some(crc) = w.crc.or_else(|| crate::builtin(source).map(|b| b.crc)) else {
-            return Err(anyhow!("no known SendTable CRC for build {source}; pass --crc").into());
-        };
-        opt.crc = crc;
         let (_, class_tables) = match loaded.take() {
             Some((s, t)) if s == source => loaded.insert((s, t)),
             _ => loaded.insert((source.to_string(), tables(source, w.tables.as_deref())?)),
         };
+        opt.crc = w.crc.unwrap_or_else(|| class_tables.sendtable_crc());
         emit(Line::Status(Status::Connecting { server: server.to_string(), build: build.clone() }));
         let streamed = match handshake::connect(server, &opt.name, &w.password, &build, CONNECT_TIMEOUT, wait) {
             Ok(conn) => match session::run(&conn, class_tables, &opt, recorder.as_mut(), stop, deadline, tap, emit)? {

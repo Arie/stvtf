@@ -29,23 +29,27 @@ pub use session::{Fatal, Options, parse_snapshot_hz};
 /// [`output::Server::tick_interval`].
 pub const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
-/// The TF2 server build whose tables and CRC are compiled in.
-pub const CURRENT_BUILD: &str = "11185272";
+/// The newest TF2 server build compiled in. A build we have no data for gets its tables.
+pub const CURRENT_BUILD: &str = BUILDS[0].0;
+
+/// Known TF2 server builds (`A2S_INFO` `version`) and the demo of their data tables, newest first.
+/// Most updates keep the tables, so builds share them. `cargo run --example add_build` adds to it.
+const BUILDS: &[(&str, &[u8])] = &[
+    // add_build: builds
+    ("11185272", TABLES_11138802),
+];
+
+// add_build: tables
+const TABLES_11138802: &[u8] = include_bytes!("../assets/tables_11138802.dem");
 
 /// Compiled-in data for one TF2 server build.
 #[derive(Debug, Clone, Copy)]
 pub struct Build {
-    /// `g_SendTableCRC` of the server's engine.
-    pub crc: u32,
-    /// A demo of that build cut off after its data tables.
+    /// A demo of that build cut off after its data tables, which give its `SendTable` CRC too.
     pub tables: &'static [u8],
 }
 
 /// Compiled-in data for known TF2 server builds (`A2S_INFO` `version`).
 pub fn builtin(build: &str) -> Option<Build> {
-    match build {
-        // 11185272 kept the data tables and CRC of 11138802.
-        CURRENT_BUILD => Some(Build { crc: 0x5FCD_4733, tables: include_bytes!("../assets/tables_11138802.dem") }),
-        _ => None,
-    }
+    BUILDS.iter().find(|b| b.0 == build).map(|b| Build { tables: b.1 })
 }

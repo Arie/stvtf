@@ -30,8 +30,8 @@ other local users cannot read the way they can read command-line arguments.
 a slot on the server. Its password comes from --relay-password or STVTF_RELAY_PASSWORD, or is
 made up and printed to stderr. `relay` does only that, printing only status lines; given a
 capture, it replays it once the first client connects.
-Tables and CRC of the build reported by the server are built in for known builds;
-pass --tables (any demo recorded on that build) and --crc for others.";
+Tables of the build reported by the server are built in for known builds; pass --tables
+(any demo recorded on that build) for others. --crc overrides the CRC the tables give.";
 
 /// Set by Ctrl-C, or when nobody reads the output any more.
 static STOP: AtomicBool = AtomicBool::new(false);
