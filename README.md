@@ -45,19 +45,25 @@ zero-width characters). Escape them before display.
 ## TF2 builds: tables and CRC
 
 SourceTV sends no class tables: the client builds them from its game DLL and proves it with
-a SendTable CRC at signon. Both are compiled in for the current build (`CURRENT_BUILD` and
-`builtin` in `src/lib.rs`, tables in `assets/`). The server refuses any build but its own, so
-each connection attempt offers the build from the STV port's A2S_INFO reply, shown in the
-`connecting` status. Without a usable reply it offers the last build it did, or the current one.
-A build it has no data for gets the current build's tables and CRC, since most TF2 updates keep
-them; when an update does change them, the server answers "Server uses different class tables".
+a SendTable CRC at signon. The tables come from any demo of the build, and the CRC from them
+(the engine's `SendTable_ComputeCRC`, over each server class's send table). Known builds are
+compiled in (`BUILDS` in `src/lib.rs`, tables in `assets/`); the newest is `CURRENT_BUILD`.
+The server refuses any build but its own, so each connection attempt offers the build from the
+STV port's A2S_INFO reply, shown in the `connecting` status. Without a usable reply it offers the
+last build it did, or the current one. A build it has no data for gets the current build's
+tables, since most TF2 updates keep them; when an update does change them, the server answers
+"Server uses different class tables".
 
-For another build, pass `--tables` (any STV or POV demo of that build) and `--crc` (its
-SendTable CRC; a wrong one gets "Server uses different class tables"). To find the CRC, run
-that build's dedicated server and read `g_SendTableCRC` from `engine_srv.so` (offset via
-`readelf -sW`), as `tools/read_crc.py` in [stv-watch](https://github.com/dmitry-ra/stv-watch)
-does. To compile a build in, cut a demo of it after its first `DataTables` packet into
-`assets/tables_BUILD.dem` and add a `builtin` arm.
+For another build, pass `--tables` (any STV or POV demo of that build); `--crc` overrides the
+CRC its tables give. To compile a build in:
+
+```
+cargo run --example add_build -- DEMO BUILD
+```
+
+DEMO is a `.dem` file, a demos.tf link (`https://demos.tf/1234567`) or a URL of a `.dem`; BUILD
+is the `build` of the `connecting` status. A build with the same tables as a known one shares
+them; otherwise the demo is cut after its data tables into `assets/tables_BUILD.dem`.
 
 ## Output
 
