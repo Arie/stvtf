@@ -597,6 +597,14 @@ impl Hub {
         self.log_tables(&tables);
     }
 
+    /// String table changes after where playback went back to: logged again when it comes to
+    /// them, as the clients were set back to before them.
+    fn unlog_tables(&mut self, tables: &[BitBuf]) {
+        for t in tables {
+            self.logged_unreliable.remove(t);
+        }
+    }
+
     /// String table changes passed over (a jump), into the log and reliably to the clients
     /// already in; those logged already are not again.
     fn log_tables(&mut self, tables: &[BitBuf]) {

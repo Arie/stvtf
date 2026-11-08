@@ -415,6 +415,49 @@ impl Player<'_> {
         false
     }
 
+    /// Back to `target`: the demo again from the last checkpoint before it (or its start), decoded up
+    /// to there, and a full update of it: the clients stay in, and go back. If an entry of the
+    /// string tables they have changed value since (a player left or joined), those entries are
+    /// set back first.
+    fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
+        let Some(c) = &self.cur else { return Ok(()) };
+        trace!("jump back from {} to {target}", c.tick());
+        let rewritten = c.dec.tables_rewritten();
+        let took = Instant::now();
+        // From the last checkpoint before it, or else the start.
+        let mark = self.index.as_ref().and_then(|i| i.before(target));
+        let mut again = match &mark {
+            Some(m) => Cursor::restore(&want.demo, m)?,
+            None => Cursor::open_with(&want.demo, None)?,
+        };
+        self.dry = skim(&mut again, &self.relay.hub, target).1;
+        trace!("decoded back to {target} in {} ms", took.elapsed().as_millis());
+        if again.dec.tables_rewritten() < rewritten {
+            // The clients' tables are set back to these, or failing that, they sign on again.
+            // The stream's changes after here are sent again when playback comes to them.
+            let set_back = self.cur.as_ref().and_then(|c| again.dec.set_tables_back(&c.dec));
+            let later: Vec<BitBuf> = self
+                .cur
+                .as_ref()
+                .map_or_else(Vec::new, |c| c.tables.iter().skip(again.tables.len()).map(|t| (**t).clone()).collect());
+            if let Some(msgs) = set_back {
+                trace!("string tables set back with {} messages", msgs.len());
+                let mut hub = self.relay.hub();
+                hub.unlog_tables(&later);
+                hub.log_tables(&msgs);
+            } else {
+                trace!("the string tables changed since: the clients sign on again");
+                self.relay.hub().reconnect_all();
+                drop(Cursor::open(&want.demo, &self.relay.hub)?);
+                let tables: Vec<BitBuf> = again.tables.iter().map(|t| (**t).clone()).collect();
+                self.relay.hub().log_tables(&tables);
+            }
+        }
+        self.cur = Some(again);
+        self.relay.hub().all_want_keyframe(Instant::now());
+        Ok(())
+    }
+
     /// Plays on toward `want`: one frame, a jump, or a short wait.
     fn step(&mut self, want: &Want) -> Result<()> {
         let Some(c) = &mut self.cur else { return Ok(()) };
@@ -434,30 +477,7 @@ impl Player<'_> {
             trace!("playing tick {}, wanted {target}, paused {}, speed {}", c.tick(), want.paused, want.speed);
         }
         if c.started && target + jump < c.tick() {
-            trace!("jump back from {} to {target}", c.tick());
-            // The demo again, decoded up to there, and a full update of it: the clients stay in,
-            // and go back. Unless an entry of the string tables they have was rewritten since (a
-            // player left or joined): then they sign on again, with the tables as they were.
-            let rewritten = c.dec.tables_rewritten();
-            let took = Instant::now();
-            // From the last checkpoint before it, or else the start.
-            let mark = self.index.as_ref().and_then(|i| i.before(target));
-            let mut again = match &mark {
-                Some(m) => Cursor::restore(&want.demo, m)?,
-                None => Cursor::open_with(&want.demo, None)?,
-            };
-            self.dry = skim(&mut again, &self.relay.hub, target).1;
-            trace!("decoded back to {target} in {} ms", took.elapsed().as_millis());
-            if again.dec.tables_rewritten() < rewritten {
-                trace!("the string tables changed since: the clients sign on again");
-                self.relay.hub().reconnect_all();
-                drop(Cursor::open(&want.demo, &self.relay.hub)?);
-                let tables: Vec<BitBuf> = again.tables.iter().map(|t| (**t).clone()).collect();
-                self.relay.hub().log_tables(&tables);
-            }
-            self.cur = Some(again);
-            self.relay.hub().all_want_keyframe(Instant::now());
-            return Ok(());
+            return self.jump_back(want, target);
         }
         if want.paused != self.paused {
             trace!("paused: {}", want.paused);

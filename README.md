@@ -336,9 +336,10 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   most 30 s of the match (decoding with what a full update needs runs at about 500 times game
   speed). A checkpoint is the string table changes so far, a full update and the frames after it,
   and where the file goes on. A client is made to sign on again (`net_SignonState(CONNECTED)`
-  first, as a server's reconnect) for another demo file, and for a jump back past a rewritten
-  `userinfo` or `instancebaseline` entry (a player left or joined): the tables it has are the
-  later ones, which a full update cannot take back.
+  first, as a server's reconnect) only for another demo file. After a jump back it has the string
+  tables of later on: where an entry of `userinfo` (a player left or joined) or
+  `instancebaseline` changed value since, it is first sent those entries as they were
+  (`svc_UpdateStringTable`), and the stream's own changes again when playback comes to them.
 - An STV demo's signon states carry another spawn count than its ServerInfo; a game client
   refuses that, so they are given the ServerInfo's.
 - A client that joins, loses a frame or follows a jump ahead gets a full update written from the

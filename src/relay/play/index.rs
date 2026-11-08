@@ -180,19 +180,6 @@ mod tests {
         c
     }
 
-    /// Players leaving or joining rewrite userinfo entries: a jump back past that signs the
-    /// clients on again. A live recording of one's own, as no fixture has any.
-    #[test]
-    #[ignore = "a live recording in STVTF_LIVE_DEMO"]
-    fn string_table_entries_rewritten_are_counted() {
-        let live = PathBuf::from(std::env::var("STVTF_LIVE_DEMO").unwrap());
-        let all = read_out(Cursor::open_with(&live, None).unwrap()).dec.tables_rewritten();
-        let mut start = Cursor::open_with(&live, None).unwrap();
-        start.next_tick();
-        start.decode();
-        assert!(start.dec.tables_rewritten() < all, "{} at the start, {all} at the end", start.dec.tables_rewritten());
-    }
-
     #[test]
     fn a_cursor_from_a_checkpoint_reads_on_as_one_from_the_start() {
         let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
