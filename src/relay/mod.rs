@@ -443,7 +443,18 @@ struct Hub {
     seen_client: bool,
     /// When the last full update came, to space out asking for more.
     last_full: Option<Instant>,
+    /// Passing a server on, or playing a demo (see [`play`]), paused or not.
+    mode: Mode,
     traced: Instant,
+}
+
+/// What feeds a hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// A server, which sends reliable data again until acked.
+    Live,
+    /// A demo, which has each message once: what a client must not lose goes reliably too.
+    Play { paused: bool },
 }
 
 impl Hub {
@@ -465,6 +476,7 @@ impl Hub {
             split_group: 0,
             seen_client: false,
             last_full: None,
+            mode: Mode::Live,
             traced: Instant::now(),
         }
     }
@@ -525,7 +537,7 @@ impl Hub {
             // needs them: without an entity class's baseline, a game client stops with
             // "GetDynamicBaseline: FindStringIndex failed".
             for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)) {
-                self.log_unreliable(BitReader::slice(bits.bytes(), span.bits.clone()));
+                self.log_unreliable(&BitReader::slice(bits.bytes(), span.bits.clone()));
             }
             return;
         }
@@ -553,15 +565,20 @@ impl Hub {
 
     /// Logs a string table message from a datagram's unreliable part, once. A client already
     /// getting every datagram has it from there, so its cursor only moves past it.
-    fn log_unreliable(&mut self, msg: BitBuf) {
+    fn log_unreliable(&mut self, msg: &BitBuf) {
         if !self.logged_unreliable.insert(msg.clone()) {
             return;
         }
         trace!("logged a string table change of {} bits from a datagram", msg.nbits());
-        self.log.push(Logged { bits: msg, gate: None });
+        self.log.push(Logged { bits: msg.clone(), gate: None });
+        let play = matches!(self.mode, Mode::Play { .. });
         for c in self.clients.values_mut() {
             if c.phase == Phase::Active && c.cursor + 1 == self.log.len() {
                 c.cursor += 1;
+                // A demo has it once: a lost datagram would lose it for good.
+                if play {
+                    c.queue.push(msg.clone());
+                }
             } else {
                 c.pump(&self.log);
             }
@@ -624,8 +641,9 @@ impl Hub {
         }
     }
 
-    /// Tells the clients in the game that playback paused or went on.
+    /// Tells the clients in the game that playback paused or went on, reliably.
     fn set_paused(&mut self, paused: bool) {
+        self.mode = Mode::Play { paused };
         let msg = set_pause(paused);
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
             c.queue.push(msg.clone());
@@ -682,6 +700,9 @@ impl Hub {
         {
             trace!("{addr} gets entities from the {} datagrams kept since the last full update", frames.len());
             c.set_phase(Phase::Active, now);
+            if let Mode::Play { paused } = self.mode {
+                c.queue.push(set_pause(paused));
+            }
             for t in frames {
                 send(&self.sock, &mut self.split_group, addr, c, Some(t), false, now);
             }

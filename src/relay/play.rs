@@ -2,12 +2,15 @@
 //! room's playback. The demo may still be being written (a live match recorded as it goes).
 //!
 //! - Frames go out at their own pace, as far as the wanted moment. Off from it by more than a
-//!   second, playback jumps: ahead, it decodes on without sending and every client gets a full
-//!   update; back, it starts the demo again and every client signs on again.
+//!   second, playback jumps: it decodes on (back, from the demo's start) without sending, and
+//!   every client gets a full update of where it went. Only another demo file signs them on again.
 //! - A full update is written from the decoded entities (see `decode::world`), for a client that
 //!   joins, loses a frame or follows a jump; the frames after it are the demo's own.
-//! - Paused, no frames go out, and the clients are told (`svc_SetPause`).
+//! - Paused, no frames go out, and the clients are told (`svc_SetPause`), as of the match's own
+//!   pauses in the demo too.
 //! - With nobody in, nothing is decoded; after a while what was decoded is dropped.
+//! - Why it cannot play (not written yet, another build's demo, a read error) is told through
+//!   [`Playback::problem`], and it tries again.
 
 use super::{Hub, Relay};
 use crate::decode::{Decoder, Lifecycle, Tables};
@@ -30,6 +33,14 @@ const NAP: Duration = Duration::from_millis(5);
 const IDLE: Duration = Duration::from_secs(60);
 /// Frames kept that a keyframe's client may need: those since the frame the next one builds on.
 const RECENT: usize = 128;
+/// How long the player waits after an error before trying the demo again.
+const RETRY: Duration = Duration::from_millis(200);
+
+/// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
+static OUR_CRC: std::sync::LazyLock<Option<u32>> = std::sync::LazyLock::new(|| {
+    let b = crate::builtin(crate::CURRENT_BUILD)?;
+    Tables::from_demo_bytes(b.tables).ok().map(|t| t.sendtable_crc())
+});
 
 /// Where playback should be: at `tick` (a server tick of `demo`) at the instant `at`, going on
 /// from there at `speed` unless paused.
@@ -128,21 +139,23 @@ impl Cursor {
         let mut reader = demo::Reader::new(file)?;
         let mut signon = Vec::new();
         let mut tables = None;
+        let mut synced = false;
         let next = loop {
             match reader.next_packet()? {
                 Next::Packet(Packet::Signon { data, .. }) => signon.push(data),
                 Next::Packet(Packet::DataTables { .. }) => tables = Some(tables_of(path, &reader)?),
                 Next::Packet(p @ Packet::Message { .. }) => break Some(p),
+                Next::Packet(Packet::SyncTick { .. }) => synced = true,
                 Next::Packet(_) => {}
-                // A live demo can be read before its first frame is written.
-                Next::More if tables.is_some() && !signon.is_empty() => break None,
+                // A live demo can be read before its first frame is written; its signon is all
+                // there once the sync tick that ends it is.
+                Next::More if tables.is_some() && synced => break None,
                 Next::More => bail!("{} has no signon yet", path.display()),
                 Next::Stop => bail!("{} has no frames", path.display()),
             }
         };
         let tables = tables.context("the demo has no data tables")?;
-        let ours = Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).context("no tables")?.tables)?;
-        if tables.sendtable_crc() != ours.sendtable_crc() {
+        if Some(tables.sendtable_crc()) != *OUR_CRC {
             bail!("the demo is of a TF2 build with other class tables, which a game client cannot play");
         }
         let mut dec = Decoder::new(&tables, 0.0)?;
@@ -180,35 +193,39 @@ impl Cursor {
     }
 
     /// The next packet, read ahead; None when the demo has no more yet.
-    fn peek(&mut self) -> Result<Option<&Packet>> {
-        if self.next.is_none() {
-            self.next = match self.reader.next_packet()? {
-                Next::Packet(p) => Some(p),
-                Next::More => None,
-                Next::Stop => {
+    fn peek(&mut self) -> Option<&Packet> {
+        if self.next.is_none() && !self.ended {
+            self.next = match self.reader.next_packet() {
+                Ok(Next::Packet(p)) => Some(p),
+                Ok(Next::More) => None,
+                Ok(Next::Stop) => {
+                    self.ended = true;
+                    None
+                }
+                // A demo cut off in a broken packet (a recording stopped short, say) ends there.
+                Err(e) => {
+                    trace!("{} ends in an unreadable packet: {e:#}", self.path.display());
                     self.ended = true;
                     None
                 }
             };
         }
-        Ok(self.next.as_ref())
+        self.next.as_ref()
     }
 
     /// The server tick the next frame has: its own `net_Tick`, or as far as the frames so far tell
     /// (a demo's tick less the server's, which a pause changes: an STV demo has no frames while the
     /// server is paused); None when there is none yet. Other packets come first, as due.
-    fn next_tick(&mut self) -> Result<Option<i64>> {
+    fn next_tick(&mut self) -> Option<i64> {
         let offset = self.offset;
-        if self.peek()?.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(match &self.next {
+        self.peek()?;
+        Some(match &self.next {
             Some(Packet::Message { tick, data }) => {
                 let guess = i64::from(*tick) + offset;
                 self.dec.frame_tick(data).map_or(guess, i64::from)
             }
             _ => i64::MIN,
-        }))
+        })
     }
 
     /// Decodes the next packet; a frame's stream and what decoding found, or None for a packet
@@ -286,8 +303,20 @@ impl Relay {
     pub fn play(&self, playback: &Playback, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<()> {
         self.announce(emit)?;
         self.serving(stop, || {
-            Player { relay: self, cur: None, idle: None, paused: false, traced: None }.run(playback, stop)
-        })
+            self.hub().mode = super::Mode::Play { paused: false };
+            Player {
+                relay: self,
+                cur: None,
+                idle: None,
+                paused: false,
+                traced: None,
+                last_target: None,
+                dry: false,
+                problem: None,
+            }
+            .run(playback, stop);
+        });
+        Ok(())
     }
 }
 
@@ -300,10 +329,17 @@ struct Player<'r> {
     paused: bool,
     /// When the trace last said where playback is.
     traced: Option<Instant>,
+    /// The moment wanted last time round, to tell a seek from playback going on.
+    last_target: Option<i64>,
+    /// A jump ahead ran out of what is written: no other until the next seek (playback ahead of a
+    /// growing demo plays its frames as they come, instead of a full update for each).
+    dry: bool,
+    /// Why the clients get nothing, if they do not.
+    problem: Option<String>,
 }
 
 impl Player<'_> {
-    fn run(mut self, playback: &Playback, stop: &AtomicBool) -> Result<()> {
+    fn run(mut self, playback: &Playback, stop: &AtomicBool) {
         while !stop.load(Ordering::Relaxed) {
             if !self.anyone_in() {
                 std::thread::sleep(NAP * 4);
@@ -329,9 +365,18 @@ impl Player<'_> {
                     }
                 }
             }
-            self.step(&want)?;
+            match self.step(&want) {
+                Ok(()) => playback.set_problem(self.problem.clone()),
+                Err(e) => {
+                    // The file went or is corrupt: tell why, and open it again in a while.
+                    trace!("playing {}: {e:#}", want.demo.display());
+                    playback.set_problem(Some(format!("{e:#}")));
+                    self.cur = None;
+                    self.relay.hub().reconnect_all();
+                    std::thread::sleep(RETRY);
+                }
+            }
         }
-        Ok(())
     }
 
     /// Whether a client is in; after a while with none, the demo is dropped.
@@ -358,6 +403,11 @@ impl Player<'_> {
         // Not before the demo starts.
         let target = if want.from_start { first.saturating_add(wanted) } else { wanted.max(first) };
         let jump = (JUMP.as_secs_f32() / interval.max(1e-3)) as i64;
+        // A seek, not playback going on: a jump may find more written than the last.
+        if self.last_target.is_none_or(|t| target.abs_diff(t) > jump.unsigned_abs()) {
+            self.dry = false;
+        }
+        self.last_target = Some(target);
         if *super::TRACE && self.traced.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
             self.traced = Some(Instant::now());
             trace!("playing tick {}, wanted {target}, paused {}, speed {}", c.tick(), want.paused, want.speed);
@@ -368,7 +418,7 @@ impl Player<'_> {
             // clients stay in, and go back.
             let took = Instant::now();
             let mut again = Cursor::open_quietly(&want.demo, &self.relay.hub, true)?;
-            skim(&mut again, &self.relay.hub, target)?;
+            self.dry = skim(&mut again, &self.relay.hub, target).1;
             trace!("decoded back to {target} in {} ms", took.elapsed().as_millis());
             self.cur = Some(again);
             self.relay.hub().all_want_keyframe(Instant::now());
@@ -381,44 +431,53 @@ impl Player<'_> {
             self.relay.hub().set_paused(want.paused || demo_paused);
         }
         let Some(c) = &mut self.cur else { return Ok(()) };
-        if c.started && c.tick() + jump < target {
+        if c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target) {
             let (from, took) = (c.tick(), Instant::now());
-            skim(c, &self.relay.hub, target)?;
-            trace!("jump ahead from {from} to {target} in {} ms", took.elapsed().as_millis());
-            self.relay.hub().all_want_keyframe(Instant::now());
+            let (decoded, dry) = skim(c, &self.relay.hub, target);
+            trace!("jump ahead from {from} to {} in {} ms", c.tick(), took.elapsed().as_millis());
+            self.dry = dry;
+            if decoded > 0 {
+                self.relay.hub().all_want_keyframe(Instant::now());
+            }
         }
         if self.relay.hub().wants_keyframe() {
             // Of the frame the next one builds on, which from a live server is often a few ticks
             // back: at the end of what is written so far, it waits for that frame.
-            let next = match c.peek()? {
+            let next = match c.peek() {
                 Some(Packet::Message { data, .. }) => Some(data.clone()),
                 _ => None,
             };
-            if (next.is_some() || c.ended)
-                && let Some((tick, key)) = c.dec.keyframe(next.as_deref())
-            {
-                let recent: Vec<(u32, BitBuf)> = c.recent.iter().cloned().collect();
-                let since = c.dec.catch_up(tick, &recent);
-                self.relay.hub().send_keyframe(&key, &since, self.paused || c.paused);
+            if next.is_some() || c.ended {
+                if let Some((tick, key)) = c.dec.keyframe(next.as_deref()) {
+                    let recent: Vec<(u32, BitBuf)> = c.recent.iter().cloned().collect();
+                    let since = c.dec.catch_up(tick, &recent);
+                    self.relay.hub().send_keyframe(&key, &since, self.paused || c.paused);
+                    self.problem = None;
+                } else if c.started {
+                    self.problem = Some("this demo cannot be followed from a full update here".into());
+                }
             }
         }
-        match c.next_tick()? {
+        match c.next_tick() {
+            // Not a frame (a user command of a POV demo, say): passed over, paused or not.
+            Some(i64::MIN) => c.next = None,
             // The first frame, in full, is only decoded: every client starts from a keyframe of
             // wherever playback is.
             Some(_) if !c.started => {
                 if let Some((bits, life)) = c.decode() {
                     self.relay.hub().skim(&bits, &life);
-                } else {
-                    c.next = None;
                 }
             }
             Some(next) if !want.paused && next <= target => {
+                let was_paused = c.paused;
                 if let Some((bits, life)) = c.decode() {
                     let mut hub = self.relay.hub();
                     hub.upstream_stream(&bits, false, &life);
                     hub.upstream_flush();
-                } else {
-                    c.next = None;
+                    // The match paused or went on: the clients are told reliably too.
+                    if c.paused != was_paused {
+                        hub.set_paused(c.paused || self.paused);
+                    }
                 }
             }
             _ => std::thread::sleep(NAP),
@@ -427,15 +486,21 @@ impl Player<'_> {
     }
 }
 
-/// Decodes on to `target` without sending: only string table changes reach the clients.
-fn skim(c: &mut Cursor, hub: &Mutex<Hub>, target: i64) -> Result<()> {
-    while let Some(next) = c.next_tick()?
-        && next <= target
-    {
-        match c.decode() {
-            Some((bits, life)) => lock(hub).skim(&bits, &life),
-            None => c.next = None,
+/// Decodes on to `target` without sending: only string table changes reach the clients. How many
+/// frames it decoded, and whether it stopped short for want of more written.
+fn skim(c: &mut Cursor, hub: &Mutex<Hub>, target: i64) -> (usize, bool) {
+    let mut decoded = 0;
+    loop {
+        match c.next_tick() {
+            None => return (decoded, !c.ended),
+            Some(next) if next > target => return (decoded, false),
+            Some(_) => match c.decode() {
+                Some((bits, life)) => {
+                    lock(hub).skim(&bits, &life);
+                    decoded += 1;
+                }
+                None => c.next = None,
+            },
         }
     }
-    Ok(())
 }

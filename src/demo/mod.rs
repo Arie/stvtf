@@ -294,6 +294,12 @@ impl<W: Write + Seek> Writer<W> {
         Ok(())
     }
 
+    /// Writes out what is buffered, so a reader sees every packet so far; the header's counts
+    /// wait for [`Writer::flush`].
+    pub fn flush_packets(&mut self) -> Result<()> {
+        Ok(self.w.flush()?)
+    }
+
     /// The stop packet and the final header.
     pub fn finish(mut self) -> Result<W> {
         let tick = self.header.ticks as i32;

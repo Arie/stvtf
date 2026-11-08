@@ -272,7 +272,10 @@ impl World {
         }
         let frame = |t: u32| self.frames.iter().rev().find(|(tick, _)| *tick == t).map(|(_, f)| f);
         let (old, new) = (frame(from)?, frame(to)?);
-        let mut entities = Vec::new();
+        // By index, as the message lists them: what changed or entered, and what is gone. A game
+        // client keeps every entity a delta does not name, so one gone is named, leaving and
+        // deleted, as a server does (the message's own deletion list only frees what is left).
+        let mut entities: BTreeMap<u32, PacketEntity> = BTreeMap::new();
         for (index, e) in new.iter() {
             match old.get(index) {
                 Some(o) if o.class == e.class && o.serial == e.serial => {
@@ -283,26 +286,46 @@ impl World {
                         .cloned()
                         .collect();
                     if !props.is_empty() {
-                        entities.push(PacketEntity {
-                            server_class: e.class,
-                            entity_index: index.into(),
-                            props,
-                            in_pvs: true,
-                            update_type: UpdateType::Delta,
-                            serial_number: e.serial,
-                            delay: None,
-                            delta: Some(from.into()),
-                            baseline_index: BaselineIndex::First,
-                        });
+                        entities.insert(
+                            index,
+                            PacketEntity {
+                                server_class: e.class,
+                                entity_index: index.into(),
+                                props,
+                                in_pvs: true,
+                                update_type: UpdateType::Delta,
+                                serial_number: e.serial,
+                                delay: None,
+                                delta: Some(from.into()),
+                                baseline_index: BaselineIndex::First,
+                            },
+                        );
                     }
                 }
-                _ => entities.push(enter(state, index, e)?),
+                _ => {
+                    entities.insert(index, enter(state, index, e)?);
+                }
             }
         }
-        let removed = old.iter().filter(|(i, _)| new.get(*i).is_none()).map(|(i, _)| i.into()).collect();
+        for (index, o) in old.iter().filter(|(i, _)| new.get(*i).is_none()) {
+            entities.insert(
+                index,
+                PacketEntity {
+                    server_class: o.class,
+                    entity_index: index.into(),
+                    props: Vec::new(),
+                    in_pvs: false,
+                    update_type: UpdateType::Delete,
+                    serial_number: o.serial,
+                    delay: None,
+                    delta: Some(from.into()),
+                    baseline_index: BaselineIndex::First,
+                },
+            );
+        }
         let msg = PacketEntitiesMessage {
-            entities,
-            removed_entities: removed,
+            entities: entities.into_values().collect(),
+            removed_entities: Vec::new(),
             max_entries: self.max_entries,
             delta: Some(from.into()),
             base_line: BaselineIndex::First,

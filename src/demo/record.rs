@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 
 const NET_TICK: u8 = 3;
 const SVC_PACKETENTITIES: u8 = 26;
-/// The header's counts are written, and what was written reaches the file, this often: a file
-/// being written can be played while it grows.
+/// The header's counts are written again this often; every frame reaches the file at once, so a
+/// file being written can be played while it grows.
 const FLUSH_EVERY: Duration = Duration::from_millis(100);
 
 /// Where a recorded session's demos go.
@@ -159,8 +159,10 @@ impl Recorder {
         let due = st.flushed.is_none_or(|t| t.elapsed() >= FLUSH_EVERY);
         let Some(w) = st.writer.as_mut() else { return };
         let mut written = w.message(tick as i32, datagram.finish().bytes());
-        if due && written.is_ok() {
-            written = w.flush();
+        // Every frame reaches the file at once (one that pauses the match is the last for as long
+        // as the pause lasts); the header's counts less often.
+        if written.is_ok() {
+            written = if due { w.flush() } else { w.flush_packets() };
         }
         if due {
             st.flushed = Some(Instant::now());

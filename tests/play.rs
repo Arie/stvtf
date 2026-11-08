@@ -183,3 +183,78 @@ fn a_client_follows_a_jump_back_and_a_pause() {
     assert!(got[0].1.tick >= first + 19 * 66, "the client started at tick {}", got[0].1.tick);
     assert_as_the_demo(&got, &demo);
 }
+
+/// Snapshots the client got since `since`.
+fn since(seen: &Seen, since: Instant) -> Vec<Snapshot> {
+    snapshots(seen).into_iter().filter(|(t, _)| *t > since).map(|(_, s)| s).collect()
+}
+
+#[test]
+fn at_the_end_of_a_demo_playback_rests() {
+    let demo = demo_snapshots();
+    let last = *demo.keys().next_back().unwrap();
+    // Two seconds before the end at 4x: half a second of frames, then the end.
+    let playback = Playback::new(want(last - 2 * 66, false, false));
+    playing(&playback, |addr| {
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            let _stop = StopOnDrop(&stop);
+            let seen = client(s, addr, &stop);
+            wait_for("the last frame", || snapshots(&seen).iter().any(|(_, s)| s.tick == last));
+            // Nothing more: no full update over and over once past the end.
+            std::thread::sleep(Duration::from_millis(300));
+            let rest = Instant::now();
+            std::thread::sleep(Duration::from_millis(1500));
+            assert_eq!(since(&seen, rest).len(), 0, "frames after the end");
+        });
+    });
+}
+
+#[test]
+fn a_client_follows_a_jump_ahead() {
+    let demo = demo_snapshots();
+    let first = *demo.keys().next().unwrap();
+    let playback = Playback::new(want(first + 5 * 66, false, false));
+    let got = playing(&playback, |addr| {
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            let _stop = StopOnDrop(&stop);
+            let seen = client(s, addr, &stop);
+            wait_for("a second of the demo", || snapshots(&seen).len() > 66);
+            playback.set(want(first + 100 * 66, false, false));
+            let jumped = Instant::now();
+            wait_for("the jump", || since(&seen, jumped).iter().any(|s| s.tick >= first + 100 * 66));
+            wait_for("a second after it", || since(&seen, jumped).len() > 66);
+            assert!(
+                since(&seen, jumped).iter().all(|s| s.tick < first + 6 * 66 || s.tick >= first + 100 * 66),
+                "nothing in between"
+            );
+            snapshots(&seen)
+        })
+    });
+    assert_as_the_demo(&got, &demo);
+}
+
+#[test]
+fn a_client_joining_while_paused_sees_the_moment_and_waits() {
+    let demo = demo_snapshots();
+    let first = *demo.keys().next().unwrap();
+    let at = first + 30 * 66;
+    let playback = Playback::new(want(at, true, false));
+    playing(&playback, |addr| {
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            let _stop = StopOnDrop(&stop);
+            let seen = client(s, addr, &stop);
+            wait_for("the paused moment", || !snapshots(&seen).is_empty());
+            let start = snapshots(&seen)[0].1.tick;
+            assert!(start.abs_diff(at) < 66, "joined at {start}, paused at {at}");
+            let waited = Instant::now();
+            std::thread::sleep(Duration::from_millis(800));
+            assert!(since(&seen, waited).iter().all(|s| s.tick == start), "frames while paused");
+            playback.set(want(start, false, false));
+            let resumed = Instant::now();
+            wait_for("playback going on", || since(&seen, resumed).iter().any(|s| s.tick > start + 66));
+        });
+    });
+}
