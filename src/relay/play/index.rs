@@ -7,7 +7,7 @@
 //! as one that decoded from the start (see `decode::world`), and reads on from there.
 //!
 //! The checkpoints are made on the side, by a thread decoding the whole demo as soon as playback
-//! opens it, and following it as it grows (a live match).
+//! opens it, and following it as it grows (a live match). Relays playing the same demo share them.
 
 use super::{Cursor, RECENT};
 use crate::net::bits::BitBuf;
@@ -54,9 +54,26 @@ pub(super) struct Index {
     stop: AtomicBool,
 }
 
+/// The indexes in use, by demo file: relays playing the same demo (rooms on one match) share one.
+static INDEXES: std::sync::LazyLock<Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<Index>>>> =
+    std::sync::LazyLock::new(Mutex::default);
+
 impl Index {
+    /// The index of the demo at `path`: the one a relay already has, or a new one. Indexing stops
+    /// when the last holder lets go.
+    pub(super) fn shared(path: &Path) -> Arc<Index> {
+        let mut all = INDEXES.lock().unwrap_or_else(PoisonError::into_inner);
+        all.retain(|_, w| w.strong_count() > 0);
+        if let Some(index) = all.get(path).and_then(std::sync::Weak::upgrade) {
+            return index;
+        }
+        let index = Self::start(path);
+        all.insert(path.to_owned(), Arc::downgrade(&index));
+        index
+    }
+
     /// Starts indexing the demo at `path`; it stops when the index is dropped.
-    pub(super) fn start(path: &Path) -> Arc<Index> {
+    fn start(path: &Path) -> Arc<Index> {
         let index =
             Arc::new(Index { path: path.to_owned(), marks: Mutex::new(Vec::new()), stop: AtomicBool::new(false) });
         let weak = Arc::downgrade(&index);
@@ -182,6 +199,17 @@ mod tests {
             }
         }
         c
+    }
+
+    #[test]
+    fn relays_on_one_demo_share_its_index() {
+        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ctf_turbine.dem"));
+        let a = Index::shared(&path);
+        let b = Index::shared(&path);
+        assert!(Arc::ptr_eq(&a, &b));
+        drop((a, b));
+        let c = Index::shared(&path);
+        assert_eq!(Arc::strong_count(&c), 1, "a new one once the last let go");
     }
 
     #[test]

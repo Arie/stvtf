@@ -373,7 +373,7 @@ impl Player<'_> {
                         self.cur = Some(c);
                         playback.set_problem(None);
                         if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
-                            self.index = Some(Index::start(&want.demo));
+                            self.index = Some(Index::shared(&want.demo));
                         }
                     }
                     Err(e) => {
