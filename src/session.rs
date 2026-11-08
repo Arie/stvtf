@@ -119,6 +119,37 @@ pub(crate) trait Tap {
     fn want_full_update(&self) -> bool;
     /// The build the server says it is, before each connection to it.
     fn server_build(&self, build: &str);
+    /// The class tables the session decodes with, before each connection.
+    fn tables(&self, _tables: &Tables) {}
+}
+
+/// Two taps as one.
+pub(crate) struct Both<'a>(pub &'a dyn Tap, pub &'a dyn Tap);
+
+impl Tap for Both<'_> {
+    fn stream(&self, bits: &BitBuf, reliable: bool, life: &Lifecycle) {
+        self.0.stream(bits, reliable, life);
+        self.1.stream(bits, reliable, life);
+    }
+
+    fn flush(&self) {
+        self.0.flush();
+        self.1.flush();
+    }
+
+    fn want_full_update(&self) -> bool {
+        self.0.want_full_update() || self.1.want_full_update()
+    }
+
+    fn server_build(&self, build: &str) {
+        self.0.server_build(build);
+        self.1.server_build(build);
+    }
+
+    fn tables(&self, tables: &Tables) {
+        self.0.tables(tables);
+        self.1.tables(tables);
+    }
 }
 
 struct Session<'o> {

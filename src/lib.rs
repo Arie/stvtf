@@ -9,6 +9,7 @@
 
 pub mod capture;
 pub mod decode;
+pub mod demo;
 #[cfg(fuzzing)]
 pub mod fuzzing;
 #[cfg(test)]

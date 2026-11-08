@@ -11,7 +11,7 @@ stvtf connect HOST:PORT [--password tv] [--hz 20] [--seconds N] [--record FILE.c
                 [--name stv.tf] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
 stvtf replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
 stvtf demo    FILE.dem [--hz 20]
-stvtf relay   HOST:PORT|FILE.cap [--listen 0.0.0.0:27020] (see Relay below)
+stvtf relay   HOST:PORT|FILE.cap|FILE.dem [--listen 0.0.0.0:27020] (see Relay below)
 ```
 
 Add `--relay 0.0.0.0:27121` to `connect` to let TF2 clients watch through it (see Relay).
@@ -319,6 +319,32 @@ How it works (nothing is re-encoded: clients get the server's own message bits):
   `net_graph 5` shows the same rates and no packets without entities. Reliable data rides
   along, and only a server silent for 100 ms gets a keepalive in between. Signon transfers go
   out on all eight subchannels at once.
+
+### Playing a demo
+
+`stvtf relay FILE.dem` plays a demo to the clients from its start, at `--speed`; a client can join
+any time and starts where it is. In the library it is `Relay::play`, following a `Playback`: the
+moment wanted (a server tick at an instant), paused or not, and the speed, set as playback goes
+(a room on stv.tf sets it as its own playback moves). The demo may still be being written.
+
+- Frames go out at their own pace, up to the moment wanted. Off from it by more than a second,
+  playback jumps: ahead, it decodes on without sending; back, it starts the demo again, and every
+  client signs on again.
+- A client that joins, loses a frame or follows a jump ahead gets a full update written from the
+  decoded entities (`decode::world`): each entity entering with its props that differ from its
+  class's static baseline, as a server writes one. The frames after are the demo's own, which
+  build on it. Nothing is asked of a game server.
+- Paused, no frames go out, and the clients get `svc_SetPause`.
+- With nobody in, nothing is decoded, and after a minute what was decoded is dropped.
+- A demo whose class tables are not this build's cannot be played: a game client builds its
+  classes from its own game, so `Playback::problem` says why and nothing is sent.
+
+### Recording demos
+
+`Watch::demos` records the session as `.dem` files, one per connection (a reconnect or a new map
+starts another): the data tables of the build, the signon the connection got, then a frame per
+`net_Tick`, every message as the server sent it. The header's counts are written every 100 ms, so
+a file can be played while it is being written.
 
 `STVTF_DEBUG=relay` traces each client's handshake packets, its signon timing, the transfers it
 is sent, and every 5 s how many of its packets carried server data.

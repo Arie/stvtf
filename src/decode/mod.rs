@@ -11,6 +11,7 @@ mod detail;
 mod extract;
 mod modes;
 mod props;
+mod world;
 
 use crate::net::messages::{Signon, TYPE_BITS};
 use crate::output::Line;
@@ -32,6 +33,8 @@ pub struct Tables {
     header: Header,
     datatables: DataTablePacket,
     crc: u32,
+    /// The data tables packet's bytes, for a demo written with them.
+    raw: Vec<u8>,
 }
 
 impl Tables {
@@ -50,7 +53,7 @@ impl Tables {
         while let Some(packet) = packets.next(handler.get_parser_state())? {
             if let Packet::DataTables(dt) = packet {
                 let crc = crc::sendtable_crc(&dt)?;
-                return Ok(Tables { header, datatables: dt, crc });
+                return Ok(Tables { header, datatables: dt, crc, raw: raw_datatables(bytes)? });
             }
         }
         bail!("no data tables in demo")
@@ -66,9 +69,26 @@ impl Tables {
         self.datatables.tables.len()
     }
 
+    /// The data tables packet as a demo of the build has it.
+    pub fn datatables_bytes(&self) -> &[u8] {
+        &self.raw
+    }
+
     /// The `SendTable` CRC of the build, as the server checks it at signon.
     pub fn sendtable_crc(&self) -> u32 {
         self.crc
+    }
+}
+
+/// The data of the first data tables packet of a demo.
+fn raw_datatables(bytes: &[u8]) -> Result<Vec<u8>> {
+    let mut r = crate::demo::Reader::new(std::io::Cursor::new(bytes))?;
+    loop {
+        match r.next_packet()? {
+            crate::demo::Next::Packet(crate::demo::Packet::DataTables { data, .. }) => return Ok(data),
+            crate::demo::Next::Packet(_) => {}
+            _ => bail!("no data tables in demo"),
+        }
     }
 }
 
@@ -108,6 +128,8 @@ pub(crate) struct Decoder {
     panicked: bool,
     /// Entities have come in full since this decoder started: until then a delta has no base.
     seen_full_update: bool,
+    /// Kept only when asked for: what a full update is written from.
+    world: Option<world::World>,
     out: Vec<Line>,
 }
 
@@ -123,8 +145,37 @@ impl Decoder {
             parse_errors: 0,
             panicked: false,
             seen_full_update: false,
+            world: None,
             out: Vec::new(),
         })
+    }
+
+    /// Keeps every entity's props from the next full update on, for [`Decoder::keyframe`].
+    pub(crate) fn keep_world(&mut self) {
+        self.world.get_or_insert_with(world::World::default);
+    }
+
+    /// `net_Tick` and every entity in full as they are now: a client that starts from it can
+    /// follow the frames after. None without [`Decoder::keep_world`], before a full update came,
+    /// or after a frame may have been missed.
+    pub(crate) fn keyframe(&self) -> Option<crate::net::bits::BitBuf> {
+        self.world.as_ref()?.full_update(self.handler.get_parser_state(), self.extractor().server_tick)
+    }
+
+    /// The server tick of the last frame.
+    pub(crate) fn server_tick(&self) -> u32 {
+        self.extractor().server_tick
+    }
+
+    /// Seconds per server tick.
+    pub(crate) fn tick_interval(&self) -> f32 {
+        self.extractor().interval()
+    }
+
+    /// The entities the keyframe would hold.
+    #[cfg(test)]
+    pub(crate) fn world_len(&self) -> usize {
+        self.world.as_ref().map_or(0, world::World::len)
     }
 
     /// Feeds one message stream (bit packed from bit 0) and returns its lifecycle messages.
@@ -200,6 +251,9 @@ impl Decoder {
                 }
             }
         }
+        // Applied once the packet is: a new class's baseline may come in the same packet, before
+        // the entities that need it.
+        let frames = if self.world.is_some() { entity_frames(&messages) } else { Vec::new() };
         let mut has_entities = false;
         for msg in &messages {
             match msg {
@@ -221,8 +275,18 @@ impl Decoder {
             self.parse_errors += 1;
             life.lost_frame = true;
         }
+        if let Some(w) = &mut self.world {
+            for pe in &frames {
+                w.apply(pe, self.handler.get_parser_state());
+            }
+        }
         let x = self.handler.borrow_output();
         life.lost_frame |= x.take_lost_frame();
+        if life.lost_frame
+            && let Some(w) = &mut self.world
+        {
+            w.lost_frame();
+        }
         x.announce();
         let drained = x.drain();
         let now = x.server_tick;
@@ -251,6 +315,19 @@ impl Decoder {
     pub(crate) fn panicked(&self) -> bool {
         self.panicked
     }
+}
+
+/// The entities messages among `messages`.
+fn entity_frames(
+    messages: &[Message<'_>],
+) -> Vec<tf_demo_parser::demo::message::packetentities::PacketEntitiesMessage> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::PacketEntities(pe) => Some(pe.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Whether the `svc_PacketEntities` at `stream`, just past its type, is a delta: after its 11-bit
@@ -449,5 +526,115 @@ mod tests {
             }
         }
         assert_eq!(full_updates, 1);
+    }
+}
+
+#[cfg(test)]
+mod keyframe_tests {
+    use super::*;
+    use crate::demo::{Next, Packet, Reader};
+    use crate::net::bits::BitReader;
+    use std::collections::BTreeMap;
+
+    const SVC_CREATESTRINGTABLE: u8 = 12;
+    const SVC_UPDATESTRINGTABLE: u8 = 13;
+
+    /// The demo's tables, signon streams and frames.
+    fn packets(name: &str) -> (Tables, Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+        let tables = Tables::from_demo(std::path::Path::new(&path)).unwrap();
+        let mut r = Reader::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let (mut signon, mut frames) = (Vec::new(), Vec::new());
+        while let Next::Packet(p) = r.next_packet().unwrap() {
+            match p {
+                Packet::Signon { data, .. } => signon.push(data),
+                Packet::Message { data, .. } => frames.push(data),
+                _ => {}
+            }
+        }
+        (tables, signon, frames)
+    }
+
+    /// What of a snapshot comes from the entities alone: the rest (scores, a dead player's last
+    /// place, respawn times, health, who left) is gathered from events and frames a late decoder never
+    /// saw. Players are by id, to compare those both know.
+    fn entities(lines: Vec<Line>) -> Vec<(u32, BTreeMap<u16, String>, serde_json::Value)> {
+        lines
+            .into_iter()
+            .filter_map(|l| match l {
+                Line::Snapshot(s) => Some(s),
+                _ => None,
+            })
+            .map(|s| {
+                let players = s.players.iter().map(|p| (p.id.0, format!("{:?} {:?}", p.class, p.team))).collect();
+                (s.tick, players, serde_json::json!([s.buildings, s.projectiles, s.objectives]))
+            })
+            .collect()
+    }
+
+    fn assert_same_world(a: &Decoder, b: &Decoder, what: &str) {
+        let (a, b) = (a.world.as_ref().unwrap().dump(), b.world.as_ref().unwrap().dump());
+        assert_eq!(a.len(), b.len(), "{what}: entities");
+        for (k, x) in &a {
+            assert_eq!(Some(x), b.get(k), "{what}: entity {k}");
+        }
+    }
+
+    #[test]
+    fn a_decoder_started_from_a_keyframe_follows_as_one_from_the_start() {
+        for demo in ["pl_upward.dem", "ctf_turbine.dem", "pd_watergate.dem", "sd_doomsday.dem"] {
+            let (tables, signon, frames) = packets(demo);
+            let mut whole = Decoder::new(&tables, 1000.0).unwrap();
+            whole.keep_world();
+            assert!(whole.keyframe().is_none(), "{demo}: nothing before the first full update");
+            for s in &signon {
+                whole.feed(s, s.len() * 8);
+            }
+            // The string table changes so far, as the relay's log keeps them for a late client.
+            let half = frames.len() / 2;
+            let mut tables_since = Vec::new();
+            for f in &frames[..half] {
+                let life = whole.feed(f, f.len() * 8);
+                for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE))
+                {
+                    tables_since.push(BitReader::slice(f, span.bits.clone()));
+                }
+            }
+            let key = whole.keyframe().expect("a keyframe");
+            assert!(whole.world_len() > 50, "{demo}: {} entities", whole.world_len());
+            whole.take_output();
+
+            let mut late = Decoder::new(&tables, 1000.0).unwrap();
+            late.keep_world();
+            for s in &signon {
+                late.feed(s, s.len() * 8);
+            }
+            for t in &tables_since {
+                late.feed(t.bytes(), t.nbits());
+            }
+            let life = late.feed(key.bytes(), key.nbits());
+            assert!(life.full_update && !life.lost_frame, "{demo}");
+            assert_same_world(&whole, &late, &format!("{demo} at the keyframe"));
+            late.take_output();
+
+            for f in &frames[half..] {
+                whole.feed(f, f.len() * 8);
+                let life = late.feed(f, f.len() * 8);
+                assert!(!life.lost_frame, "{demo}: every delta after builds on it");
+            }
+            assert_same_world(&whole, &late, &format!("{demo} at the end"));
+            let (a, b) = (entities(whole.take_output()), entities(late.take_output()));
+            assert!(a.len() > 10, "{demo}");
+            assert_eq!(a.len(), b.len(), "{demo}");
+            for ((tick, pa, xa), (_, pb, xb)) in a.iter().zip(&b) {
+                assert_eq!(xa, xb, "{demo} at tick {tick}");
+                for (id, p) in pa {
+                    if let Some(q) = pb.get(id) {
+                        assert_eq!(p, q, "{demo} at tick {tick}: player {id}");
+                    }
+                }
+                assert!(pb.keys().filter(|id| pa.contains_key(id)).count() >= pa.len().min(4), "{demo}: players known");
+            }
+        }
     }
 }

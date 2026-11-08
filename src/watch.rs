@@ -53,6 +53,8 @@ pub struct Watch {
     pub record: Option<PathBuf>,
     /// Pass the server on to clients that connect here (see [`crate::relay`]).
     pub relay: Option<RelayConfig>,
+    /// Record the session as `.dem` files, one per connection (see [`crate::demo::Files`]).
+    pub demos: Option<std::sync::Arc<dyn crate::demo::Files>>,
     /// The wait before reconnecting; it doubles, up to 30 s, while connecting keeps failing.
     pub retry_after: Duration,
 }
@@ -71,6 +73,7 @@ impl Watch {
             duration: None,
             record: None,
             relay: None,
+            demos: None,
             retry_after: BACKOFF_MIN,
         }
     }
@@ -89,6 +92,7 @@ impl fmt::Debug for Watch {
             .field("duration", &self.duration)
             .field("record", &self.record)
             .field("relay", &self.relay)
+            .field("demos", &self.demos.is_some())
             .field("retry_after", &self.retry_after)
             .finish()
     }
@@ -170,9 +174,11 @@ pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
 /// passing every event and snapshot to `emit`. Blocks the calling thread.
 /// With [`Watch::relay`] set, the relay serves clients for as long as this runs.
 pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
+    let recorder = w.demos.clone().map(crate::demo::Recorder::new);
+    let recording = recorder.as_ref().map(|r| r as &dyn session::Tap);
     match &w.relay {
-        Some(config) => Relay::bind(config)?.watch(w, stop, emit),
-        None => watch_with(w, stop, None, emit),
+        Some(config) => Relay::bind(config)?.watch_also(w, stop, recording, emit),
+        None => watch_with(w, stop, recording, emit),
     }
 }
 
@@ -218,6 +224,9 @@ pub(crate) fn watch_with(
             _ => loaded.insert((source.to_string(), tables(source, w.tables.as_deref())?)),
         };
         opt.crc = w.crc.unwrap_or_else(|| class_tables.sendtable_crc());
+        if let Some(tap) = tap {
+            tap.tables(class_tables);
+        }
         emit(Line::Status(Status::Connecting { server: server.to_string(), build: build.clone() }));
         let streamed = match handshake::connect(server, &opt.name, &w.password, &build, CONNECT_TIMEOUT, wait) {
             Ok(conn) => match session::run(&conn, class_tables, &opt, recorder.as_mut(), stop, deadline, tap, emit)? {

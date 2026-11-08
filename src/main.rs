@@ -7,7 +7,7 @@ use std::time::Duration;
 use stvtf::capture;
 use stvtf::decode::{self, Tables};
 use stvtf::output::Stamped;
-use stvtf::relay::{Relay, RelayConfig};
+use stvtf::relay::{Playback, Relay, RelayConfig, Want};
 use stvtf::watch::{self, Watch};
 use stvtf::{Line, Options};
 
@@ -19,7 +19,7 @@ stvtf: headless TF2 SourceTV spectator emitting top-down overview data as JSON l
                   [--relay HOST:PORT [--relay-password PW] [--relay-slots 10]]
   stvtf replay  FILE.cap [--hz 20] [--tables SAME_BUILD.dem] [--build N]
   stvtf demo    FILE.dem [--hz 20]
-  stvtf relay   HOST:PORT|FILE.cap [--listen 0.0.0.0:27020] [--relay-password PW] [--relay-slots 10]
+  stvtf relay   HOST:PORT|FILE.cap|FILE.dem [--listen 0.0.0.0:27020] [--relay-password PW] [--relay-slots 10]
                   [--password tv] [--name stv.tf] [--tables SAME_BUILD.dem] [--crc HEX] [--build N]
                   [--speed 1]
 
@@ -29,7 +29,8 @@ other local users cannot read the way they can read command-line arguments.
 --relay passes the server on to TF2 clients that connect there, as tv_relay does, at no cost of
 a slot on the server. Its password comes from --relay-password or STVTF_RELAY_PASSWORD, or is
 made up and printed to stderr. `relay` does only that, printing only status lines; given a
-capture, it replays it once the first client connects.
+capture, it replays it once the first client connects; given a demo, it plays it from the start,
+to clients that can join any time.
 Tables of the build reported by the server are built in for known builds; pass --tables
 (any demo recorded on that build) for others. --crc overrides the CRC the tables give.";
 
@@ -168,19 +169,35 @@ fn main() -> Result<()> {
 fn relay(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
     let relay = Relay::bind(&relay_config(args, args.get("listen").unwrap_or("0.0.0.0:27020"))?)?;
     watch::stop_on_ctrl_c(&STOP)?;
-    if std::path::Path::new(&args.target).is_file() {
+    let file = std::path::Path::new(&args.target);
+    if file.is_file() && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("dem")) {
+        let want = Want {
+            demo: file.to_owned(),
+            tick: 0,
+            at: std::time::Instant::now(),
+            paused: false,
+            speed: speed(args)?,
+            from_start: true,
+        };
+        relay.play(&Playback::new(want), &STOP, emit)?;
+    } else if file.is_file() {
         let bytes = std::fs::read(&args.target).with_context(|| format!("reading {}", args.target))?;
         let records = capture::read(&bytes)?;
-        let speed: f64 = args.get("speed").unwrap_or("1").parse().context("--speed: not a number")?;
-        if !speed.is_finite() || speed <= 0.0 {
-            bail!("--speed must be over 0");
-        }
         let build = args.get("build").unwrap_or(stvtf::CURRENT_BUILD);
-        relay.replay(&records, &args.tables(build)?, speed, &STOP, emit)?;
+        relay.replay(&records, &args.tables(build)?, speed(args)?, &STOP, emit)?;
     } else {
         relay.watch(&watch_args(args)?, &STOP, emit)?;
     }
     Ok(())
+}
+
+/// `--speed`: how much faster than the game a capture or demo plays.
+fn speed(args: &Args) -> Result<f64> {
+    let speed: f64 = args.get("speed").unwrap_or("1").parse().context("--speed: not a number")?;
+    if !speed.is_finite() || speed <= 0.0 {
+        bail!("--speed must be over 0");
+    }
+    Ok(speed)
 }
 
 fn connect(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {

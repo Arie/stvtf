@@ -48,20 +48,24 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 /// `STVTF_DEBUG=relay` traces handshakes, signon timing and what each client is sent.
-static TRACE: LazyLock<bool> = LazyLock::new(|| std::env::var("STVTF_DEBUG").as_deref() == Ok("relay"));
+pub(crate) static TRACE: LazyLock<bool> = LazyLock::new(|| std::env::var("STVTF_DEBUG").as_deref() == Ok("relay"));
 
 macro_rules! trace {
     ($($arg:tt)*) => {
-        if *TRACE {
+        if *$crate::relay::TRACE {
             eprintln!("relay: {}", format_args!($($arg)*));
         }
     };
 }
 
+mod play;
+pub use play::{Playback, Want};
+
 /// How often the trace sums up what each client was sent.
 const TRACE_EVERY: Duration = Duration::from_secs(5);
 
 const SVC_SERVERINFO: u8 = 8;
+const SVC_SETPAUSE: u32 = 11;
 const SVC_CREATESTRINGTABLE: u8 = 12;
 const SVC_UPDATESTRINGTABLE: u8 = 13;
 const SVC_PACKETENTITIES: u8 = 26;
@@ -546,6 +550,76 @@ impl Hub {
         }
     }
 
+    /// A stream passed over on a jump: only its string table changes count, which every client
+    /// needs, so they go into the log and reliably to the clients already in.
+    fn skim(&mut self, bits: &BitBuf, life: &Lifecycle) {
+        self.keyframe = None;
+        for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)) {
+            let msg = BitReader::slice(bits.bytes(), span.bits.clone());
+            if !self.logged_unreliable.insert(msg.clone()) {
+                continue;
+            }
+            self.log.push(Logged { bits: msg.clone(), gate: None });
+            for c in self.clients.values_mut() {
+                if c.phase != Phase::Signon && c.cursor + 1 == self.log.len() {
+                    c.queue.push(msg.clone());
+                    c.cursor += 1;
+                } else {
+                    c.pump(&self.log);
+                }
+            }
+        }
+    }
+
+    /// Whether a client is ready for entities and waits for a full update.
+    fn wants_keyframe(&self) -> bool {
+        self.clients.values().any(|c| c.phase == Phase::WaitingFull && c.has_log(&self.log))
+    }
+
+    /// Every client in the game needs a full update: playback jumped ahead.
+    fn all_want_keyframe(&mut self, now: Instant) {
+        self.keyframe = None;
+        for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
+            c.set_phase(Phase::WaitingFull, now);
+        }
+    }
+
+    /// A full update (`net_Tick` and the entities) for the clients waiting for one, who are told
+    /// if playback is `paused`. The frames after it are kept with it, for clients that come soon
+    /// after.
+    fn send_keyframe(&mut self, key: &BitBuf, paused: bool) {
+        let now = Instant::now();
+        self.signon_open = false;
+        self.keyframe = Some(vec![key.clone()]);
+        let pause = paused.then(|| set_pause(true));
+        for (addr, c) in &mut self.clients {
+            if c.phase == Phase::WaitingFull && c.has_log(&self.log) {
+                trace!("{addr} gets a keyframe of {} bits", key.nbits());
+                c.set_phase(Phase::Active, now);
+                if let Some(p) = &pause {
+                    c.queue.push(p.clone());
+                }
+                send(&self.sock, &mut self.split_group, *addr, c, Some(key), true, now);
+            }
+        }
+    }
+
+    /// Tells the clients in the game that playback paused or went on.
+    fn set_paused(&mut self, paused: bool) {
+        let msg = set_pause(paused);
+        for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
+            c.queue.push(msg.clone());
+        }
+    }
+
+    /// Nobody is in: what was logged goes, and the next client starts afresh.
+    fn forget(&mut self) {
+        self.log.clear();
+        self.logged_unreliable.clear();
+        self.signon_open = true;
+        self.keyframe = None;
+    }
+
     /// Sends what the upstream datagram brought.
     fn upstream_flush(&mut self) {
         let now = Instant::now();
@@ -753,6 +827,14 @@ impl Hub {
     }
 }
 
+/// `svc_SetPause`.
+fn set_pause(paused: bool) -> BitBuf {
+    let mut w = BitWriter::new();
+    w.write_bits(SVC_SETPAUSE, TYPE_BITS);
+    w.write_bit(paused);
+    w.finish()
+}
+
 /// Sends a client a packet: `tail` and a transfer block if one can go, or nothing when neither
 /// is there and `always` is not set. Whether it sent one.
 fn send(
@@ -870,8 +952,24 @@ impl Relay {
 
     /// Relays a `SourceTV` server, reconnecting as [`crate::watch::watch`] does, until `stop`.
     pub fn watch(&self, w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
+        self.watch_also(w, stop, None, emit)
+    }
+
+    /// [`Relay::watch`], passing the traffic to `also` as well.
+    pub(crate) fn watch_also(
+        &self,
+        w: &Watch,
+        stop: &AtomicBool,
+        also: Option<&dyn Tap>,
+        emit: &mut dyn FnMut(Line),
+    ) -> Result<(), WatchError> {
         self.announce(emit)?;
-        self.serving(stop, || crate::watch::watch_with(w, stop, Some(self), emit))
+        let both = also.map(|a| session::Both(self, a));
+        let tap: &dyn Tap = match &both {
+            Some(b) => b,
+            None => self,
+        };
+        self.serving(stop, || crate::watch::watch_with(w, stop, Some(tap), emit))
     }
 
     /// Relays the first session of a capture as if it came live, `speed` times as fast. It
