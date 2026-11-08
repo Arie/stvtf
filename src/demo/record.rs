@@ -182,7 +182,7 @@ impl Drop for Recorder {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::capture;
     use crate::output::Line;
@@ -203,17 +203,17 @@ mod tests {
         lines.into_iter().filter(|l| !matches!(l, Line::Status(_))).collect()
     }
 
-    #[test]
-    fn a_recorded_session_plays_as_the_session_did() {
-        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bots_cp_badlands.cap")).unwrap();
+    /// The first session of capture fixture `name`, recorded as a demo: what it decoded to, and the
+    /// demo's file.
+    pub(crate) fn record_capture(name: &str, opt: &Options) -> (Vec<Line>, PathBuf) {
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let bytes = std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
         let records = capture::read(&bytes).unwrap();
         let tables = Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap();
-        // A snapshot every frame, so both have the same.
-        let opt = Options { snapshot_hz: 1000.0, ..Options::default() };
         let mut want = Vec::new();
-        capture::replay(&records, &tables, &opt, &mut |l| want.push(l)).unwrap();
-
-        let dir = std::env::temp_dir().join(format!("stvtf-record-{}", std::process::id()));
+        capture::replay(&records, &tables, opt, &mut |l| want.push(l)).unwrap();
+        let n = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("stvtf-record-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let recorder = Recorder::new(Arc::new(Folder(dir.clone())));
         recorder.tables(&tables);
@@ -225,16 +225,23 @@ mod tests {
             .map(|r| (r.t_us, r.data))
             .collect();
         let stop = AtomicBool::new(false);
-        session::replay_paced(challenge, &datagrams, &tables, &opt, 1e9, &recorder, &|| false, &stop, &mut |_| {})
+        session::replay_paced(challenge, &datagrams, &tables, opt, 1e9, &recorder, &|| false, &stop, &mut |_| {})
             .unwrap();
         drop(recorder);
-
         let files: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
         assert_eq!(files.len(), 1, "{files:?}");
-        let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
+        (want, files[0].clone())
+    }
+
+    #[test]
+    fn a_recorded_session_plays_as_the_session_did() {
+        // A snapshot every frame, so both have the same.
+        let opt = Options { snapshot_hz: 1000.0, ..Options::default() };
+        let (want, file) = record_capture("bots_cp_badlands.cap", &opt);
+        let name = file.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with("cp_badlands-"), "{name}");
-        let demo = std::fs::read(&files[0]).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
+        let demo = std::fs::read(&file).unwrap();
+        std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
         let header = Header::parse(&demo).unwrap();
         assert_eq!(header.map, "cp_badlands");
         assert!(header.frames > 100 && header.ticks > 100 && header.signon_bytes > 1000, "{header:?}");

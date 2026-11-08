@@ -28,6 +28,8 @@ const JUMP: Duration = Duration::from_secs(1);
 const NAP: Duration = Duration::from_millis(5);
 /// With nobody in for this long, the decoded demo is dropped.
 const IDLE: Duration = Duration::from_secs(60);
+/// Frames kept that a keyframe's client may need: those since the frame the next one builds on.
+const RECENT: usize = 128;
 
 /// Where playback should be: at `tick` (a server tick of `demo`) at the instant `at`, going on
 /// from there at `speed` unless paused.
@@ -104,6 +106,10 @@ struct Cursor {
     started: bool,
     /// The server tick of the first frame.
     first: Option<i64>,
+    /// The demo's stop packet was read: no more frames come.
+    ended: bool,
+    /// The last frames decoded, by server tick, cut after their last message.
+    recent: std::collections::VecDeque<(u32, BitBuf)>,
 }
 
 impl Cursor {
@@ -139,7 +145,17 @@ impl Cursor {
             h.upstream_stream(&bits, true, &life);
             h.upstream_flush();
         }
-        Ok(Cursor { path: path.to_owned(), reader, dec, next, offset: 0, started: false, first: None })
+        Ok(Cursor {
+            path: path.to_owned(),
+            reader,
+            dec,
+            next,
+            offset: 0,
+            started: false,
+            first: None,
+            ended: false,
+            recent: std::collections::VecDeque::default(),
+        })
     }
 
     /// The next packet, read ahead; None when the demo has no more yet.
@@ -147,7 +163,11 @@ impl Cursor {
         if self.next.is_none() {
             self.next = match self.reader.next_packet()? {
                 Next::Packet(p) => Some(p),
-                Next::More | Next::Stop => None,
+                Next::More => None,
+                Next::Stop => {
+                    self.ended = true;
+                    None
+                }
             };
         }
         Ok(self.next.as_ref())
@@ -173,6 +193,11 @@ impl Cursor {
         self.offset = i64::from(self.dec.server_tick()) - i64::from(tick);
         self.started = true;
         self.first.get_or_insert(i64::from(self.dec.server_tick()));
+        let end = life.spans.last().map_or(0, |s| s.bits.end);
+        self.recent.push_back((self.dec.server_tick(), crate::net::bits::BitReader::slice(bits.bytes(), 0..end)));
+        if self.recent.len() > RECENT {
+            self.recent.pop_front();
+        }
         Some((bits, life))
     }
 
@@ -278,10 +303,19 @@ impl Player<'_> {
             skim(c, &self.relay.hub, target)?;
             self.relay.hub().all_want_keyframe(Instant::now());
         }
-        if self.relay.hub().wants_keyframe()
-            && let Some(key) = c.dec.keyframe()
-        {
-            self.relay.hub().send_keyframe(&key, self.paused);
+        if self.relay.hub().wants_keyframe() {
+            // Of the frame the next one builds on, which from a live server is often a few ticks
+            // back: at the end of what is written so far, it waits for that frame.
+            let next = match c.peek()? {
+                Some(Packet::Message { data, .. }) => Some(data.clone()),
+                _ => None,
+            };
+            if (next.is_some() || c.ended)
+                && let Some((tick, key)) = c.dec.keyframe(next.as_deref())
+            {
+                let since: Vec<BitBuf> = c.recent.iter().filter(|(t, _)| *t > tick).map(|(_, f)| f.clone()).collect();
+                self.relay.hub().send_keyframe(&key, &since, self.paused);
+            }
         }
         match c.next_tick()? {
             // The first frame, in full, is only decoded: every client starts from a keyframe of

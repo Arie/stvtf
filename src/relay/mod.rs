@@ -584,13 +584,13 @@ impl Hub {
         }
     }
 
-    /// A full update (`net_Tick` and the entities) for the clients waiting for one, who are told
-    /// if playback is `paused`. The frames after it are kept with it, for clients that come soon
-    /// after.
-    fn send_keyframe(&mut self, key: &BitBuf, paused: bool) {
+    /// A full update (`net_Tick` and the entities) and the frames played since the one it is of,
+    /// for the clients waiting for one, who are told if playback is `paused`. They are kept, with
+    /// the frames after, for clients that come soon after.
+    fn send_keyframe(&mut self, key: &BitBuf, since: &[BitBuf], paused: bool) {
         let now = Instant::now();
         self.signon_open = false;
-        self.keyframe = Some(vec![key.clone()]);
+        self.keyframe = Some(std::iter::once(key.clone()).chain(since.iter().cloned()).collect());
         let pause = paused.then(|| set_pause(true));
         for (addr, c) in &mut self.clients {
             if c.phase == Phase::WaitingFull && c.has_log(&self.log) {
@@ -600,6 +600,9 @@ impl Hub {
                     c.queue.push(p.clone());
                 }
                 send(&self.sock, &mut self.split_group, *addr, c, Some(key), true, now);
+                for f in since {
+                    send(&self.sock, &mut self.split_group, *addr, c, Some(f), true, now);
+                }
             }
         }
     }
@@ -944,6 +947,11 @@ impl Relay {
     /// The address clients connect to.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.sock.local_addr()
+    }
+
+    /// How many clients are in.
+    pub fn clients(&self) -> usize {
+        self.hub().clients.len()
     }
 
     fn hub(&self) -> MutexGuard<'_, Hub> {

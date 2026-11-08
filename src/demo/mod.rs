@@ -11,6 +11,8 @@ use anyhow::{Context, Result, bail};
 mod record;
 pub use record::Files;
 pub(crate) use record::Recorder;
+#[cfg(test)]
+pub(crate) use record::tests::record_capture as record_capture_for_tests;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 
 /// Bytes before the first packet.

@@ -332,8 +332,10 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   client signs on again.
 - A client that joins, loses a frame or follows a jump ahead gets a full update written from the
   decoded entities (`decode::world`): each entity entering with its props that differ from its
-  class's static baseline, as a server writes one. The frames after are the demo's own, which
-  build on it. Nothing is asked of a game server.
+  class's static baseline, as a server writes one. It is of the frame the next one builds on
+  (in a recorded live session, the last one stvtf acked, often a few ticks back; the decoder
+  keeps the frames since), followed by the frames played since then, so the demo's own frames
+  build on what the client has. Nothing is asked of a game server.
 - Paused, no frames go out, and the clients get `svc_SetPause`.
 - With nobody in, nothing is decoded, and after a minute what was decoded is dropped.
 - A demo whose class tables are not this build's cannot be played: a game client builds its

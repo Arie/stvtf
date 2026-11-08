@@ -26,6 +26,7 @@ use tf_demo_parser::demo::packet::Packet;
 use tf_demo_parser::demo::packet::datatable::DataTablePacket;
 use tf_demo_parser::demo::packet::message::{MessagePacket, MessagePacketMeta};
 use tf_demo_parser::demo::parser::DemoHandler;
+use tf_demo_parser::demo::parser::Parse;
 use tf_demo_parser::demo::parser::RawPacketStream;
 
 /// The entity class tables of one server build, taken from a demo of that build.
@@ -155,11 +156,31 @@ impl Decoder {
         self.world.get_or_insert_with(world::World::default);
     }
 
-    /// `net_Tick` and every entity in full as they are now: a client that starts from it can
-    /// follow the frames after. None without [`Decoder::keep_world`], before a full update came,
-    /// or after a frame may have been missed.
-    pub(crate) fn keyframe(&self) -> Option<crate::net::bits::BitBuf> {
-        self.world.as_ref()?.full_update(self.handler.get_parser_state(), self.extractor().server_tick)
+    /// `net_Tick` and every entity in full, of the frame that `next` (the next frame's message
+    /// stream, if known) builds on, or else the latest, with that frame's server tick: a client
+    /// that starts from it, and gets the frames after it, can follow. None without
+    /// [`Decoder::keep_world`], before a full update came, or after a frame may have been missed.
+    pub(crate) fn keyframe(&self, next: Option<&[u8]>) -> Option<(u32, crate::net::bits::BitBuf)> {
+        let base = next.and_then(|d| self.delta_base(d));
+        self.world.as_ref()?.full_update(self.handler.get_parser_state(), base)
+    }
+
+    /// The server tick of the frame the entities in message stream `data` build on, if they are a
+    /// delta; it is read, not decoded into anything.
+    fn delta_base(&self, data: &[u8]) -> Option<u32> {
+        let state = self.handler.get_parser_state();
+        let mut stream = BitReadStream::new(BitReadBuffer::new(data, LittleEndian));
+        while stream.bits_left() > TYPE_BITS {
+            let t = MessageType::read(&mut stream).ok()?;
+            if t == MessageType::PacketEntities {
+                let pe =
+                    tf_demo_parser::demo::message::packetentities::PacketEntitiesMessage::parse(&mut stream, state)
+                        .ok()?;
+                return pe.delta.map(u32::from);
+            }
+            Message::skip_type(t, &mut stream, state).ok()?;
+        }
+        None
     }
 
     /// The server tick of the last frame.
@@ -276,8 +297,9 @@ impl Decoder {
             life.lost_frame = true;
         }
         if let Some(w) = &mut self.world {
+            let tick = self.handler.borrow_output().server_tick;
             for pe in &frames {
-                w.apply(pe, self.handler.get_parser_state());
+                w.apply(pe, self.handler.get_parser_state(), tick);
             }
         }
         let x = self.handler.borrow_output();
@@ -540,10 +562,9 @@ mod keyframe_tests {
     const SVC_UPDATESTRINGTABLE: u8 = 13;
 
     /// The demo's tables, signon streams and frames.
-    fn packets(name: &str) -> (Tables, Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+    fn packets(path: &str) -> (Tables, Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let tables = Tables::from_demo(std::path::Path::new(&path)).unwrap();
-        let mut r = Reader::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let mut r = Reader::new(std::fs::File::open(path).unwrap()).unwrap();
         let (mut signon, mut frames) = (Vec::new(), Vec::new());
         while let Next::Packet(p) = r.next_packet().unwrap() {
             match p {
@@ -582,25 +603,37 @@ mod keyframe_tests {
 
     #[test]
     fn a_decoder_started_from_a_keyframe_follows_as_one_from_the_start() {
-        for demo in ["pl_upward.dem", "ctf_turbine.dem", "pd_watergate.dem", "sd_doomsday.dem"] {
+        let fixture = |name: &str| format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+        // A live session recorded as a demo too: its deltas build on frames a few ticks back.
+        let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
+        let recorded = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
+        let demos = ["pl_upward.dem", "ctf_turbine.dem", "pd_watergate.dem", "sd_doomsday.dem"]
+            .map(fixture)
+            .into_iter()
+            .chain([recorded.display().to_string()]);
+        for demo in demos {
+            let demo = demo.as_str();
             let (tables, signon, frames) = packets(demo);
             let mut whole = Decoder::new(&tables, 1000.0).unwrap();
             whole.keep_world();
-            assert!(whole.keyframe().is_none(), "{demo}: nothing before the first full update");
+            assert!(whole.keyframe(None).is_none(), "{demo}: nothing before the first full update");
             for s in &signon {
                 whole.feed(s, s.len() * 8);
             }
             // The string table changes so far, as the relay's log keeps them for a late client.
             let half = frames.len() / 2;
             let mut tables_since = Vec::new();
+            let mut ticks = Vec::new();
             for f in &frames[..half] {
                 let life = whole.feed(f, f.len() * 8);
+                ticks.push(whole.server_tick());
                 for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE))
                 {
                     tables_since.push(BitReader::slice(f, span.bits.clone()));
                 }
             }
-            let key = whole.keyframe().expect("a keyframe");
+            // Of the frame the next builds on.
+            let (key_tick, key) = whole.keyframe(Some(&frames[half])).expect("a keyframe");
             assert!(whole.world_len() > 50, "{demo}: {} entities", whole.world_len());
             whole.take_output();
 
@@ -614,7 +647,15 @@ mod keyframe_tests {
             }
             let life = late.feed(key.bytes(), key.nbits());
             assert!(life.full_update && !life.lost_frame, "{demo}");
-            assert_same_world(&whole, &late, &format!("{demo} at the keyframe"));
+            // Then the frames played since the one it is of, as the relay sends them with it.
+            for (f, _) in frames[..half].iter().zip(&ticks).filter(|(_, t)| **t > key_tick) {
+                late.feed(f, f.len() * 8);
+            }
+            // A demo's next frame builds on the last: the keyframe is of where `whole` is. (A live
+            // session's builds on one a few ticks back, which the keyframe is of instead.)
+            if whole.delta_base(&frames[half]) == Some(whole.server_tick()) {
+                assert_same_world(&whole, &late, &format!("{demo} at the keyframe"));
+            }
             late.take_output();
 
             for f in &frames[half..] {
