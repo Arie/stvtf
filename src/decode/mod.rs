@@ -95,7 +95,7 @@ fn raw_datatables(bytes: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// What the session needs to know from the streams it just fed.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub(crate) struct Lifecycle {
     pub signon: Vec<Signon>,
     pub server_info: Option<(i32, String)>,
@@ -120,6 +120,8 @@ pub(crate) struct Span {
 
 /// The type of a span that could not be decoded.
 pub(crate) const UNPARSED: u8 = u8::MAX;
+
+const SVC_GAMEEVENT: u32 = 25;
 
 pub(crate) struct Decoder {
     handler: DemoHandler<Extractor>,
@@ -420,6 +422,57 @@ impl Decoder {
         self.round = event;
     }
 
+    /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
+    pub(crate) fn hltv_chase(&self, player: u16) -> Option<crate::net::bits::BitBuf> {
+        use tf_demo_parser::demo::gameevent_gen::{GameEvent, GameEventType, HLTVChaseEvent};
+        use tf_demo_parser::demo::message::gameevent::GameEventMessage;
+        use tf_demo_parser::demo::parser::Encode;
+        let ent = self.extractor().snapshot().players.iter().find(|p| p.id.0 == player)?.ent;
+        let state = self.handler.get_parser_state();
+        let def = state.event_definitions.iter().find(|d| d.event_type == GameEventType::HLTVChase)?;
+        let event = HLTVChaseEvent {
+            target_1: u16::try_from(ent).ok()?,
+            target_2: 0,
+            distance: 96,
+            theta: 0,
+            phi: 0,
+            inertia: 0,
+            in_eye: 1,
+        };
+        let msg = GameEventMessage {
+            event_type_id: def.id,
+            event_type: GameEventType::HLTVChase,
+            event: GameEvent::HLTVChase(event),
+        };
+        let mut bytes = Vec::new();
+        let nbits = {
+            let mut s = bitbuffer::BitWriteStream::new(&mut bytes, LittleEndian);
+            msg.encode(&mut s, state).ok()?;
+            s.bit_len()
+        };
+        let mut w = crate::net::bits::BitWriter::new();
+        w.write_bits(SVC_GAMEEVENT, TYPE_BITS);
+        w.write_buf(&crate::net::bits::BitReader::slice(&bytes, 0..nbits));
+        Some(w.finish())
+    }
+
+    /// Whether the message at `span` is a director camera cue (`hltv_chase`, `hltv_fixed`, …).
+    pub(crate) fn is_director_cue(&self, data: &[u8], span: &Span) -> bool {
+        use tf_demo_parser::demo::gameevent_gen::GameEventType as E;
+        if u32::from(span.id) != SVC_GAMEEVENT {
+            return false;
+        }
+        let at = span.bits.start + TYPE_BITS + 11;
+        let Ok(id) = crate::net::bits::BitReader::at(data, at).read_bits(9) else { return false };
+        let defs = &self.handler.get_parser_state().event_definitions;
+        defs.get(id as usize).is_some_and(|d| {
+            matches!(
+                d.event_type,
+                E::HLTVChase | E::HLTVFixed | E::HLTVCameraman | E::HLTVRankCamera | E::HLTVRankEntity
+            )
+        })
+    }
+
     /// How many `userinfo` and `instancebaseline` entries were rewritten so far (see `tables`).
     pub(crate) fn tables_rewritten(&self) -> u32 {
         self.tables.rewritten()
@@ -429,6 +482,11 @@ impl Decoder {
     /// same demo) back to this one's, as far as they matter; None if they cannot be written.
     pub(crate) fn set_tables_back(&self, later: &Decoder) -> Option<Vec<crate::net::bits::BitBuf>> {
         self.tables.set_back(&later.tables, self.handler.get_parser_state())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parser_state_for_tests(&self) -> &tf_demo_parser::ParserState {
+        self.handler.get_parser_state()
     }
 
     pub(crate) fn extractor(&self) -> &Extractor {

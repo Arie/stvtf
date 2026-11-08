@@ -178,6 +178,7 @@ fn relay(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
             paused: false,
             speed: speed(args)?,
             from_start: true,
+            camera: None,
         };
         relay.play(&Playback::new(want), &STOP, emit)?;
     } else if file.is_file() {

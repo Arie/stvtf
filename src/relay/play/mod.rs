@@ -41,6 +41,8 @@ const IDLE: Duration = Duration::from_secs(60);
 const RECENT: usize = 128;
 /// How long the player waits after an error before trying the demo again.
 const RETRY: Duration = Duration::from_millis(200);
+/// How often the camera cue is repeated, for clients that looked away.
+const CUE_EVERY: Duration = Duration::from_secs(3);
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
 static OUR_CRC: std::sync::LazyLock<Option<u32>> = std::sync::LazyLock::new(|| {
@@ -64,6 +66,18 @@ pub struct Want {
     pub speed: f64,
     /// `tick` counts from the demo's first frame instead.
     pub from_start: bool,
+    /// Overrides the demo's director camera.
+    pub camera: Option<Camera>,
+}
+
+/// A camera the clients' director is told to take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Camera {
+    /// In the eyes of a player.
+    Follow {
+        /// Their user id.
+        player: u16,
+    },
 }
 
 impl Want {
@@ -328,6 +342,7 @@ impl Relay {
                 dry: false,
                 problem: None,
                 index: None,
+                cued: None,
             }
             .run(playback, stop);
         });
@@ -353,6 +368,8 @@ struct Player<'r> {
     problem: Option<String>,
     /// Checkpoints through the demo playing, made on the side.
     index: Option<Arc<Index>>,
+    /// The camera the clients were last told to take, and when.
+    cued: Option<(Camera, Instant)>,
 }
 
 impl Player<'_> {
@@ -518,11 +535,15 @@ impl Player<'_> {
                     since.extend(c.dec.round_event());
                     self.relay.hub().send_keyframe(&key, &since, self.paused || c.paused);
                     self.problem = None;
+                    // Those just in are told where the camera is.
+                    self.cued = None;
                 } else if c.started {
                     self.problem = Some("this demo cannot be followed from a full update here".into());
                 }
             }
         }
+        self.cue(want.camera);
+        let Some(c) = &mut self.cur else { return Ok(()) };
         match c.next_tick() {
             // Not a frame (a user command of a POV demo, say): passed over, paused or not.
             Some(i64::MIN) => c.next = None,
@@ -536,6 +557,9 @@ impl Player<'_> {
             Some(next) if !want.paused && next <= target => {
                 let was_paused = c.paused;
                 if let Some((bits, life)) = c.decode() {
+                    // Ours, not the demo's director's.
+                    let (bits, life) =
+                        if want.camera.is_some() { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
                     let mut hub = self.relay.hub();
                     hub.upstream_stream(&bits, false, &life);
                     hub.upstream_flush();
@@ -549,6 +573,42 @@ impl Player<'_> {
         }
         Ok(())
     }
+}
+
+impl Player<'_> {
+    /// Tells the clients in the game to take `camera`, when it changed and every [`CUE_EVERY`].
+    fn cue(&mut self, camera: Option<Camera>) {
+        let Some(camera) = camera else {
+            self.cued = None;
+            return;
+        };
+        if self.cued.is_some_and(|(was, at)| was == camera && at.elapsed() < CUE_EVERY) {
+            return;
+        }
+        let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
+        let Camera::Follow { player } = camera;
+        if let Some(msg) = c.dec.hltv_chase(player) {
+            trace!("camera on player {player}");
+            self.relay.hub().tell_active(&msg);
+        }
+        self.cued = Some((camera, Instant::now()));
+    }
+}
+
+/// A frame's stream without the director's camera cues.
+fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
+    use crate::net::bits::{BitReader, BitWriter};
+    if !life.spans.iter().any(|s| dec.is_director_cue(bits.bytes(), s)) {
+        return (bits.clone(), life.clone());
+    }
+    let mut w = BitWriter::new();
+    let mut spans = Vec::with_capacity(life.spans.len());
+    for span in life.spans.iter().filter(|s| !dec.is_director_cue(bits.bytes(), s)) {
+        let start = w.nbits();
+        w.write_buf(&BitReader::slice(bits.bytes(), span.bits.clone()));
+        spans.push(crate::decode::Span { id: span.id, bits: start..w.nbits() });
+    }
+    (w.finish(), Lifecycle { spans, ..life.clone() })
 }
 
 /// Decodes on to `target` without sending: only string table changes reach the clients. How many
@@ -567,5 +627,44 @@ fn skim(c: &mut Cursor, hub: &Mutex<Hub>, target: i64) -> (usize, bool) {
                 None => c.next = None,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tf_demo_parser::demo::gameevent_gen::GameEvent;
+    use tf_demo_parser::demo::message::Message;
+
+    #[test]
+    fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
+        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
+        let mut c = Cursor::open_with(&path, None).unwrap();
+        let mut cues = 0;
+        // Ten seconds in, with the players there.
+        while c.dec.server_tick() < c.first.unwrap_or(i64::MAX).saturating_add(660) as u32 || c.first.is_none() {
+            match c.next_tick() {
+                None => panic!("the demo ended"),
+                Some(i64::MIN) => c.next = None,
+                Some(_) => {
+                    let Some((bits, life)) = c.decode() else { continue };
+                    cues += life.spans.iter().filter(|s| c.dec.is_director_cue(bits.bytes(), s)).count();
+                    let (bits, life) = without_cues(&c.dec, &bits, &life);
+                    assert!(!life.spans.iter().any(|s| c.dec.is_director_cue(bits.bytes(), s)));
+                }
+            }
+        }
+        eprintln!("{cues} director cues in the first 10 s");
+        let player = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
+        let msg = c.dec.hltv_chase(player.id.0).unwrap();
+        let span = crate::decode::Span { id: 25, bits: 0..msg.nbits() };
+        assert!(c.dec.is_director_cue(msg.bytes(), &span));
+        let state = c.dec.parser_state_for_tests();
+        let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
+        let t: tf_demo_parser::demo::message::MessageType = bitbuffer::BitRead::read(&mut s).unwrap();
+        let Message::GameEvent(e) = Message::from_type(t, &mut s, state).unwrap() else { panic!() };
+        let GameEvent::HLTVChase(chase) = e.event else { panic!("{:?}", e.event) };
+        assert_eq!(u32::from(chase.target_1), player.ent);
+        assert_eq!(chase.in_eye, 1);
     }
 }

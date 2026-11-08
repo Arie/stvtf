@@ -42,7 +42,7 @@ fn places(s: &Snapshot) -> BTreeMap<u16, (String, [f64; 3])> {
 }
 
 fn want(tick: u32, paused: bool, from_start: bool) -> Want {
-    Want { demo: PathBuf::from(DEMO), tick, at: Instant::now(), paused, speed: 4.0, from_start }
+    Want { demo: PathBuf::from(DEMO), tick, at: Instant::now(), paused, speed: 4.0, from_start, camera: None }
 }
 
 /// What one client got, with when.

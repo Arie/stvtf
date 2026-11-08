@@ -59,7 +59,7 @@ macro_rules! trace {
 }
 
 mod play;
-pub use play::{Playback, Want};
+pub use play::{Camera, Playback, Want};
 
 /// How often the trace sums up what each client was sent.
 const TRACE_EVERY: Duration = Duration::from_secs(5);
@@ -664,6 +664,13 @@ impl Hub {
     fn set_paused(&mut self, paused: bool) {
         self.mode = Mode::Play { paused };
         let msg = set_pause(paused);
+        for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
+            c.queue.push(msg.clone());
+        }
+    }
+
+    /// A message for the clients in the game, reliably.
+    fn tell_active(&mut self, msg: &BitBuf) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
             c.queue.push(msg.clone());
         }
