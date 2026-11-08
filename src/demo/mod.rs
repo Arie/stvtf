@@ -150,6 +150,13 @@ impl<R: Read + Seek> Reader<R> {
         Ok(Reader { r, pos: HEADER_LEN as u64, header: Header::parse(&b)? })
     }
 
+    /// Reads on from `pos`, where a packet starts (one [`Reader::position`] gave).
+    pub fn seek_to(&mut self, pos: u64) -> Result<()> {
+        self.r.seek(SeekFrom::Start(pos))?;
+        self.pos = pos;
+        Ok(())
+    }
+
     /// Bytes read so far: up to the end of the last packet.
     pub fn position(&self) -> u64 {
         self.pos

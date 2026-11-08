@@ -588,9 +588,20 @@ impl Hub {
     /// A stream passed over on a jump: only its string table changes count, which every client
     /// needs, so they go into the log and reliably to the clients already in.
     fn skim(&mut self, bits: &BitBuf, life: &Lifecycle) {
+        let tables: Vec<BitBuf> = life
+            .spans
+            .iter()
+            .filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE))
+            .map(|span| BitReader::slice(bits.bytes(), span.bits.clone()))
+            .collect();
+        self.log_tables(&tables);
+    }
+
+    /// String table changes passed over (a jump), into the log and reliably to the clients
+    /// already in; those logged already are not again.
+    fn log_tables(&mut self, tables: &[BitBuf]) {
         self.keyframe = None;
-        for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)) {
-            let msg = BitReader::slice(bits.bytes(), span.bits.clone());
+        for msg in tables {
             if !self.logged_unreliable.insert(msg.clone()) {
                 continue;
             }

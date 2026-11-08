@@ -330,9 +330,15 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
 - Frames go out at their own pace, up to the moment wanted, each when its own `net_Tick` is due
   (an STV demo has no frames while the server is paused). Off from it by more than a second,
   playback jumps: it decodes on without sending (back, from the demo's start), and every client
-  gets a full update of where it went, and whether the match is paused there. Decoding with
-  what a full update needs runs at about 500 times game speed. A client is only made to sign on
-  again (`net_SignonState(CONNECTED)` first, as a server's reconnect) for another demo file.
+  gets a full update of where it went, and whether the match is paused there. A thread decodes
+  the whole demo on the side as soon as it is opened (following a growing one), keeping a
+  checkpoint every 2000 ticks (30 s): a jump decodes from the last one before where it goes, so at
+  most 30 s of the match (decoding with what a full update needs runs at about 500 times game
+  speed). A checkpoint is the string table changes so far, a full update and the frames after it,
+  and where the file goes on. A client is made to sign on again (`net_SignonState(CONNECTED)`
+  first, as a server's reconnect) for another demo file, and for a jump back past a rewritten
+  `userinfo` or `instancebaseline` entry (a player left or joined): the tables it has are the
+  later ones, which a full update cannot take back.
 - An STV demo's signon states carry another spawn count than its ServerInfo; a game client
   refuses that, so they are given the ServerInfo's.
 - A client that joins, loses a frame or follows a jump ahead gets a full update written from the

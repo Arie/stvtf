@@ -12,18 +12,24 @@
 //! - Why it cannot play (not written yet, another build's demo, a read error) is told through
 //!   [`Playback::problem`], and it tries again.
 
+mod index;
+
 use super::{Hub, Relay};
 use crate::decode::{Decoder, Lifecycle, Tables};
 use crate::demo::{self, Next, Packet};
 use crate::net::bits::BitBuf;
 use crate::output::Line;
 use anyhow::{Context, Result, bail};
+use index::Index;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
+
+const SVC_CREATESTRINGTABLE: u8 = 12;
+const SVC_UPDATESTRINGTABLE: u8 = 13;
 
 /// Off from the wanted moment by more than this, playback jumps instead of catching up.
 const JUMP: Duration = Duration::from_secs(1);
@@ -124,17 +130,21 @@ struct Cursor {
     /// The match itself was paused (`svc_SetPause` in the demo) as of the last frame decoded: a
     /// client that jumps here, past the frame that said so, is told.
     paused: bool,
+    /// Where `next` starts in the file.
+    next_pos: u64,
+    /// Every string table change since the signon, in order: what a checkpoint starts from.
+    tables: Vec<Arc<BitBuf>>,
 }
 
 impl Cursor {
     /// Opens a demo and reads it up to its first frame, passing its signon to `hub`.
     fn open(path: &Path, hub: &Mutex<Hub>) -> Result<Cursor> {
-        Self::open_quietly(path, hub, false)
+        Self::open_with(path, Some(hub))
     }
 
-    /// [`Cursor::open`], but `quiet`: the clients are not given the signon, as they have the
-    /// demo's already (a jump back in it).
-    fn open_quietly(path: &Path, hub: &Mutex<Hub>, quiet: bool) -> Result<Cursor> {
+    /// [`Cursor::open`], giving the signon to `hub` if any: none when the clients have the demo's
+    /// already (a jump in it), or to decode it on the side.
+    fn open_with(path: &Path, hub: Option<&Mutex<Hub>>) -> Result<Cursor> {
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
         let mut reader = demo::Reader::new(file)?;
         let mut signon = Vec::new();
@@ -164,9 +174,7 @@ impl Cursor {
         for data in signon {
             let bits = BitBuf::from_bytes(data);
             let life = dec.feed(bits.bytes(), bits.nbits());
-            if quiet {
-                continue;
-            }
+            let Some(hub) = hub else { continue };
             if let Some((count, _)) = &life.server_info {
                 spawncount = Some(*count);
             }
@@ -189,12 +197,15 @@ impl Cursor {
             ended: false,
             recent: std::collections::VecDeque::default(),
             paused: false,
+            next_pos: 0,
+            tables: Vec::new(),
         })
     }
 
     /// The next packet, read ahead; None when the demo has no more yet.
     fn peek(&mut self) -> Option<&Packet> {
         if self.next.is_none() && !self.ended {
+            self.next_pos = self.reader.position();
             self.next = match self.reader.next_packet() {
                 Ok(Next::Packet(p)) => Some(p),
                 Ok(Next::More) => None,
@@ -245,6 +256,9 @@ impl Cursor {
             {
                 self.paused = p;
             }
+        }
+        for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)) {
+            self.tables.push(Arc::new(crate::net::bits::BitReader::slice(bits.bytes(), span.bits.clone())));
         }
         let end = life.spans.last().map_or(0, |s| s.bits.end);
         self.recent.push_back((self.dec.server_tick(), crate::net::bits::BitReader::slice(bits.bytes(), 0..end)));
@@ -313,6 +327,7 @@ impl Relay {
                 last_target: None,
                 dry: false,
                 problem: None,
+                index: None,
             }
             .run(playback, stop);
         });
@@ -336,6 +351,8 @@ struct Player<'r> {
     dry: bool,
     /// Why the clients get nothing, if they do not.
     problem: Option<String>,
+    /// Checkpoints through the demo playing, made on the side.
+    index: Option<Arc<Index>>,
 }
 
 impl Player<'_> {
@@ -355,6 +372,9 @@ impl Player<'_> {
                     Ok(c) => {
                         self.cur = Some(c);
                         playback.set_problem(None);
+                        if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
+                            self.index = Some(Index::start(&want.demo));
+                        }
                     }
                     Err(e) => {
                         // Not written yet, or not playable: try again in a while.
@@ -389,6 +409,7 @@ impl Player<'_> {
         let since = *self.idle.get_or_insert_with(Instant::now);
         if since.elapsed() > IDLE && self.cur.is_some() {
             self.cur = None;
+            self.index = None;
             hub.forget();
         }
         false
@@ -414,12 +435,26 @@ impl Player<'_> {
         }
         if c.started && target + jump < c.tick() {
             trace!("jump back from {} to {target}", c.tick());
-            // The demo again from its start, decoded up to there, and a full update of it: the
-            // clients stay in, and go back.
+            // The demo again, decoded up to there, and a full update of it: the clients stay in,
+            // and go back. Unless an entry of the string tables they have was rewritten since (a
+            // player left or joined): then they sign on again, with the tables as they were.
+            let rewritten = c.dec.tables_rewritten();
             let took = Instant::now();
-            let mut again = Cursor::open_quietly(&want.demo, &self.relay.hub, true)?;
+            // From the last checkpoint before it, or else the start.
+            let mark = self.index.as_ref().and_then(|i| i.before(target));
+            let mut again = match &mark {
+                Some(m) => Cursor::restore(&want.demo, m)?,
+                None => Cursor::open_with(&want.demo, None)?,
+            };
             self.dry = skim(&mut again, &self.relay.hub, target).1;
             trace!("decoded back to {target} in {} ms", took.elapsed().as_millis());
+            if again.dec.tables_rewritten() < rewritten {
+                trace!("the string tables changed since: the clients sign on again");
+                self.relay.hub().reconnect_all();
+                drop(Cursor::open(&want.demo, &self.relay.hub)?);
+                let tables: Vec<BitBuf> = again.tables.iter().map(|t| (**t).clone()).collect();
+                self.relay.hub().log_tables(&tables);
+            }
             self.cur = Some(again);
             self.relay.hub().all_want_keyframe(Instant::now());
             return Ok(());
@@ -433,7 +468,15 @@ impl Player<'_> {
         let Some(c) = &mut self.cur else { return Ok(()) };
         if c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target) {
             let (from, took) = (c.tick(), Instant::now());
+            // From a checkpoint well past where it is, if there is one: the clients get the string
+            // table changes passed over with it.
+            let mark = self.index.as_ref().and_then(|i| i.before(target)).filter(|m| i64::from(m.tick) > from + jump);
+            if let Some(m) = &mark {
+                index::log_tables(&self.relay.hub, m);
+                *c = Cursor::restore(&want.demo, m)?;
+            }
             let (decoded, dry) = skim(c, &self.relay.hub, target);
+            let decoded = decoded + usize::from(mark.is_some());
             trace!("jump ahead from {from} to {} in {} ms", c.tick(), took.elapsed().as_millis());
             self.dry = dry;
             if decoded > 0 {

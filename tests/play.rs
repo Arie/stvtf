@@ -221,14 +221,18 @@ fn a_client_follows_a_jump_ahead() {
             let _stop = StopOnDrop(&stop);
             let seen = client(s, addr, &stop);
             wait_for("a second of the demo", || snapshots(&seen).len() > 66);
+            let before = snapshots(&seen).iter().map(|(_, s)| s.tick).max().unwrap();
             playback.set(want(first + 100 * 66, false, false));
             let jumped = Instant::now();
             wait_for("the jump", || since(&seen, jumped).iter().any(|s| s.tick >= first + 100 * 66));
             wait_for("a second after it", || since(&seen, jumped).len() > 66);
-            assert!(
-                since(&seen, jumped).iter().all(|s| s.tick < first + 6 * 66 || s.tick >= first + 100 * 66),
-                "nothing in between"
-            );
+            // Frames on their way when it jumped aside, nothing between there and the moment wanted.
+            let between: Vec<u32> = since(&seen, jumped)
+                .iter()
+                .map(|s| s.tick)
+                .filter(|t| *t > before + 66 && *t < first + 100 * 66)
+                .collect();
+            assert!(between.is_empty(), "nothing in between: {:?}", &between[..between.len().min(20)]);
             snapshots(&seen)
         })
     });

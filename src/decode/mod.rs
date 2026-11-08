@@ -131,6 +131,12 @@ pub(crate) struct Decoder {
     seen_full_update: bool,
     /// Kept only when asked for: what a full update is written from.
     world: Option<world::World>,
+    /// Each string table's entries so far, by table id, and how many updates rewrote an entry of
+    /// `userinfo` (a player left or joined) or `instancebaseline` (what entities are built on): a
+    /// client that has the tables from later than a moment has the wrong ones for it only if that
+    /// count grew since. Others (lights, models loaded) do not matter there.
+    tables: Vec<(String, std::collections::HashSet<u16>)>,
+    tables_rewritten: u32,
     out: Vec<Line>,
 }
 
@@ -147,6 +153,8 @@ impl Decoder {
             panicked: false,
             seen_full_update: false,
             world: None,
+            tables: Vec::new(),
+            tables_rewritten: 0,
             out: Vec::new(),
         })
     }
@@ -240,6 +248,12 @@ impl Decoder {
         self.extractor().interval()
     }
 
+    /// Every entity as the world has it, to compare two decoders.
+    #[cfg(test)]
+    pub(crate) fn world_dump(&self) -> std::collections::BTreeMap<u32, world::Dumped> {
+        self.world.as_ref().map(world::World::dump).unwrap_or_default()
+    }
+
     /// The entities the keyframe would hold.
     #[cfg(test)]
     pub(crate) fn world_len(&self) -> usize {
@@ -322,6 +336,7 @@ impl Decoder {
         // Applied once the packet is: a new class's baseline may come in the same packet, before
         // the entities that need it.
         let frames = if self.world.is_some() { entity_frames(&messages) } else { Vec::new() };
+        self.note_tables(&messages);
         let mut has_entities = false;
         for msg in &messages {
             match msg {
@@ -366,6 +381,31 @@ impl Decoder {
             self.out.push(Line::Snapshot(snap));
         }
         life
+    }
+
+    /// Keeps track of the string tables' entries (see `tables`).
+    fn note_tables(&mut self, messages: &[Message<'_>]) {
+        for msg in messages {
+            match msg {
+                Message::CreateStringTable(t) => {
+                    self.tables.push((t.table.name.to_string(), t.table.entries.iter().map(|(i, _)| *i).collect()));
+                }
+                Message::UpdateStringTable(u) => {
+                    let Some((name, known)) = self.tables.get_mut(usize::from(u.table_id)) else { continue };
+                    for (i, _) in &u.entries {
+                        if !known.insert(*i) && matches!(name.as_str(), "userinfo" | "instancebaseline") {
+                            self.tables_rewritten += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// How many string table entries were rewritten so far (see `tables`).
+    pub(crate) fn tables_rewritten(&self) -> u32 {
+        self.tables_rewritten
     }
 
     pub(crate) fn extractor(&self) -> &Extractor {
