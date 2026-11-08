@@ -134,6 +134,8 @@ pub(crate) struct Decoder {
     world: Option<world::World>,
     /// The string tables, as far as a jump back needs them (see `tables`).
     tables: tables::Tables,
+    /// The last round start, win panel or game over event (see [`Decoder::round_event`]).
+    round: Option<crate::net::bits::BitBuf>,
     out: Vec<Line>,
 }
 
@@ -151,6 +153,7 @@ impl Decoder {
             seen_full_update: false,
             world: None,
             tables: tables::Tables::default(),
+            round: None,
             out: Vec::new(),
         })
     }
@@ -285,6 +288,8 @@ impl Decoder {
         let Ok(mut stream) = outer.read_bits(nbits) else { return life };
         let state = self.handler.get_parser_state();
         let mut messages = Vec::new();
+        // The span of each message parsed.
+        let mut parsed_spans = Vec::new();
         while stream.bits_left() > TYPE_BITS {
             let start = stream.pos();
             let id: u8 = match stream.read_sized(TYPE_BITS) {
@@ -315,7 +320,10 @@ impl Decoder {
                 life.spans.push(Span { id, bits: start..stream.pos() });
             }
             match parsed {
-                Ok(Some(m)) => messages.push(m),
+                Ok(Some(m)) => {
+                    messages.push(m);
+                    parsed_spans.push(life.spans.len() - 1);
+                }
                 Ok(None) => {}
                 Err(e) => {
                     life.spans.push(Span { id: UNPARSED, bits: start..nbits });
@@ -333,6 +341,7 @@ impl Decoder {
         // the entities that need it.
         let frames = if self.world.is_some() { entity_frames(&messages) } else { Vec::new() };
         self.tables.note(&messages);
+        self.note_round(&messages, &parsed_spans, &life.spans, &data[..nbytes]);
         let mut has_entities = false;
         for msg in &messages {
             match msg {
@@ -377,6 +386,38 @@ impl Decoder {
             self.out.push(Line::Snapshot(snap));
         }
         life
+    }
+
+    /// Keeps the last event that decides whether the round's win panel shows (see `round`).
+    fn note_round(&mut self, messages: &[Message<'_>], spans_of: &[usize], spans: &[Span], data: &[u8]) {
+        use tf_demo_parser::demo::gameevent_gen::GameEventType as E;
+        for (m, &i) in messages.iter().zip(spans_of) {
+            if let Message::GameEvent(e) = m
+                && matches!(
+                    e.event_type,
+                    E::TeamPlayRoundStart
+                        | E::TeamPlayWinPanel
+                        | E::TeamPlayGameOver
+                        | E::TfGameOver
+                        | E::ArenaWinPanel
+                )
+                && let Some(span) = spans.get(i)
+            {
+                self.round = Some(crate::net::bits::BitReader::slice(data, span.bits.clone()));
+            }
+        }
+    }
+
+    /// The last round start, win panel or game over event: what a client that skipped there
+    /// (a jump, or one just in) is sent after a full update, so its HUD shows the round's end, or
+    /// hides it, as the game does.
+    pub(crate) fn round_event(&self) -> Option<crate::net::bits::BitBuf> {
+        self.round.clone()
+    }
+
+    /// Sets the last round event, for a decoder that starts from a checkpoint.
+    pub(crate) fn set_round_event(&mut self, event: Option<crate::net::bits::BitBuf>) {
+        self.round = event;
     }
 
     /// How many `userinfo` and `instancebaseline` entries were rewritten so far (see `tables`).

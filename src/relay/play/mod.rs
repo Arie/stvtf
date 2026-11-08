@@ -513,7 +513,9 @@ impl Player<'_> {
             if next.is_some() || c.ended {
                 if let Some((tick, key)) = c.dec.keyframe(next.as_deref()) {
                     let recent: Vec<(u32, BitBuf)> = c.recent.iter().cloned().collect();
-                    let since = c.dec.catch_up(tick, &recent);
+                    let mut since = c.dec.catch_up(tick, &recent);
+                    // The round's end shown, or hidden, as at this moment.
+                    since.extend(c.dec.round_event());
                     self.relay.hub().send_keyframe(&key, &since, self.paused || c.paused);
                     self.problem = None;
                 } else if c.started {

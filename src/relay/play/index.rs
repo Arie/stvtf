@@ -36,6 +36,8 @@ pub(super) struct Checkpoint {
     first: Option<i64>,
     offset: i64,
     paused: bool,
+    /// The last round start, win panel or game over event.
+    round: Option<BitBuf>,
 }
 
 impl Checkpoint {
@@ -132,6 +134,7 @@ impl Cursor {
             first: self.first,
             offset: self.offset,
             paused: self.paused,
+            round: self.dec.round_event(),
         })
     }
 
@@ -146,6 +149,7 @@ impl Cursor {
             c.dec.feed(f.bytes(), f.nbits());
         }
         c.dec.take_output();
+        c.dec.set_round_event(mark.round.clone());
         c.reader.seek_to(mark.pos)?;
         c.next = None;
         c.next_pos = mark.pos;

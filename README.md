@@ -340,6 +340,9 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   tables of later on: where an entry of `userinfo` (a player left or joined) or
   `instancebaseline` changed value since, it is first sent those entries as they were
   (`svc_UpdateStringTable`), and the stream's own changes again when playback comes to them.
+- A full update (a jump, or a client just in) is followed by the last round start, win panel or
+  game over event decoded, so the HUD shows the round's end, or hides it, as at that moment: a
+  jump passes over the event that would.
 - An STV demo's signon states carry another spawn count than its ServerInfo; a game client
   refuses that, so they are given the ServerInfo's.
 - A client that joins, loses a frame or follows a jump ahead gets a full update written from the

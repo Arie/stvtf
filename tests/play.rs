@@ -136,6 +136,10 @@ fn a_client_joins_a_playing_demo_where_it_is() {
             let seen = client(s, addr, &stop);
             wait_for("a second of the demo", || snapshots(&seen).len() > 66);
             stop.store(true, Ordering::Relaxed);
+            // The round started before it joined: it is told, so a win panel from before goes.
+            let lines = seen.lock().unwrap();
+            assert!(lines.iter().any(|(_, l)| matches!(l, Line::RoundStart(_))), "the round's start");
+            drop(lines);
             snapshots(&seen)
         })
     });
