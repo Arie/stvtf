@@ -33,15 +33,80 @@ struct Entity {
     class: ClassId,
     serial: u32,
     /// By prop index, every prop sent since the entity entered, over its baseline.
-    props: BTreeMap<u32, SendProp>,
+    props: Props,
+}
+
+/// An entity's props, by index, in pages of [`PAGE`] indexes, each a sorted list: a frame that
+/// changes a prop copies its page, not every prop of the entity (players have hundreds).
+#[derive(Clone, Default)]
+struct Props(Vec<Option<Arc<Vec<SendProp>>>>);
+
+/// Prop indexes per page.
+const PAGE: u32 = 32;
+
+impl Props {
+    fn set(&mut self, p: &SendProp) {
+        let page = (p.index / PAGE) as usize;
+        if self.0.len() <= page {
+            self.0.resize(page + 1, None);
+        }
+        let list = Arc::make_mut(self.0[page].get_or_insert_with(Arc::default));
+        match list.binary_search_by_key(&p.index, |q| q.index) {
+            Ok(i) => list[i] = p.clone(),
+            Err(i) => list.insert(i, p.clone()),
+        }
+    }
+
+    fn get(&self, index: u32) -> Option<&SendProp> {
+        let list = self.0.get((index / PAGE) as usize)?.as_ref()?;
+        list.binary_search_by_key(&index, |q| q.index).ok().map(|i| &list[i])
+    }
+
+    fn values(&self) -> impl Iterator<Item = &SendProp> {
+        self.0.iter().flatten().flat_map(|l| l.iter())
+    }
+}
+
+/// A frame's entities, by index: a slot per index, so copying one for the next frame is cheap.
+#[derive(Clone, Default)]
+struct Frame(Vec<Option<Arc<Entity>>>);
+
+impl Frame {
+    fn get(&self, index: u32) -> Option<&Arc<Entity>> {
+        self.0.get(index as usize)?.as_ref()
+    }
+
+    fn get_mut(&mut self, index: u32) -> Option<&mut Arc<Entity>> {
+        self.0.get_mut(index as usize)?.as_mut()
+    }
+
+    fn insert(&mut self, index: u32, e: Arc<Entity>) {
+        let i = index as usize;
+        if self.0.len() <= i {
+            self.0.resize(i + 1, None);
+        }
+        self.0[i] = Some(e);
+    }
+
+    fn remove(&mut self, index: u32) {
+        if let Some(slot) = self.0.get_mut(index as usize) {
+            *slot = None;
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u32, &Arc<Entity>)> {
+        self.0.iter().enumerate().filter_map(|(i, e)| Some((i as u32, e.as_ref()?)))
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.iter().flatten().count()
+    }
 }
 
 /// An entity's class, serial and props by index, as text.
 #[cfg(test)]
 pub(crate) type Dumped = (u16, u32, Vec<(u32, String)>);
-
-/// A frame's entities by index.
-type Frame = BTreeMap<u32, Arc<Entity>>;
 
 #[derive(Default)]
 pub(crate) struct World {
@@ -66,7 +131,7 @@ impl World {
                 self.broken = false;
                 self.seen_full = true;
                 self.full_sets_baselines = pe.updated_base_line;
-                Frame::new()
+                Frame::default()
             }
             Some(base) => {
                 if let Some((_, f)) = self.frames.iter().rev().find(|(t, _)| *t == u32::from(base)) {
@@ -91,24 +156,35 @@ impl World {
                     {
                         self.broken = true;
                     }
-                    let mut props: BTreeMap<u32, SendProp> = state
-                        .get_baseline(pe.base_line, e.entity_index, e.server_class, table, pe.delta.is_some())
-                        .map(|b| b.iter().map(|p| (p.index, p.clone())).collect())
-                        .unwrap_or_default();
-                    props.extend(e.props.iter().map(|p| (p.index, p.clone())));
+                    let mut props = Props::default();
+                    if let Ok(base) =
+                        state.get_baseline(pe.base_line, e.entity_index, e.server_class, table, pe.delta.is_some())
+                    {
+                        for p in base.iter() {
+                            props.set(p);
+                        }
+                    }
+                    for p in &e.props {
+                        props.set(p);
+                    }
                     frame.insert(index, Arc::new(Entity { class: e.server_class, serial: e.serial_number, props }));
                 }
-                UpdateType::Delta => match frame.get_mut(&index) {
-                    Some(w) => Arc::make_mut(w).props.extend(e.props.iter().map(|p| (p.index, p.clone()))),
+                UpdateType::Delta => match frame.get_mut(index) {
+                    Some(w) => {
+                        let w = Arc::make_mut(w);
+                        for p in &e.props {
+                            w.props.set(p);
+                        }
+                    }
                     None => self.broken = true,
                 },
                 UpdateType::Leave | UpdateType::Delete => {
-                    frame.remove(&index);
+                    frame.remove(index);
                 }
             }
         }
         for r in &pe.removed_entities {
-            frame.remove(&u32::from(*r));
+            frame.remove(u32::from(*r));
         }
         // A later delta never builds on a frame older than this one's base.
         if let Some(base) = pe.delta {
@@ -141,8 +217,8 @@ impl World {
     pub(crate) fn dump(&self) -> BTreeMap<u32, Dumped> {
         self.latest()
             .into_iter()
-            .flatten()
-            .map(|(&i, e)| {
+            .flat_map(Frame::iter)
+            .map(|(i, e)| {
                 (
                     i,
                     (
@@ -157,7 +233,7 @@ impl World {
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.latest().map_or(0, BTreeMap::len)
+        self.latest().map_or(0, Frame::len)
     }
 
     /// `net_Tick` and the entities in full of the frame at server tick `at` (the latest when it is
@@ -172,8 +248,8 @@ impl World {
             .and_then(|at| self.frames.iter().rev().find(|(t, _)| *t == at))
             .or(self.frames.back())
             .map(|(t, f)| (*t, f))?;
-        let mut entities = Vec::with_capacity(frame.len());
-        for (&index, e) in frame {
+        let mut entities = Vec::new();
+        for (index, e) in frame.iter() {
             entities.push(enter(state, index, e)?);
         }
         let msg = PacketEntitiesMessage {
@@ -197,13 +273,13 @@ impl World {
         let frame = |t: u32| self.frames.iter().rev().find(|(tick, _)| *tick == t).map(|(_, f)| f);
         let (old, new) = (frame(from)?, frame(to)?);
         let mut entities = Vec::new();
-        for (&index, e) in new {
-            match old.get(&index) {
+        for (index, e) in new.iter() {
+            match old.get(index) {
                 Some(o) if o.class == e.class && o.serial == e.serial => {
                     let props: Vec<SendProp> = e
                         .props
                         .values()
-                        .filter(|p| !o.props.get(&p.index).is_some_and(|q| same(&q.value, &p.value)))
+                        .filter(|p| !o.props.get(p.index).is_some_and(|q| same(&q.value, &p.value)))
                         .cloned()
                         .collect();
                     if !props.is_empty() {
@@ -223,7 +299,7 @@ impl World {
                 _ => entities.push(enter(state, index, e)?),
             }
         }
-        let removed = old.keys().filter(|i| !new.contains_key(i)).map(|&i| i.into()).collect();
+        let removed = old.iter().filter(|(i, _)| new.get(*i).is_none()).map(|(i, _)| i.into()).collect();
         let msg = PacketEntitiesMessage {
             entities,
             removed_entities: removed,

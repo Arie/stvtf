@@ -175,7 +175,7 @@ fn a_client_follows_a_jump_back_and_a_pause() {
             stop.store(true, Ordering::Relaxed);
             let lines = seen.lock().unwrap();
             let fulls = lines.iter().filter(|(_, l)| matches!(l, Line::Status(Status::Full { .. }))).count();
-            assert_eq!(fulls, 2, "it signed on again after the jump back");
+            assert_eq!(fulls, 1, "a jump back is a full update of where it went: no new signon");
             drop(lines);
             snapshots(&seen)
         })

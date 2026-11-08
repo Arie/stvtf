@@ -327,9 +327,14 @@ any time and starts where it is. In the library it is `Relay::play`, following a
 moment wanted (a server tick at an instant), paused or not, and the speed, set as playback goes
 (a room on stv.tf sets it as its own playback moves). The demo may still be being written.
 
-- Frames go out at their own pace, up to the moment wanted. Off from it by more than a second,
-  playback jumps: ahead, it decodes on without sending; back, it starts the demo again, and every
-  client signs on again.
+- Frames go out at their own pace, up to the moment wanted, each when its own `net_Tick` is due
+  (an STV demo has no frames while the server is paused). Off from it by more than a second,
+  playback jumps: it decodes on without sending (back, from the demo's start), and every client
+  gets a full update of where it went, and whether the match is paused there. Decoding with
+  what a full update needs runs at about 500 times game speed. A client is only made to sign on
+  again (`net_SignonState(CONNECTED)` first, as a server's reconnect) for another demo file.
+- An STV demo's signon states carry another spawn count than its ServerInfo; a game client
+  refuses that, so they are given the ServerInfo's.
 - A client that joins, loses a frame or follows a jump ahead gets a full update written from the
   decoded entities (`decode::world`): each entity entering with its props that differ from its
   class's static baseline, as a server writes one. It is of the frame the next one builds on

@@ -110,11 +110,20 @@ struct Cursor {
     ended: bool,
     /// The last frames decoded, by server tick, cut after their last message.
     recent: std::collections::VecDeque<(u32, BitBuf)>,
+    /// The match itself was paused (`svc_SetPause` in the demo) as of the last frame decoded: a
+    /// client that jumps here, past the frame that said so, is told.
+    paused: bool,
 }
 
 impl Cursor {
     /// Opens a demo and reads it up to its first frame, passing its signon to `hub`.
     fn open(path: &Path, hub: &Mutex<Hub>) -> Result<Cursor> {
+        Self::open_quietly(path, hub, false)
+    }
+
+    /// [`Cursor::open`], but `quiet`: the clients are not given the signon, as they have the
+    /// demo's already (a jump back in it).
+    fn open_quietly(path: &Path, hub: &Mutex<Hub>, quiet: bool) -> Result<Cursor> {
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
         let mut reader = demo::Reader::new(file)?;
         let mut signon = Vec::new();
@@ -138,9 +147,20 @@ impl Cursor {
         }
         let mut dec = Decoder::new(&tables, 0.0)?;
         dec.keep_world();
+        let mut spawncount = None;
         for data in signon {
             let bits = BitBuf::from_bytes(data);
             let life = dec.feed(bits.bytes(), bits.nbits());
+            if quiet {
+                continue;
+            }
+            if let Some((count, _)) = &life.server_info {
+                spawncount = Some(*count);
+            }
+            let (bits, life) = match spawncount {
+                Some(count) => with_spawncount(&bits, &life, count),
+                None => (bits, life),
+            };
             let mut h = lock(hub);
             h.upstream_stream(&bits, true, &life);
             h.upstream_flush();
@@ -155,6 +175,7 @@ impl Cursor {
             first: None,
             ended: false,
             recent: std::collections::VecDeque::default(),
+            paused: false,
         })
     }
 
@@ -173,12 +194,19 @@ impl Cursor {
         Ok(self.next.as_ref())
     }
 
-    /// The server tick the next frame has, as far as the frames so far tell; None when there is
-    /// none yet. Other packets come first, as due.
+    /// The server tick the next frame has: its own `net_Tick`, or as far as the frames so far tell
+    /// (a demo's tick less the server's, which a pause changes: an STV demo has no frames while the
+    /// server is paused); None when there is none yet. Other packets come first, as due.
     fn next_tick(&mut self) -> Result<Option<i64>> {
         let offset = self.offset;
-        Ok(self.peek()?.map(|p| match p {
-            Packet::Message { tick, .. } => i64::from(*tick) + offset,
+        if self.peek()?.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(match &self.next {
+            Some(Packet::Message { tick, data }) => {
+                let guess = i64::from(*tick) + offset;
+                self.dec.frame_tick(data).map_or(guess, i64::from)
+            }
             _ => i64::MIN,
         }))
     }
@@ -193,6 +221,14 @@ impl Cursor {
         self.offset = i64::from(self.dec.server_tick()) - i64::from(tick);
         self.started = true;
         self.first.get_or_insert(i64::from(self.dec.server_tick()));
+        for span in life.spans.iter().filter(|s| u32::from(s.id) == super::SVC_SETPAUSE) {
+            if let Ok(p) =
+                crate::net::bits::BitReader::at(bits.bytes(), span.bits.start + crate::net::messages::TYPE_BITS)
+                    .read_bit()
+            {
+                self.paused = p;
+            }
+        }
         let end = life.spans.last().map_or(0, |s| s.bits.end);
         self.recent.push_back((self.dec.server_tick(), crate::net::bits::BitReader::slice(bits.bytes(), 0..end)));
         if self.recent.len() > RECENT {
@@ -205,6 +241,33 @@ impl Cursor {
     fn tick(&self) -> i64 {
         i64::from(self.dec.server_tick())
     }
+}
+
+/// A signon stream with its `net_SignonState`s at `count`, the `ServerInfo`'s: a game client refuses
+/// any other ("Received wrong spawn count"), and an STV demo's differ from its `ServerInfo`'s.
+fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Lifecycle) {
+    use crate::net::bits::{BitReader, BitWriter};
+    use crate::net::messages::{self, NET_SIGNONSTATE, Signon, TYPE_BITS};
+    let mut w = BitWriter::new();
+    let mut spans = Vec::with_capacity(life.spans.len());
+    for span in &life.spans {
+        let msg = BitReader::slice(bits.bytes(), span.bits.clone());
+        let state = (u32::from(span.id) == NET_SIGNONSTATE)
+            .then(|| BitReader::at(msg.bytes(), TYPE_BITS).read_u8().ok().and_then(Signon::from_u8))
+            .flatten();
+        let msg = state.map_or(msg, |s| messages::signonstate(s, count));
+        let start = w.nbits();
+        w.write_buf(&msg);
+        spans.push(crate::decode::Span { id: span.id, bits: start..w.nbits() });
+    }
+    let fixed = Lifecycle {
+        signon: life.signon.clone(),
+        server_info: life.server_info.clone(),
+        tick: life.tick,
+        spans,
+        ..Lifecycle::default()
+    };
+    (w.finish(), fixed)
 }
 
 /// The tables of the demo at `path`, read up to where `reader` is: just past its data tables.
@@ -300,22 +363,28 @@ impl Player<'_> {
             trace!("playing tick {}, wanted {target}, paused {}, speed {}", c.tick(), want.paused, want.speed);
         }
         if c.started && target + jump < c.tick() {
-            // Back: the demo again from its start, and every client signs on again.
             trace!("jump back from {} to {target}", c.tick());
-            self.cur = None;
-            self.relay.hub().reconnect_all();
-            self.cur = Some(Cursor::open(&want.demo, &self.relay.hub)?);
+            // The demo again from its start, decoded up to there, and a full update of it: the
+            // clients stay in, and go back.
+            let took = Instant::now();
+            let mut again = Cursor::open_quietly(&want.demo, &self.relay.hub, true)?;
+            skim(&mut again, &self.relay.hub, target)?;
+            trace!("decoded back to {target} in {} ms", took.elapsed().as_millis());
+            self.cur = Some(again);
+            self.relay.hub().all_want_keyframe(Instant::now());
             return Ok(());
         }
         if want.paused != self.paused {
             trace!("paused: {}", want.paused);
             self.paused = want.paused;
-            self.relay.hub().set_paused(want.paused);
+            let demo_paused = self.cur.as_ref().is_some_and(|c| c.paused);
+            self.relay.hub().set_paused(want.paused || demo_paused);
         }
         let Some(c) = &mut self.cur else { return Ok(()) };
         if c.started && c.tick() + jump < target {
-            trace!("jump ahead from {} to {target}", c.tick());
+            let (from, took) = (c.tick(), Instant::now());
             skim(c, &self.relay.hub, target)?;
+            trace!("jump ahead from {from} to {target} in {} ms", took.elapsed().as_millis());
             self.relay.hub().all_want_keyframe(Instant::now());
         }
         if self.relay.hub().wants_keyframe() {
@@ -330,7 +399,7 @@ impl Player<'_> {
             {
                 let recent: Vec<(u32, BitBuf)> = c.recent.iter().cloned().collect();
                 let since = c.dec.catch_up(tick, &recent);
-                self.relay.hub().send_keyframe(&key, &since, self.paused);
+                self.relay.hub().send_keyframe(&key, &since, self.paused || c.paused);
             }
         }
         match c.next_tick()? {

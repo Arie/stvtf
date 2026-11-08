@@ -609,14 +609,13 @@ impl Hub {
         let now = Instant::now();
         self.signon_open = false;
         self.keyframe = Some(std::iter::once(key.clone()).chain(since.iter().cloned()).collect());
-        let pause = paused.then(|| set_pause(true));
+        // Always: one shown "paused" before a jump may not be any more.
+        let pause = set_pause(paused);
         for (addr, c) in &mut self.clients {
             if c.phase == Phase::WaitingFull && c.has_log(&self.log) {
                 trace!("{addr} gets a keyframe of {} bits", key.nbits());
                 c.set_phase(Phase::Active, now);
-                if let Some(p) = &pause {
-                    c.queue.push(p.clone());
-                }
+                c.queue.push(pause.clone());
                 send(&self.sock, &mut self.split_group, *addr, c, Some(key), true, now);
                 for f in since {
                     send(&self.sock, &mut self.split_group, *addr, c, Some(f), true, now);
