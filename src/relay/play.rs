@@ -222,7 +222,9 @@ impl Relay {
     /// Plays demos to the clients, where `playback` wants them, until `stop`.
     pub fn play(&self, playback: &Playback, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<()> {
         self.announce(emit)?;
-        self.serving(stop, || Player { relay: self, cur: None, idle: None, paused: false }.run(playback, stop))
+        self.serving(stop, || {
+            Player { relay: self, cur: None, idle: None, paused: false, traced: None }.run(playback, stop)
+        })
     }
 }
 
@@ -233,6 +235,8 @@ struct Player<'r> {
     idle: Option<Instant>,
     /// What the clients were last told.
     paused: bool,
+    /// When the trace last said where playback is.
+    traced: Option<Instant>,
 }
 
 impl Player<'_> {
@@ -244,7 +248,10 @@ impl Player<'_> {
             }
             let want = playback.get();
             if self.cur.as_ref().is_none_or(|c| c.path != want.demo) {
-                self.cur = None;
+                // Another demo (a live match's next one): clients in a game sign on again.
+                if self.cur.take().is_some() {
+                    self.relay.hub().reconnect_all();
+                }
                 match Cursor::open(&want.demo, &self.relay.hub) {
                     Ok(c) => {
                         self.cur = Some(c);
@@ -288,18 +295,26 @@ impl Player<'_> {
         // Not before the demo starts.
         let target = if want.from_start { first.saturating_add(wanted) } else { wanted.max(first) };
         let jump = (JUMP.as_secs_f32() / interval.max(1e-3)) as i64;
+        if *super::TRACE && self.traced.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
+            self.traced = Some(Instant::now());
+            trace!("playing tick {}, wanted {target}, paused {}, speed {}", c.tick(), want.paused, want.speed);
+        }
         if c.started && target + jump < c.tick() {
             // Back: the demo again from its start, and every client signs on again.
+            trace!("jump back from {} to {target}", c.tick());
             self.cur = None;
+            self.relay.hub().reconnect_all();
             self.cur = Some(Cursor::open(&want.demo, &self.relay.hub)?);
             return Ok(());
         }
         if want.paused != self.paused {
+            trace!("paused: {}", want.paused);
             self.paused = want.paused;
             self.relay.hub().set_paused(want.paused);
         }
         let Some(c) = &mut self.cur else { return Ok(()) };
         if c.started && c.tick() + jump < target {
+            trace!("jump ahead from {} to {target}", c.tick());
             skim(c, &self.relay.hub, target)?;
             self.relay.hub().all_want_keyframe(Instant::now());
         }
@@ -313,7 +328,8 @@ impl Player<'_> {
             if (next.is_some() || c.ended)
                 && let Some((tick, key)) = c.dec.keyframe(next.as_deref())
             {
-                let since: Vec<BitBuf> = c.recent.iter().filter(|(t, _)| *t > tick).map(|(_, f)| f.clone()).collect();
+                let recent: Vec<(u32, BitBuf)> = c.recent.iter().cloned().collect();
+                let since = c.dec.catch_up(tick, &recent);
                 self.relay.hub().send_keyframe(&key, &since, self.paused);
             }
         }

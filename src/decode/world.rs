@@ -51,6 +51,9 @@ pub(crate) struct World {
     /// No full update came yet, or a frame was lost or built on a baseline of its own since.
     broken: bool,
     seen_full: bool,
+    /// Whether the stream's full update set baselines (as a server's to a viewer does): a
+    /// keyframe does the same, so the client keeps the baselines the stream's frames expect.
+    full_sets_baselines: bool,
 }
 
 impl World {
@@ -62,6 +65,7 @@ impl World {
             None => {
                 self.broken = false;
                 self.seen_full = true;
+                self.full_sets_baselines = pe.updated_base_line;
                 Frame::new()
             }
             Some(base) => {
@@ -118,6 +122,11 @@ impl World {
         }
     }
 
+    /// Whether frame `tick` is kept.
+    pub(crate) fn has(&self, tick: u32) -> bool {
+        self.frames.iter().any(|(t, _)| *t == tick)
+    }
+
     fn latest(&self) -> Option<&Frame> {
         self.frames.back().map(|(_, f)| f)
     }
@@ -165,30 +174,7 @@ impl World {
             .map(|(t, f)| (*t, f))?;
         let mut entities = Vec::with_capacity(frame.len());
         for (&index, e) in frame {
-            let table = state.send_tables.get(usize::from(e.class))?;
-            let base: BTreeMap<u32, SendProp> = state
-                .get_static_baseline(e.class, table)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|p| (p.index, p))
-                .collect();
-            let props = e
-                .props
-                .values()
-                .filter(|p| !base.get(&p.index).is_some_and(|b| same(&b.value, &p.value)))
-                .cloned()
-                .collect();
-            entities.push(PacketEntity {
-                server_class: e.class,
-                entity_index: index.into(),
-                props,
-                in_pvs: true,
-                update_type: UpdateType::Enter,
-                serial_number: e.serial,
-                delay: None,
-                delta: None,
-                baseline_index: BaselineIndex::First,
-            });
+            entities.push(enter(state, index, e)?);
         }
         let msg = PacketEntitiesMessage {
             entities,
@@ -196,20 +182,93 @@ impl World {
             max_entries: self.max_entries,
             delta: None,
             base_line: BaselineIndex::First,
+            updated_base_line: self.full_sets_baselines,
+        };
+        Some((tick, encode(state, &msg, tick)?))
+    }
+
+    /// `net_Tick(to)` and the entities of frame `to` as a delta from frame `from`, both kept: a
+    /// client that has `from` gets `to` from it, where the stream's own frame `to` builds on one
+    /// the client lacks.
+    pub(crate) fn delta(&self, state: &ParserState, from: u32, to: u32) -> Option<BitBuf> {
+        if self.broken {
+            return None;
+        }
+        let frame = |t: u32| self.frames.iter().rev().find(|(tick, _)| *tick == t).map(|(_, f)| f);
+        let (old, new) = (frame(from)?, frame(to)?);
+        let mut entities = Vec::new();
+        for (&index, e) in new {
+            match old.get(&index) {
+                Some(o) if o.class == e.class && o.serial == e.serial => {
+                    let props: Vec<SendProp> = e
+                        .props
+                        .values()
+                        .filter(|p| !o.props.get(&p.index).is_some_and(|q| same(&q.value, &p.value)))
+                        .cloned()
+                        .collect();
+                    if !props.is_empty() {
+                        entities.push(PacketEntity {
+                            server_class: e.class,
+                            entity_index: index.into(),
+                            props,
+                            in_pvs: true,
+                            update_type: UpdateType::Delta,
+                            serial_number: e.serial,
+                            delay: None,
+                            delta: Some(from.into()),
+                            baseline_index: BaselineIndex::First,
+                        });
+                    }
+                }
+                _ => entities.push(enter(state, index, e)?),
+            }
+        }
+        let removed = old.keys().filter(|i| !new.contains_key(i)).map(|&i| i.into()).collect();
+        let msg = PacketEntitiesMessage {
+            entities,
+            removed_entities: removed,
+            max_entries: self.max_entries,
+            delta: Some(from.into()),
+            base_line: BaselineIndex::First,
             updated_base_line: false,
         };
-        let mut bytes = Vec::new();
-        let nbits = {
-            let mut s = BitWriteStream::new(&mut bytes, LittleEndian);
-            msg.encode(&mut s, state).ok()?;
-            s.bit_len()
-        };
-        let mut w = BitWriter::new();
-        w.write_buf(&messages::tick(tick as i32));
-        w.write_bits(SVC_PACKETENTITIES, TYPE_BITS);
-        w.write_buf(&BitReader::slice(&bytes, 0..nbits));
-        Some((tick, w.finish()))
+        encode(state, &msg, to)
     }
+}
+
+/// An entity entering with the props that differ from its class's static baseline.
+fn enter(state: &ParserState, index: u32, e: &Entity) -> Option<PacketEntity> {
+    let table = state.send_tables.get(usize::from(e.class))?;
+    let base: BTreeMap<u32, SendProp> =
+        state.get_static_baseline(e.class, table).unwrap_or_default().into_iter().map(|p| (p.index, p)).collect();
+    let props =
+        e.props.values().filter(|p| !base.get(&p.index).is_some_and(|b| same(&b.value, &p.value))).cloned().collect();
+    Some(PacketEntity {
+        server_class: e.class,
+        entity_index: index.into(),
+        props,
+        in_pvs: true,
+        update_type: UpdateType::Enter,
+        serial_number: e.serial,
+        delay: None,
+        delta: None,
+        baseline_index: BaselineIndex::First,
+    })
+}
+
+/// `net_Tick(tick)` and `msg`, as one message stream.
+fn encode(state: &ParserState, msg: &PacketEntitiesMessage, tick: u32) -> Option<BitBuf> {
+    let mut bytes = Vec::new();
+    let nbits = {
+        let mut s = BitWriteStream::new(&mut bytes, LittleEndian);
+        msg.encode(&mut s, state).ok()?;
+        s.bit_len()
+    };
+    let mut w = BitWriter::new();
+    w.write_buf(&messages::tick(tick as i32));
+    w.write_bits(SVC_PACKETENTITIES, TYPE_BITS);
+    w.write_buf(&BitReader::slice(&bytes, 0..nbits));
+    Some(w.finish())
 }
 
 /// Whether two prop values are exactly the same. The parser's own `==` takes floats as equal when

@@ -165,6 +165,37 @@ impl Decoder {
         self.world.as_ref()?.full_update(self.handler.get_parser_state(), base)
     }
 
+    /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
+    /// tick): those after it, each as played if the client has the frame it builds on, else (from
+    /// a live server, a frame a few ticks back) rewritten as a delta from `key`.
+    pub(crate) fn catch_up(
+        &self,
+        key: u32,
+        recent: &[(u32, crate::net::bits::BitBuf)],
+    ) -> Vec<crate::net::bits::BitBuf> {
+        let Some(world) = &self.world else { return Vec::new() };
+        let state = self.handler.get_parser_state();
+        let mut have = vec![key];
+        let mut out = Vec::new();
+        for (tick, bits) in recent.iter().filter(|(t, _)| *t > key) {
+            match self.delta_base(bits.bytes()) {
+                Some(base) if have.contains(&base) => out.push(bits.clone()),
+                // From the keyframe's frame: a client drops the frames older than a delta's base,
+                // and the stream's next frames may still build on that one.
+                _ => match world.delta(state, key, *tick) {
+                    Some(d) => out.push(d),
+                    // No entities in it: nothing builds on it.
+                    None => out.push(bits.clone()),
+                },
+            }
+            // A client keeps only frames with entities.
+            if world.has(*tick) {
+                have.push(*tick);
+            }
+        }
+        out
+    }
+
     /// The server tick of the frame the entities in message stream `data` build on, if they are a
     /// delta; it is read, not decoded into anything.
     fn delta_base(&self, data: &[u8]) -> Option<u32> {
@@ -612,7 +643,23 @@ mod keyframe_tests {
             .into_iter()
             .chain([recorded.display().to_string()]);
         for demo in demos {
-            let demo = demo.as_str();
+            follows_from_a_keyframe(&demo, 1, 2);
+        }
+    }
+
+    /// A live recording of one's own, keyframes at several points.
+    #[test]
+    #[ignore = "a demo in STVTF_KEYFRAME_DEMO"]
+    fn a_decoder_follows_a_given_demo_from_keyframes() {
+        let demo = std::env::var("STVTF_KEYFRAME_DEMO").unwrap();
+        for at in 1..8 {
+            follows_from_a_keyframe(&demo, at, 8);
+        }
+    }
+
+    /// Starts a decoder from a keyframe `at`/`of` into `demo` and follows it to the end.
+    fn follows_from_a_keyframe(demo: &str, at: usize, of: usize) {
+        {
             let (tables, signon, frames) = packets(demo);
             let mut whole = Decoder::new(&tables, 1000.0).unwrap();
             whole.keep_world();
@@ -621,7 +668,7 @@ mod keyframe_tests {
                 whole.feed(s, s.len() * 8);
             }
             // The string table changes so far, as the relay's log keeps them for a late client.
-            let half = frames.len() / 2;
+            let half = frames.len() * at / of;
             let mut tables_since = Vec::new();
             let mut ticks = Vec::new();
             for f in &frames[..half] {
@@ -648,8 +695,14 @@ mod keyframe_tests {
             let life = late.feed(key.bytes(), key.nbits());
             assert!(life.full_update && !life.lost_frame, "{demo}");
             // Then the frames played since the one it is of, as the relay sends them with it.
-            for (f, _) in frames[..half].iter().zip(&ticks).filter(|(_, t)| **t > key_tick) {
-                late.feed(f, f.len() * 8);
+            let recent: Vec<(u32, crate::net::bits::BitBuf)> = frames[..half]
+                .iter()
+                .zip(&ticks)
+                .map(|(f, t)| (*t, crate::net::bits::BitBuf::from_bytes(f.clone())))
+                .collect();
+            for f in whole.catch_up(key_tick, &recent) {
+                let life = late.feed(f.bytes(), f.nbits());
+                assert!(!life.lost_frame, "{demo}: a frame sent with the keyframe builds on one the client lacks");
             }
             // A demo's next frame builds on the last: the keyframe is of where `whole` is. (A live
             // session's builds on one a few ticks back, which the keyframe is of instead.)

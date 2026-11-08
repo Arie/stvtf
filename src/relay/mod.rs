@@ -245,6 +245,8 @@ struct Client {
     last_sent: Instant,
     /// The client said goodbye.
     gone: Option<String>,
+    /// It went on past CONNECTED in the current signon: a new signon must make it reconnect.
+    signing: bool,
 }
 
 impl Client {
@@ -270,6 +272,7 @@ impl Client {
             last_heard: now,
             last_sent: now,
             gone: None,
+            signing: false,
         }
     }
 
@@ -466,17 +469,32 @@ impl Hub {
         }
     }
 
-    /// The server started a signon (connected, or a new map): so does every client.
+    /// The server started a signon (connected, or a new map): so does every client. A reconnect
+    /// asked of a client (see [`Hub::reconnect_all`]) still goes first.
     fn restart_signon(&mut self, now: Instant) {
         self.log.clear();
         self.logged_unreliable.clear();
         self.signon_open = true;
         self.keyframe = None;
+        let reconnect = messages::signonstate(Signon::Connected, -1);
         for c in self.clients.values_mut() {
             c.cursor = 0;
-            c.queue.clear();
+            c.queue.retain(|m| *m == reconnect);
             c.gate = c.gate.filter(|g| *g == Signon::Connected);
             c.set_phase(Phase::Signon, now);
+        }
+    }
+
+    /// Every client into a signon is told to reconnect (`net_SignonState(CONNECTED)`, as a server's
+    /// `Reconnect` does, and as a live server does on a new map), and gets the next signon once it
+    /// says it has: a game client sent a new signon in the middle of a game crashes.
+    fn reconnect_all(&mut self) {
+        let reconnect = messages::signonstate(Signon::Connected, -1);
+        for c in self.clients.values_mut().filter(|c| c.signing || c.phase != Phase::Signon) {
+            c.queue.clear();
+            c.queue.push(reconnect.clone());
+            c.gate = Some(Signon::Connected);
+            c.signing = false;
         }
     }
 
@@ -695,6 +713,7 @@ impl Hub {
                 match m {
                     ClientMsg::Signon(s) => {
                         trace!("{from} signon {s:?} at {} ms", now.duration_since(c.connected).as_millis());
+                        c.signing |= s > Signon::Connected;
                         if c.gate.is_some_and(|g| s >= g) {
                             c.gate = None;
                         }
