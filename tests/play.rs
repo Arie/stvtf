@@ -266,3 +266,29 @@ fn a_client_joining_while_paused_sees_the_moment_and_waits() {
         });
     });
 }
+
+#[test]
+fn a_jump_back_before_the_first_round_start_still_gets_one() {
+    let demo = demo_snapshots();
+    let first = *demo.keys().next().unwrap();
+    // The demo's round starts 5 s in.
+    let round = first + 5 * 66;
+    let playback = Playback::new(want(first + 20 * 66, false, false));
+    playing(&playback, |addr| {
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            let _stop = StopOnDrop(&stop);
+            let seen = client(s, addr, &stop);
+            wait_for("a second of the demo", || snapshots(&seen).len() > 66);
+            // A win panel up there would stay, without one of our own.
+            let jumped = Instant::now();
+            playback.set(want(first, false, false));
+            wait_for("a round start with the jump", || {
+                seen.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(t, l)| *t > jumped && matches!(l, Line::RoundStart(r) if r.tick < round))
+            });
+        });
+    });
+}

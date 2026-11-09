@@ -412,9 +412,13 @@ impl Decoder {
 
     /// The last round start, win panel or game over event: what a client that skipped there
     /// (a jump, or one just in) is sent after a full update, so its HUD shows the round's end, or
-    /// hides it, as the game does.
+    /// hides it, as the game does. Before the demo's first, a round start of our own: one jumped
+    /// back there from a win panel has it hidden.
     pub(crate) fn round_event(&self) -> Option<crate::net::bits::BitBuf> {
-        self.round.clone()
+        use tf_demo_parser::demo::gameevent_gen::{GameEvent, TeamPlayRoundStartEvent};
+        self.round
+            .clone()
+            .or_else(|| self.game_event(GameEvent::TeamPlayRoundStart(TeamPlayRoundStartEvent { full_reset: false })))
     }
 
     /// Sets the last round event, for a decoder that starts from a checkpoint.
@@ -424,13 +428,9 @@ impl Decoder {
 
     /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
     pub(crate) fn hltv_chase(&self, player: u16) -> Option<crate::net::bits::BitBuf> {
-        use tf_demo_parser::demo::gameevent_gen::{GameEvent, GameEventType, HLTVChaseEvent};
-        use tf_demo_parser::demo::message::gameevent::GameEventMessage;
-        use tf_demo_parser::demo::parser::Encode;
+        use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVChaseEvent};
         let ent = self.extractor().snapshot().players.iter().find(|p| p.id.0 == player)?.ent;
-        let state = self.handler.get_parser_state();
-        let def = state.event_definitions.iter().find(|d| d.event_type == GameEventType::HLTVChase)?;
-        let event = HLTVChaseEvent {
+        self.game_event(GameEvent::HLTVChase(HLTVChaseEvent {
             target_1: u16::try_from(ent).ok()?,
             target_2: 0,
             distance: 96,
@@ -438,12 +438,17 @@ impl Decoder {
             phi: 0,
             inertia: 0,
             in_eye: 1,
-        };
-        let msg = GameEventMessage {
-            event_type_id: def.id,
-            event_type: GameEventType::HLTVChase,
-            event: GameEvent::HLTVChase(event),
-        };
+        }))
+    }
+
+    /// `event` as an `svc_GameEvent`, if the demo's event list has its kind.
+    fn game_event(&self, event: tf_demo_parser::demo::gameevent_gen::GameEvent) -> Option<crate::net::bits::BitBuf> {
+        use tf_demo_parser::demo::message::gameevent::GameEventMessage;
+        use tf_demo_parser::demo::parser::Encode;
+        let state = self.handler.get_parser_state();
+        let event_type = event.event_type();
+        let def = state.event_definitions.iter().find(|d| d.event_type == event_type)?;
+        let msg = GameEventMessage { event_type_id: def.id, event_type, event };
         let mut bytes = Vec::new();
         let nbits = {
             let mut s = bitbuffer::BitWriteStream::new(&mut bytes, LittleEndian);
