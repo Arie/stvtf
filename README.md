@@ -192,7 +192,9 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   point captured yet), `running` or `overtime` (the second half's time ran out). While setting,
   `time` is the time of the last capture and `points` those captured; then `time` counts down
   to beat it, unless `paused`, with `points` still to capture to beat it, and in overtime the
-  points to win with. Absent outside stopwatch, before the match and once it is decided.
+  points to win with. `in_hud` while the HUD's round timer shows the same time (in the second
+  half TF2 holds the round timer to the stopwatch's when that is less). Absent outside stopwatch, before the match
+  and once it is decided.
 - `cap_progress` runs 0 → 1 while `capping_team` caps, else 0. The server sends it every few
   seconds; like the HUD, the tool extrapolates it in between. `cap_rate` is progress per second.
   `on_point` counts the players of each team standing on the point.

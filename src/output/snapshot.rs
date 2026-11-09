@@ -438,6 +438,10 @@ pub struct Stopwatch {
     /// Points: captured so far (first half), still to capture to beat the time (second), or to win
     /// in overtime.
     pub points: i64,
+    /// The HUD's round timer shows its time (in the second half TF2 holds the round timer to the
+    /// stopwatch's when that is less): the time shows there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_hud: bool,
 }
 
 /// The stopwatch's state (TF2's `m_nStopWatchState`).

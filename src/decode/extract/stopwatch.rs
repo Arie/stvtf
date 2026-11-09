@@ -10,6 +10,8 @@ const ROLE_ATTACKERS: i64 = 2;
 /// `m_nStopWatchState`: `STOPWATCH_CAPTURE_TIME_NOT_SET`, `STOPWATCH_RUNNING`, `STOPWATCH_OVERTIME`.
 const STATE_RUNNING: i64 = 1;
 const STATE_OVERTIME: i64 = 2;
+/// A round timer this close to the stopwatch's time shows it.
+const SAME_TIME: f64 = 0.5;
 
 impl Extractor {
     /// The stopwatch, while TF2 shows it: in stopwatch, between pre-match and game over, with
@@ -29,13 +31,18 @@ impl Extractor {
             STATE_OVERTIME => (StopwatchState::Overtime, defenders.score - attackers.score + 1),
             _ => (StopwatchState::Unset, attackers.score),
         };
+        let time = round1(timer.map_or(0.0, |t| t.remaining_at(self.server_tick, self.interval())));
+        // The second half's round timer is held to the stopwatch's time when that is less
+        // (`CTeamRoundTimer::SetTimeRemaining`, `AddTimerSeconds`): the two then run as one.
+        let in_hud = !setting && self.hud_timers().iter().any(|t| !t.setup && (t.remaining - time).abs() < SAME_TIME);
         Some(out::Stopwatch {
             attackers: team_num(attackers.team),
             setting,
             state,
-            time: round1(timer.map_or(0.0, |t| t.remaining_at(self.server_tick, self.interval()))),
+            time,
             paused: timer.is_none_or(|t| t.paused || setting),
             points,
+            in_hud,
         })
     }
 }

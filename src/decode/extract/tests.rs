@@ -193,6 +193,24 @@ mod stopwatch_tests {
     }
 
     #[test]
+    fn its_time_is_said_to_be_on_the_hud_only_while_the_round_timer_shows_it() {
+        let mut x = Extractor {
+            round_state: Round::Running,
+            stopwatch: StopwatchRules { on: true, state: 1, timer: Some(9) },
+            ..Default::default()
+        };
+        x.ents.teams.insert(1, TeamScore { team: 2, score: 4, role: 1, ..Default::default() });
+        x.ents.teams.insert(2, TeamScore { team: 3, score: 3, role: 2, ..Default::default() });
+        x.ents.timers.insert(9, RoundTimer { stopwatch: true, end_time: 100.0, ..Default::default() });
+        x.ents.timers.insert(5, RoundTimer { show: true, end_time: 150.0, ..Default::default() });
+        assert!(!x.snapshot().stopwatch.unwrap().in_hud, "the map's own time, longer");
+        x.ents.timers.get_mut(&5).unwrap().end_time = 100.0;
+        assert!(x.snapshot().stopwatch.unwrap().in_hud, "held to the stopwatch's");
+        x.ents.timers.get_mut(&5).unwrap().setup = true;
+        assert!(!x.snapshot().stopwatch.unwrap().in_hud, "setup is another time");
+    }
+
+    #[test]
     fn no_stopwatch_without_one_or_both_roles() {
         assert!(stopwatch(0, &RoundTimer::default(), 0).is_some());
         let mut x = Extractor {

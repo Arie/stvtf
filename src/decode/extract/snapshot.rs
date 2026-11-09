@@ -264,7 +264,7 @@ impl Extractor {
 
     /// The round timers the HUD shows. On king of the hill those are only the teams' own;
     /// others are left from earlier rounds.
-    fn hud_timers(&self) -> Vec<out::Timer> {
+    pub(super) fn hud_timers(&self) -> Vec<out::Timer> {
         let koth = self.koth_timers != [None; 2];
         self.ents
             .timers
