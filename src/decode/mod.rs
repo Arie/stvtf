@@ -427,6 +427,12 @@ impl Decoder {
         self.round = event;
     }
 
+    /// The round timers held where they are now, for clients whose clock runs on while no frames
+    /// come (see [`world::World::timers_held`]).
+    pub(crate) fn timers_held(&self) -> Option<crate::net::bits::BitBuf> {
+        self.world.as_ref()?.timers_held(self.handler.get_parser_state(), self.tick_interval())
+    }
+
     /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
     pub(crate) fn hltv_chase(&self, player: u16) -> Option<crate::net::bits::BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVChaseEvent};

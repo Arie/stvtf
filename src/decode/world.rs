@@ -21,7 +21,7 @@ use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::packetentities::{BaselineIndex, PacketEntitiesMessage, PacketEntity, UpdateType};
 use tf_demo_parser::demo::packet::datatable::ClassId;
 use tf_demo_parser::demo::parser::Encode;
-use tf_demo_parser::demo::sendprop::{SendProp, SendPropValue};
+use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
 const SVC_PACKETENTITIES: u32 = 26;
 
@@ -119,6 +119,8 @@ pub(crate) struct World {
     /// Whether the stream's full update set baselines (as a server's to a viewer does): a
     /// keyframe does the same, so the client keeps the baselines the stream's frames expect.
     full_sets_baselines: bool,
+    /// The frame the latest one built on, if it was a delta: a client that has the latest has it.
+    latest_base: Option<u32>,
 }
 
 impl World {
@@ -192,6 +194,7 @@ impl World {
         } else {
             self.frames.clear();
         }
+        self.latest_base = pe.delta.map(u32::from);
         self.frames.push_back((tick, frame));
         if self.frames.len() > MAX_FRAMES {
             self.frames.pop_front();
@@ -263,10 +266,66 @@ impl World {
         Some((tick, encode(state, &msg, tick)?))
     }
 
+    /// The latest frame again, as a delta from the one it built on, with every running round timer
+    /// held where it is (ticking every `interval` seconds): a client whose clock runs on with no
+    /// frames coming (a room paused) shows the time as it was. None when no timer runs, the latest
+    /// frame is not a delta, or it does not encode.
+    pub(crate) fn timers_held(&self, state: &ParserState, interval: f32) -> Option<BitBuf> {
+        let from = self.latest_base?;
+        let (tick, frame) = self.frames.back().map(|(t, f)| (*t, f))?;
+        let mut entities = self.delta_entities(state, from, tick)?;
+        let now = tick as f32 * interval;
+        let mut held = 0;
+        for (index, e) in frame.iter() {
+            let Some(props) = timer_held(state, e, now) else { continue };
+            held += 1;
+            let entry = entities.entry(index).or_insert_with(|| PacketEntity {
+                server_class: e.class,
+                entity_index: index.into(),
+                props: Vec::new(),
+                in_pvs: true,
+                update_type: UpdateType::Delta,
+                serial_number: e.serial,
+                delay: None,
+                delta: Some(from.into()),
+                baseline_index: BaselineIndex::First,
+            });
+            entry.props.retain(|p| !props.iter().any(|q| q.index == p.index));
+            entry.props.extend(props);
+            entry.props.sort_by_key(|p| p.index);
+        }
+        if held == 0 {
+            return None;
+        }
+        let msg = PacketEntitiesMessage {
+            entities: entities.into_values().collect(),
+            removed_entities: Vec::new(),
+            max_entries: self.max_entries,
+            delta: Some(from.into()),
+            base_line: BaselineIndex::First,
+            updated_base_line: false,
+        };
+        encode(state, &msg, tick)
+    }
+
     /// `net_Tick(to)` and the entities of frame `to` as a delta from frame `from`, both kept: a
     /// client that has `from` gets `to` from it, where the stream's own frame `to` builds on one
     /// the client lacks.
     pub(crate) fn delta(&self, state: &ParserState, from: u32, to: u32) -> Option<BitBuf> {
+        let entities = self.delta_entities(state, from, to)?;
+        let msg = PacketEntitiesMessage {
+            entities: entities.into_values().collect(),
+            removed_entities: Vec::new(),
+            max_entries: self.max_entries,
+            delta: Some(from.into()),
+            base_line: BaselineIndex::First,
+            updated_base_line: false,
+        };
+        encode(state, &msg, to)
+    }
+
+    /// What frame `to` changed from frame `from`, by entity index, as a delta lists it.
+    fn delta_entities(&self, state: &ParserState, from: u32, to: u32) -> Option<BTreeMap<u32, PacketEntity>> {
         if self.broken {
             return None;
         }
@@ -323,16 +382,32 @@ impl World {
                 },
             );
         }
-        let msg = PacketEntitiesMessage {
-            entities: entities.into_values().collect(),
-            removed_entities: Vec::new(),
-            max_entries: self.max_entries,
-            delta: Some(from.into()),
-            base_line: BaselineIndex::First,
-            updated_base_line: false,
-        };
-        encode(state, &msg, to)
+        Some(entities)
     }
+}
+
+/// A running round timer's props that hold it where it is at time `now`; None for another entity
+/// or a timer already paused.
+fn timer_held(state: &ParserState, e: &Entity, now: f32) -> Option<Vec<SendProp>> {
+    if state.server_classes.get(usize::from(e.class))?.name.as_str() != "CTeamRoundTimer" {
+        return None;
+    }
+    let table = state.send_tables.get(usize::from(e.class))?;
+    let prop = |name: &str| {
+        let id = SendPropIdentifier::new("DT_TeamRoundTimer", name);
+        let index = table.flattened_props.iter().position(|d| d.identifier == id)?;
+        Some((u32::try_from(index).ok()?, id))
+    };
+    let ((paused_at, paused_id), (left_at, left_id), (end_at, _)) =
+        (prop("m_bTimerPaused")?, prop("m_flTimeRemaining")?, prop("m_flTimerEndTime")?);
+    if e.props.get(paused_at).is_some_and(|p| matches!(p.value, SendPropValue::Integer(v) if v != 0)) {
+        return None;
+    }
+    let SendPropValue::Float(end) = e.props.get(end_at)?.value else { return None };
+    Some(vec![
+        SendProp { index: paused_at, identifier: paused_id, value: SendPropValue::Integer(1) },
+        SendProp { index: left_at, identifier: left_id, value: SendPropValue::Float((end - now).max(0.0)) },
+    ])
 }
 
 /// An entity entering with the props that differ from its class's static baseline.

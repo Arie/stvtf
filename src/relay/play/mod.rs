@@ -6,8 +6,9 @@
 //!   every client gets a full update of where it went. Only another demo file signs them on again.
 //! - A full update is written from the decoded entities (see `decode::world`), for a client that
 //!   joins, loses a frame or follows a jump; the frames after it are the demo's own.
-//! - Paused, no frames go out, and the clients are told (`svc_SetPause`), as of the match's own
-//!   pauses in the demo too.
+//! - Paused, no frames go out. The clients are not told, so their clock runs on and what is drawn
+//!   for them (beams) shows and fades; the round timers are held instead, and going on they get a
+//!   full update of where it is. The match's own pauses in the demo they are told (`svc_SetPause`).
 //! - With nobody in, nothing is decoded; after a while what was decoded is dropped.
 //! - Why it cannot play (not written yet, another build's demo, a read error) is told through
 //!   [`Playback::problem`], and it tries again.
@@ -516,7 +517,17 @@ impl Player<'_> {
             trace!("paused: {}", want.paused);
             self.paused = want.paused;
             let demo_paused = self.cur.as_ref().is_some_and(|c| c.paused);
-            self.relay.hub().set_paused(want.paused || demo_paused);
+            let mut hub = self.relay.hub();
+            hub.set_paused(demo_paused);
+            if want.paused {
+                let held = self.cur.as_ref().filter(|c| c.started).and_then(|c| c.dec.timers_held());
+                if let Some(held) = held {
+                    hub.tell_active(&held);
+                }
+            } else {
+                // The timers as they are, and anything else a client's own clock moved on.
+                hub.all_want_keyframe(Instant::now());
+            }
         }
         let Some(c) = &mut self.cur else { return Ok(()) };
         if c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target) {
@@ -549,7 +560,10 @@ impl Player<'_> {
                     let mut since = c.dec.catch_up(tick, &recent);
                     // The round's end shown, or hidden, as at this moment.
                     since.extend(c.dec.round_event());
-                    self.relay.hub().send_keyframe(&key, &since, self.paused || c.paused);
+                    if self.paused {
+                        since.extend(c.dec.timers_held());
+                    }
+                    self.relay.hub().send_keyframe(&key, &since, c.paused);
                     self.problem = None;
                     // Those just in are told where the camera is.
                     self.cued = None;
@@ -581,7 +595,7 @@ impl Player<'_> {
                     hub.upstream_flush();
                     // The match paused or went on: the clients are told reliably too.
                     if c.paused != was_paused {
-                        hub.set_paused(c.paused || self.paused);
+                        hub.set_paused(c.paused);
                     }
                 }
             }
@@ -669,6 +683,30 @@ mod tests {
     use super::*;
     use tf_demo_parser::demo::gameevent_gen::GameEvent;
     use tf_demo_parser::demo::message::Message;
+
+    #[test]
+    fn the_round_timer_held_reads_as_paused_where_it_was() {
+        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
+        let mut c = Cursor::open_with(&path, None).unwrap();
+        // Twenty seconds in, with the round's timer on the HUD.
+        while !c.started || c.dec.server_tick() < c.first.unwrap_or(i64::MAX).saturating_add(20 * 66) as u32 {
+            match c.next_tick() {
+                None => panic!("the demo ended"),
+                Some(i64::MIN) => c.next = None,
+                Some(_) => drop(c.decode()),
+            }
+        }
+        let running = c.dec.extractor().snapshot().timers;
+        assert!(!running.is_empty() && running.iter().all(|t| !t.paused), "{running:?}");
+        let held = c.dec.timers_held().expect("a timer to hold");
+        c.dec.feed(held.bytes(), held.nbits());
+        let timers = c.dec.extractor().snapshot().timers;
+        assert_eq!(timers.len(), running.len());
+        for (h, r) in timers.iter().zip(&running) {
+            assert!(h.paused, "{h:?}");
+            assert!((h.remaining - r.remaining).abs() < 0.5, "held at {} where it was {}", h.remaining, r.remaining);
+        }
+    }
 
     #[test]
     fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
