@@ -255,9 +255,9 @@ impl World {
         let mut entities = Vec::new();
         for (index, e) in frame.iter() {
             let mut entering = enter(state, index, e)?;
-            if let Some(held) = hold.and_then(|interval| timer_held(state, e, tick as f32 * interval)) {
-                entering.props.retain(|p| !held.iter().any(|q| q.index == p.index));
-                entering.props.extend(held);
+            if let Some(clock) = timer_props(state, e, hold.map(|interval| tick as f32 * interval)) {
+                entering.props.retain(|p| !clock.iter().any(|q| q.index == p.index));
+                entering.props.extend(clock);
                 entering.props.sort_by_key(|p| p.index);
             }
             entities.push(entering);
@@ -351,9 +351,10 @@ impl World {
     }
 }
 
-/// A running round timer's props that hold it where it is at time `now`; None for another entity
-/// or a timer already paused.
-fn timer_held(state: &ParserState, e: &Entity, now: f32) -> Option<Vec<SendProp>> {
+/// A round timer's clock, every prop of it, for a full update: as it is, or with `hold` (the time
+/// now) a running one held where it is. Every one, not those off its baseline only: a client
+/// keeps a timer held by an earlier full update, until told it runs. None for another entity.
+fn timer_props(state: &ParserState, e: &Entity, hold: Option<f32>) -> Option<Vec<SendProp>> {
     if state.server_classes.get(usize::from(e.class))?.name.as_str() != "CTeamRoundTimer" {
         return None;
     }
@@ -363,15 +364,22 @@ fn timer_held(state: &ParserState, e: &Entity, now: f32) -> Option<Vec<SendProp>
         let index = table.flattened_props.iter().position(|d| d.identifier == id)?;
         Some((u32::try_from(index).ok()?, id))
     };
-    let ((paused_at, paused_id), (left_at, left_id), (end_at, _)) =
+    let ((paused_at, paused_id), (left_at, left_id), (end_at, end_id)) =
         (prop("m_bTimerPaused")?, prop("m_flTimeRemaining")?, prop("m_flTimerEndTime")?);
-    if e.props.get(paused_at).is_some_and(|p| matches!(p.value, SendPropValue::Integer(v) if v != 0)) {
-        return None;
-    }
-    let SendPropValue::Float(end) = e.props.get(end_at)?.value else { return None };
+    let paused = e.props.get(paused_at).is_some_and(|p| matches!(p.value, SendPropValue::Integer(v) if v != 0));
+    let float = |at: u32| match e.props.get(at).map(|p| &p.value) {
+        Some(SendPropValue::Float(v)) => *v,
+        _ => 0.0,
+    };
+    let (end, left) = (float(end_at), float(left_at));
+    let (paused, left) = match hold {
+        Some(now) if !paused => (true, (end - now).max(0.0)),
+        _ => (paused, left),
+    };
     Some(vec![
-        SendProp { index: paused_at, identifier: paused_id, value: SendPropValue::Integer(1) },
-        SendProp { index: left_at, identifier: left_id, value: SendPropValue::Float((end - now).max(0.0)) },
+        SendProp { index: paused_at, identifier: paused_id, value: SendPropValue::Integer(i64::from(paused)) },
+        SendProp { index: left_at, identifier: left_id, value: SendPropValue::Float(left) },
+        SendProp { index: end_at, identifier: end_id, value: SendPropValue::Float(end) },
     ])
 }
 

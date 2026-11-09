@@ -786,31 +786,40 @@ mod tests {
     use tf_demo_parser::demo::message::Message;
 
     #[test]
-    fn a_full_update_with_the_round_timer_held_reads_as_paused_where_it_was() {
+    fn a_full_update_holds_the_round_timer_and_the_next_runs_it_again() {
         let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
-        let mut c = Cursor::open_with(&path, None).unwrap();
-        // Twenty seconds in, with the round's timer on the HUD.
-        while !c.started || c.dec.server_tick() < c.first.unwrap_or(i64::MAX).saturating_add(20 * 66) as u32 {
-            match c.next_tick() {
-                None => panic!("the demo ended"),
-                Some(i64::MIN) => c.next = None,
-                Some(_) => drop(c.decode()),
+        // Twenty seconds in, with the round's timer on the HUD: the relay's, and a client's.
+        let twenty = || {
+            let mut c = Cursor::open_with(&path, None).unwrap();
+            while !c.started || c.dec.server_tick() < c.first.unwrap_or(i64::MAX).saturating_add(20 * 66) as u32 {
+                match c.next_tick() {
+                    None => panic!("the demo ended"),
+                    Some(i64::MIN) => c.next = None,
+                    Some(_) => drop(c.decode()),
+                }
             }
-        }
-        let running = c.dec.extractor().snapshot().timers;
+            c
+        };
+        let (mut relay, mut client) = (twenty(), twenty());
+        let running = client.dec.extractor().snapshot().timers;
         assert!(!running.is_empty() && running.iter().all(|t| !t.paused), "{running:?}");
-        let next = match c.peek() {
+        let next = match relay.peek() {
             Some(Packet::Message { data, .. }) => Some(data.clone()),
             _ => None,
         };
-        let (_, held) = c.dec.keyframe_held(next.as_deref()).expect("a full update");
-        c.dec.feed(held.bytes(), held.nbits());
-        let timers = c.dec.extractor().snapshot().timers;
+        let (_, held) = relay.dec.keyframe_held(next.as_deref()).expect("a full update");
+        client.dec.feed(held.bytes(), held.nbits());
+        let timers = client.dec.extractor().snapshot().timers;
         assert_eq!(timers.len(), running.len());
         for (h, r) in timers.iter().zip(&running) {
             assert!(h.paused, "{h:?}");
             assert!((h.remaining - r.remaining).abs() < 0.5, "held at {} where it was {}", h.remaining, r.remaining);
         }
+        // Going on: a full update as it is runs them again, though running is their baseline.
+        let (_, plain) = relay.dec.keyframe(next.as_deref()).expect("a full update");
+        client.dec.feed(plain.bytes(), plain.nbits());
+        let timers = client.dec.extractor().snapshot().timers;
+        assert!(timers.iter().all(|t| !t.paused), "{timers:?}");
     }
 
     #[test]
