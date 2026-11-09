@@ -602,6 +602,7 @@ impl Player<'_> {
         }
         match c.dec.beams(beams) {
             Some(msgs) => {
+                trace!("{} beams to the clients in", beams.len());
                 let mut hub = self.relay.hub();
                 for m in &msgs {
                     hub.tell_active(m);
