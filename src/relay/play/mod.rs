@@ -477,9 +477,7 @@ impl Player<'_> {
                 .map_or_else(Vec::new, |c| c.tables.iter().skip(again.tables.len()).map(|t| (**t).clone()).collect());
             if let Some(msgs) = set_back {
                 trace!("string tables set back with {} messages", msgs.len());
-                let mut hub = self.relay.hub();
-                hub.unlog_tables(&later);
-                hub.log_tables(&msgs);
+                self.relay.hub().set_tables_back(&later, &msgs);
             } else {
                 trace!("the string tables changed since: the clients sign on again");
                 self.relay.hub().reconnect_all();

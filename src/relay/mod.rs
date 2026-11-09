@@ -597,12 +597,14 @@ impl Hub {
         self.log_tables(&tables);
     }
 
-    /// String table changes after where playback went back to: logged again when it comes to
-    /// them, as the clients were set back to before them.
-    fn unlog_tables(&mut self, tables: &[BitBuf]) {
-        for t in tables {
+    /// Playback went back past the string table changes `later`: they are logged again when it
+    /// comes to them, and `back` (what sets the clients' tables back) goes to every client, even
+    /// if an earlier jump back sent the same.
+    fn set_tables_back(&mut self, later: &[BitBuf], back: &[BitBuf]) {
+        for t in later.iter().chain(back) {
             self.logged_unreliable.remove(t);
         }
+        self.log_tables(back);
     }
 
     /// String table changes passed over (a jump), into the log and reliably to the clients
@@ -1309,6 +1311,31 @@ mod tests {
         late.pump(&hub.log);
         assert_eq!(late.queue, [bits]);
         assert!(!late.has_log(&hub.log), "no entities before the change is acked");
+    }
+
+    #[test]
+    fn tables_set_back_go_again_on_every_jump_back() {
+        let config = RelayConfig::new("127.0.0.1:0");
+        let mut hub = Hub::new(UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
+        let now = Instant::now();
+        let active: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let mut c = Client::new("in".into(), 1, 1, now);
+        c.gate = None;
+        c.set_phase(Phase::Active, now);
+        hub.clients.insert(active, c);
+        let (later, life) = datagram_with_table_change();
+        let mut w = BitWriter::new();
+        w.write_bits(u32::from(SVC_UPDATESTRINGTABLE), TYPE_BITS);
+        w.write_bits(0x1234, 16);
+        let back = w.finish();
+        // Back from past the change, on to it again, and back again: the same set-back each time.
+        for round in 1..=2 {
+            hub.upstream_stream(&later, false, &life);
+            hub.upstream_flush();
+            hub.clients.get_mut(&active).unwrap().queue.clear();
+            hub.set_tables_back(std::slice::from_ref(&later), std::slice::from_ref(&back));
+            assert_eq!(hub.clients[&active].queue, std::slice::from_ref(&back), "jump back {round}");
+        }
     }
 
     #[test]
