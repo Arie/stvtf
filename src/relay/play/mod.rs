@@ -644,6 +644,11 @@ impl Player<'_> {
                     // The match paused or went on: the clients are told reliably too.
                     if c.paused != was_paused {
                         hub.set_paused(c.paused);
+                        // Going on after it, the HUD redraws its timer at once (as casters'
+                        // `hud_reloadscheme` has it do).
+                        if !c.paused {
+                            hub.tell_active(&super::reset_hud());
+                        }
                     }
                 }
             }
