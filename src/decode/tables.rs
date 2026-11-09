@@ -134,15 +134,22 @@ impl Tables {
     }
 
     /// The model index to draw beams with: the solid laser, loaded by the match or else by an
-    /// `svc_UpdateStringTable` (also given) putting it in `modelprecache`'s last slot, which
-    /// servers leave free; None when that slot is taken or the table unknown.
-    pub(crate) fn laser(&self, state: &ParserState) -> Option<(u16, Option<BitBuf>)> {
+    /// `svc_UpdateStringTable` (also given) adding it to `modelprecache`. A game client adds an
+    /// entry past its last at the end, whatever its index, so it goes in the next free one; or in
+    /// `before`, where it went before, while the match has not taken that (after a jump back the
+    /// clients still have it there). None when the table is full or unknown.
+    pub(crate) fn laser(&self, state: &ParserState, before: Option<u16>) -> Option<(u16, Option<BitBuf>)> {
         if let Some((0, index)) = self.beam_sprite {
             return Some((index, None));
         }
         let (id, table) = self.by_id.iter().enumerate().find(|(_, t)| t.name == "modelprecache")?;
-        let slot = table.max.checked_sub(1)?;
-        if table.entries.contains(&slot) {
+        let next = table.entries.iter().max().map_or(0, |i| i + 1);
+        let slot = match before {
+            Some(b) if !table.entries.contains(&b) => b,
+            Some(b) => next.max(b + 1),
+            None => next,
+        };
+        if slot >= table.max {
             return None;
         }
         let entry = StringTableEntry { text: Some(Cow::Borrowed(BEAM_SPRITES[0])), extra_data: None };

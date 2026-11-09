@@ -47,18 +47,18 @@ pub(crate) const POINTS: &str = "DT_TEBeamPoints";
 
 impl Decoder {
     /// The model index beams are drawn with: the solid laser, with the message that loads it if
-    /// the match did not (to send first), or else a beam sprite the match loaded.
-    pub(crate) fn beam_model(&self) -> Option<(u16, Option<BitBuf>)> {
-        self.tables.laser(self.handler.get_parser_state()).or_else(|| Some((self.tables.beam_sprite()?, None)))
+    /// the match did not (to send first; see `Tables::laser` for `before`), or else a beam sprite
+    /// the match loaded.
+    pub(crate) fn beam_model(&self, before: Option<u16>) -> Option<(u16, Option<BitBuf>)> {
+        self.tables.laser(self.handler.get_parser_state(), before).or_else(|| Some((self.tables.beam_sprite()?, None)))
     }
 
-    /// `beams` as `svc_TempEntities` drawn with [`Decoder::beam_model`], or None when the demo has
-    /// no beam class or no model to draw them with.
-    pub(crate) fn beams(&self, beams: &[Beam]) -> Option<Vec<BitBuf>> {
+    /// `beams` as `svc_TempEntities` drawn with model `sprite`, or None when the demo has no beam
+    /// class.
+    pub(crate) fn beams(&self, beams: &[Beam], sprite: u16) -> Option<Vec<BitBuf>> {
         let state = self.handler.get_parser_state();
         let class = state.server_classes.iter().position(|c| c.name.as_str() == "CTEBeamPoints")?;
         let table = state.send_tables.get(class)?;
-        let sprite = self.beam_model()?.0;
         let event = |b: &Beam| {
             let int = |v: i64| SendPropValue::Integer(v);
             let vec = |p: [f32; 3]| SendPropValue::Vector(Vector { x: p[0], y: p[1], z: p[2] });

@@ -385,6 +385,7 @@ impl Relay {
                 index: None,
                 cued: None,
                 kept: (0, Arc::default(), None),
+                laser: None,
             }
             .run(playback, stop);
         });
@@ -414,6 +415,8 @@ struct Player<'r> {
     cued: Option<(Camera, Instant)>,
     /// The kept beams last shown: which of them, those, and when all of them were.
     kept: (u64, Arc<Vec<Beam>>, Option<Instant>),
+    /// Where the clients were given the laser beams are drawn with, if they were.
+    laser: Option<u16>,
 }
 
 impl Player<'_> {
@@ -432,6 +435,8 @@ impl Player<'_> {
                 match Cursor::open(&want.demo, &self.relay.hub) {
                     Ok(c) => {
                         self.cur = Some(c);
+                        // Its own tables: the clients sign on to them, the laser not among them.
+                        self.laser = None;
                         playback.set_problem(None);
                         if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
                             self.index = Some(Index::shared(&want.demo));
@@ -626,18 +631,24 @@ impl Player<'_> {
 }
 
 impl Player<'_> {
-    /// Has the clients load the model beams are drawn with, if the match did not: once, and for
-    /// those to come too.
-    fn load_beam_model(&self, c: &Cursor) {
-        if let Some((_, Some(msg))) = c.dec.beam_model() {
+    /// `beams` as messages, drawn with the laser: the clients are given it first if they have not
+    /// been (and those to come too), where they will have it.
+    fn beam_messages(&mut self, beams: &[Beam]) -> Option<Vec<BitBuf>> {
+        let c = self.cur.as_ref().filter(|c| c.started)?;
+        let (model, load) = c.dec.beam_model(self.laser)?;
+        if let Some(msg) = load {
             self.relay.hub().log_once(&msg);
+            self.laser = Some(model);
         }
+        c.dec.beams(beams, model)
     }
 
     /// Shows the kept beams again when due, for [`KEPT_EVERY`]; new ones at once, until then.
     fn show_kept(&mut self, playback: &Playback) {
         let (version, beams) = playback.kept();
-        let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
+        if self.cur.as_ref().is_none_or(|c| !c.started) {
+            return;
+        }
         let now = Instant::now();
         let left = self.kept.2.map_or(Duration::ZERO, |at| KEPT_EVERY.saturating_sub(now.duration_since(at)));
         let (show, life) = if left.is_zero() {
@@ -655,8 +666,7 @@ impl Player<'_> {
         }
         let life = life.as_secs_f32();
         let show: Vec<Beam> = show.into_iter().map(|b| Beam { life, ..b }).collect();
-        self.load_beam_model(c);
-        if let Some(msgs) = c.dec.beams(&show) {
+        if let Some(msgs) = self.beam_messages(&show) {
             let mut hub = self.relay.hub();
             for m in &msgs {
                 hub.tell_active_now(m);
@@ -665,13 +675,11 @@ impl Player<'_> {
     }
 
     /// Shows `beams` to the clients in the game.
-    fn draw(&self, beams: &[Beam]) {
-        let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
+    fn draw(&mut self, beams: &[Beam]) {
         if beams.is_empty() {
             return;
         }
-        self.load_beam_model(c);
-        match c.dec.beams(beams) {
+        match self.beam_messages(beams) {
             Some(msgs) => {
                 trace!("{} beams to the clients in", beams.len());
                 let mut hub = self.relay.hub();
@@ -793,7 +801,8 @@ mod tests {
             width: 2.0,
             speed: 20,
         };
-        let msgs = c.dec.beams(&[beam; 40]).expect("a beam class and sprite");
+        let (model, load) = c.dec.beam_model(None).expect("a model to draw beams with");
+        let msgs = c.dec.beams(&[beam; 40], model).expect("a beam class");
         assert_eq!(msgs.len(), 3, "16 a message");
         assert!(msgs.iter().all(|m| m.nbits() / 8 < 1000), "each fits a datagram");
         let state = c.dec.parser_state_for_tests();
@@ -823,9 +832,9 @@ mod tests {
         assert_eq!(get(POINTS, "m_vecEndPoint"), SendPropValue::Vector(Vector { x: 100.0, y: -200.0, z: 300.0 }));
         assert_eq!(get(BASE, "g"), SendPropValue::Integer(128));
         assert_eq!(get(BASE, "m_nSpeed"), SendPropValue::Integer(20));
-        let (model, load) = c.dec.beam_model().expect("a model to draw beams with");
         assert_eq!(get(BASE, "m_nModelIndex"), SendPropValue::Integer(i64::from(model)));
-        // The match did not load the laser: it goes in the last slot of the models.
+        // The match did not load the laser: it goes after the last of the models, as a game client
+        // adds it whatever index it is sent with.
         let load = load.expect("the laser loaded by the relay");
         let mut s = tf_demo_parser::Stream::from(bitbuffer::BitReadBuffer::new_owned(
             load.bytes().to_vec(),
@@ -837,11 +846,10 @@ mod tests {
         let Message::UpdateStringTable(u) = msg else { panic!() };
         let table = &state.string_tables[usize::from(u.table_id)];
         assert_eq!(u.entries.len(), 1);
-        assert_eq!(
-            (u.entries[0].0, u.entries[0].1.text.as_deref()),
-            (table.max_entries - 1, Some("sprites/laserbeam.vmt"))
-        );
-        assert_eq!(model, table.max_entries - 1);
+        assert_eq!(u.entries[0].1.text.as_deref(), Some("sprites/laserbeam.vmt"));
+        assert_eq!(u.entries[0].0, model);
+        assert!(model < table.max_entries);
+        assert_eq!(c.dec.beam_model(Some(model)).unwrap().0, model, "where it went, while the match leaves it be");
         let SendPropValue::Float(life) = get(BASE, "m_fLife") else { panic!() };
         assert!((life - 4.0).abs() < 0.2, "{life}");
     }
