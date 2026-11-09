@@ -11,8 +11,8 @@ use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue
 use tf_demo_parser::demo::vector::Vector;
 
 pub(crate) const SVC_TEMPENTITIES: u32 = 27;
-/// Beams in one message: well under a datagram.
-const PER_MESSAGE: usize = 32;
+/// Beams in one message: well under a datagram, as some go unreliably.
+const PER_MESSAGE: usize = 16;
 /// The longest a beam can last, and widest it can be, as the game sends them.
 const MAX_LIFE: f32 = 25.5;
 const MAX_WIDTH: f32 = 127.0;

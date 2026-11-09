@@ -47,6 +47,10 @@ const RETRY: Duration = Duration::from_millis(200);
 const CUE_EVERY: Duration = Duration::from_secs(3);
 /// The most beams waiting to be shown: more are dropped.
 const MAX_BEAMS_QUEUED: usize = 4096;
+/// How often kept beams are shown again, and how long they show past that: a frame or so, so
+/// they neither blink out nor show twice over for long.
+const KEPT_EVERY: Duration = Duration::from_secs(2);
+const KEPT_OVERLAP: Duration = Duration::from_millis(20);
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
 static OUR_CRC: std::sync::LazyLock<Option<u32>> = std::sync::LazyLock::new(|| {
@@ -102,12 +106,32 @@ pub struct Playback {
     problem: Mutex<Option<String>>,
     /// Beams to show the clients in the game, once.
     beams: Mutex<Vec<Beam>>,
+    /// Beams the clients in the game keep seeing, until replaced, and how many times they were.
+    kept: Mutex<(u64, Arc<Vec<Beam>>)>,
 }
 
 impl Playback {
     /// Playback that starts out wanting `want`.
     pub fn new(want: Want) -> Self {
-        Playback { want: Mutex::new(want), problem: Mutex::new(None), beams: Mutex::new(Vec::new()) }
+        Playback {
+            want: Mutex::new(want),
+            problem: Mutex::new(None),
+            beams: Mutex::new(Vec::new()),
+            kept: Mutex::new((0, Arc::default())),
+        }
+    }
+
+    /// Beams the clients in the game keep seeing (a room's marker), in place of those kept before:
+    /// shown again every [`KEPT_EVERY`], each for as long, so the old go within that and nothing
+    /// shows twice over.
+    pub fn keep(&self, beams: Vec<Beam>) {
+        let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        kept.0 += 1;
+        kept.1 = Arc::new(beams);
+    }
+
+    fn kept(&self) -> (u64, Arc<Vec<Beam>>) {
+        self.kept.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// Shows `beams` to the clients in the game now; those that are not miss them.
@@ -361,6 +385,7 @@ impl Relay {
                 problem: None,
                 index: None,
                 cued: None,
+                kept: (0, Arc::default(), None),
             }
             .run(playback, stop);
         });
@@ -388,6 +413,8 @@ struct Player<'r> {
     index: Option<Arc<Index>>,
     /// The camera the clients were last told to take, and when.
     cued: Option<(Camera, Instant)>,
+    /// The kept beams last shown: which of them, those, and when all of them were.
+    kept: (u64, Arc<Vec<Beam>>, Option<Instant>),
 }
 
 impl Player<'_> {
@@ -421,6 +448,7 @@ impl Player<'_> {
                 }
             }
             self.draw(&playback.take_beams());
+            self.show_kept(playback);
             match self.step(&want) {
                 Ok(()) => playback.set_problem(self.problem.clone()),
                 Err(e) => {
@@ -606,6 +634,35 @@ impl Player<'_> {
 }
 
 impl Player<'_> {
+    /// Shows the kept beams again when due, for [`KEPT_EVERY`]; new ones at once, until then.
+    fn show_kept(&mut self, playback: &Playback) {
+        let (version, beams) = playback.kept();
+        let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
+        let now = Instant::now();
+        let left = self.kept.2.map_or(Duration::ZERO, |at| KEPT_EVERY.saturating_sub(now.duration_since(at)));
+        let (show, life) = if left.is_zero() {
+            self.kept.2 = Some(now);
+            (beams.to_vec(), KEPT_EVERY)
+        } else if version != self.kept.0 {
+            (beams.iter().filter(|b| !self.kept.1.contains(b)).copied().collect(), left)
+        } else {
+            return;
+        };
+        self.kept.0 = version;
+        self.kept.1 = beams;
+        if show.is_empty() {
+            return;
+        }
+        let life = (life + KEPT_OVERLAP).as_secs_f32();
+        let show: Vec<Beam> = show.into_iter().map(|b| Beam { life, ..b }).collect();
+        if let Some(msgs) = c.dec.beams(&show) {
+            let mut hub = self.relay.hub();
+            for m in &msgs {
+                hub.tell_active_now(m);
+            }
+        }
+    }
+
     /// Shows `beams` to the clients in the game.
     fn draw(&self, beams: &[Beam]) {
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
@@ -725,7 +782,8 @@ mod tests {
         let beam =
             Beam { from: [1.0, 2.0, 3.0], to: [100.0, -200.0, 300.0], rgb: [255, 128, 0], life: 4.0, width: 2.0 };
         let msgs = c.dec.beams(&[beam; 40]).expect("a beam class and sprite");
-        assert_eq!(msgs.len(), 2, "32 a message");
+        assert_eq!(msgs.len(), 3, "16 a message");
+        assert!(msgs.iter().all(|m| m.nbits() / 8 < 1000), "each fits a datagram");
         let state = c.dec.parser_state_for_tests();
         let mut events = Vec::new();
         for m in &msgs {

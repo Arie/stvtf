@@ -671,6 +671,15 @@ impl Hub {
         }
     }
 
+    /// A message for the clients in the game now, unreliably: what is sent again at a pace, which
+    /// must not wait for the reliable stream.
+    fn tell_active_now(&mut self, msg: &BitBuf) {
+        let now = Instant::now();
+        for (addr, c) in self.clients.iter_mut().filter(|(_, c)| c.phase == Phase::Active) {
+            send(&self.sock, &mut self.split_group, *addr, c, Some(msg), false, now);
+        }
+    }
+
     /// A message for the clients in the game, reliably.
     fn tell_active(&mut self, msg: &BitBuf) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
