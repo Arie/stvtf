@@ -609,6 +609,8 @@ impl Player<'_> {
                     let mut since = c.dec.catch_up(tick, &recent);
                     // The round's end shown, or hidden, as at this moment.
                     since.extend(c.dec.round_event());
+                    // Its clock may have gone back: panels waiting for a time it passed redraw.
+                    since.push(super::reset_hud());
                     self.relay.hub().send_keyframe(&key, &since, c.paused);
                     self.problem = None;
                     // Those just in are told where the camera is.

@@ -66,6 +66,8 @@ const TRACE_EVERY: Duration = Duration::from_secs(5);
 
 const SVC_SERVERINFO: u8 = 8;
 const SVC_SETPAUSE: u32 = 11;
+const SVC_USERMESSAGE: u32 = 23;
+const USERMESSAGE_RESETHUD: u32 = 6;
 const SVC_CREATESTRINGTABLE: u8 = 12;
 const SVC_UPDATESTRINGTABLE: u8 = 13;
 const SVC_PACKETENTITIES: u8 = 26;
@@ -913,6 +915,19 @@ impl Hub {
     }
 }
 
+/// The user message `ResetHUD` (no. 6, a byte): a game client resets every panel of its HUD.
+/// After a full update its clock may have gone back (a jump back, playback going on after a
+/// pause), and panels that redraw when it passes a time they noted (the round timer) would stand
+/// still until it passed that again.
+pub(crate) fn reset_hud() -> BitBuf {
+    let mut w = BitWriter::new();
+    w.write_bits(SVC_USERMESSAGE, TYPE_BITS);
+    w.write_bits(USERMESSAGE_RESETHUD, 8);
+    w.write_bits(8, 11);
+    w.write_bits(0, 8);
+    w.finish()
+}
+
 /// `svc_SetPause`.
 fn set_pause(paused: bool) -> BitBuf {
     let mut w = BitWriter::new();
@@ -1456,6 +1471,20 @@ mod tests {
         assert_eq!(b.hub.clients.len(), 1);
         b.hub.service(now + CLIENT_TIMEOUT);
         assert!(b.hub.clients.is_empty());
+    }
+
+    #[test]
+    fn reset_hud_reads_as_the_games_own() {
+        use tf_demo_parser::demo::message::usermessage::UserMessage;
+        let m = reset_hud();
+        let mut s = tf_demo_parser::Stream::from(bitbuffer::BitReadBuffer::new_owned(
+            m.bytes().to_vec(),
+            bitbuffer::LittleEndian,
+        ));
+        assert_eq!(s.read_int::<u32>(TYPE_BITS).unwrap(), SVC_USERMESSAGE);
+        let u: UserMessage<'_> = s.read().unwrap();
+        assert!(matches!(u, UserMessage::ResetHUD(_)), "{u:?}");
+        assert_eq!(s.bits_left(), m.bytes().len() * 8 - m.nbits(), "nothing after it");
     }
 
     #[test]
