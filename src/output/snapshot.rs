@@ -44,7 +44,7 @@ pub struct Snapshot {
     pub points: Option<Points>,
     /// Mann vs. Machine's wave.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mvm: Option<Mvm>,
+    pub mvm: Option<Box<Mvm>>,
     /// The round timers the HUD shows.
     pub timers: Vec<Timer>,
 }

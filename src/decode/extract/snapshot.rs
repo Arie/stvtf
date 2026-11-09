@@ -56,7 +56,7 @@ impl Extractor {
             captures: (!self.ents.flags.is_empty() || self.modes.passtime())
                 .then_some(out::Score { red: red.captures, blue: blue.captures }),
             points: self.modes.points(&player_at),
-            mvm: self.modes.mvm(),
+            mvm: self.modes.mvm().map(Box::new),
             timers: self.hud_timers(),
         }
     }
