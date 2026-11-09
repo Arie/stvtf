@@ -15,6 +15,9 @@ pub(crate) const SVC_TEMPENTITIES: u32 = 27;
 const PER_MESSAGE: usize = 16;
 /// The longest a beam can last, and widest it can be, as the game sends them.
 const MAX_LIFE: f32 = 25.5;
+/// A beam's life goes in steps of this (8 bits up to 25.6 s), and one of 0 lasts forever: a life
+/// is rounded up to a whole step, one at least.
+const LIFE_STEP: f32 = 25.6 / 255.0;
 const MAX_WIDTH: f32 = 127.0;
 
 /// A straight line in the world, shown for `life` seconds.
@@ -30,6 +33,11 @@ pub struct Beam {
     pub life: f32,
     /// How wide it is, in units.
     pub width: f32,
+}
+
+/// `life` as sent: rounded up to a whole step, one at least, never forever.
+fn life(life: f32) -> f32 {
+    ((life / LIFE_STEP).ceil().max(1.0) * LIFE_STEP).min(MAX_LIFE)
 }
 
 pub(crate) const BASE: &str = "DT_BaseBeam";
@@ -52,7 +60,7 @@ impl Decoder {
                 (BASE, "m_nHaloIndex", int(0)),
                 (BASE, "m_nStartFrame", int(0)),
                 (BASE, "m_nFrameRate", int(0)),
-                (BASE, "m_fLife", SendPropValue::Float(b.life.clamp(0.0, MAX_LIFE))),
+                (BASE, "m_fLife", SendPropValue::Float(life(b.life))),
                 (BASE, "m_fWidth", SendPropValue::Float(b.width.clamp(0.0, MAX_WIDTH))),
                 (BASE, "m_fEndWidth", SendPropValue::Float(b.width.clamp(0.0, MAX_WIDTH))),
                 (BASE, "m_nFadeLength", int(0)),
@@ -92,5 +100,19 @@ impl Decoder {
                 Some(w.finish())
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_life_is_never_forever_and_never_shorter() {
+        assert!((life(0.0) - LIFE_STEP).abs() < 1e-6, "one step, not 0: forever");
+        assert!((life(0.02) - LIFE_STEP).abs() < 1e-6);
+        let two = life(2.0);
+        assert!((2.0..2.0 + LIFE_STEP).contains(&two), "{two}");
+        assert!((life(100.0) - MAX_LIFE).abs() < 1e-6);
     }
 }

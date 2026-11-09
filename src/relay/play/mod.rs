@@ -47,10 +47,9 @@ const RETRY: Duration = Duration::from_millis(200);
 const CUE_EVERY: Duration = Duration::from_secs(3);
 /// The most beams waiting to be shown: more are dropped.
 const MAX_BEAMS_QUEUED: usize = 4096;
-/// How often kept beams are shown again, and how long they show past that: a frame or so, so
-/// they neither blink out nor show twice over for long.
+/// How often kept beams are shown again; each shows until then, its life rounded up to the step
+/// it is sent in, so they overlap by under a tenth of a second.
 const KEPT_EVERY: Duration = Duration::from_secs(2);
-const KEPT_OVERLAP: Duration = Duration::from_millis(20);
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
 static OUR_CRC: std::sync::LazyLock<Option<u32>> = std::sync::LazyLock::new(|| {
@@ -646,7 +645,7 @@ impl Player<'_> {
         if show.is_empty() {
             return;
         }
-        let life = (life + KEPT_OVERLAP).as_secs_f32();
+        let life = life.as_secs_f32();
         let show: Vec<Beam> = show.into_iter().map(|b| Beam { life, ..b }).collect();
         if let Some(msgs) = c.dec.beams(&show) {
             let mut hub = self.relay.hub();
