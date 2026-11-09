@@ -626,6 +626,14 @@ impl Player<'_> {
 }
 
 impl Player<'_> {
+    /// Has the clients load the model beams are drawn with, if the match did not: once, and for
+    /// those to come too.
+    fn load_beam_model(&self, c: &Cursor) {
+        if let Some((_, Some(msg))) = c.dec.beam_model() {
+            self.relay.hub().log_once(&msg);
+        }
+    }
+
     /// Shows the kept beams again when due, for [`KEPT_EVERY`]; new ones at once, until then.
     fn show_kept(&mut self, playback: &Playback) {
         let (version, beams) = playback.kept();
@@ -647,6 +655,7 @@ impl Player<'_> {
         }
         let life = life.as_secs_f32();
         let show: Vec<Beam> = show.into_iter().map(|b| Beam { life, ..b }).collect();
+        self.load_beam_model(c);
         if let Some(msgs) = c.dec.beams(&show) {
             let mut hub = self.relay.hub();
             for m in &msgs {
@@ -661,6 +670,7 @@ impl Player<'_> {
         if beams.is_empty() {
             return;
         }
+        self.load_beam_model(c);
         match c.dec.beams(beams) {
             Some(msgs) => {
                 trace!("{} beams to the clients in", beams.len());
@@ -813,7 +823,25 @@ mod tests {
         assert_eq!(get(POINTS, "m_vecEndPoint"), SendPropValue::Vector(Vector { x: 100.0, y: -200.0, z: 300.0 }));
         assert_eq!(get(BASE, "g"), SendPropValue::Integer(128));
         assert_eq!(get(BASE, "m_nSpeed"), SendPropValue::Integer(20));
-        assert!(matches!(get(BASE, "m_nModelIndex"), SendPropValue::Integer(i) if i > 0));
+        let (model, load) = c.dec.beam_model().expect("a model to draw beams with");
+        assert_eq!(get(BASE, "m_nModelIndex"), SendPropValue::Integer(i64::from(model)));
+        // The match did not load the laser: it goes in the last slot of the models.
+        let load = load.expect("the laser loaded by the relay");
+        let mut s = tf_demo_parser::Stream::from(bitbuffer::BitReadBuffer::new_owned(
+            load.bytes().to_vec(),
+            bitbuffer::LittleEndian,
+        ));
+        assert_eq!(s.read_int::<u32>(crate::net::messages::TYPE_BITS).unwrap(), 13);
+        let msg =
+            Message::from_type(tf_demo_parser::demo::message::MessageType::UpdateStringTable, &mut s, state).unwrap();
+        let Message::UpdateStringTable(u) = msg else { panic!() };
+        let table = &state.string_tables[usize::from(u.table_id)];
+        assert_eq!(u.entries.len(), 1);
+        assert_eq!(
+            (u.entries[0].0, u.entries[0].1.text.as_deref()),
+            (table.max_entries - 1, Some("sprites/laserbeam.vmt"))
+        );
+        assert_eq!(model, table.max_entries - 1);
         let SendPropValue::Float(life) = get(BASE, "m_fLife") else { panic!() };
         assert!((life - 4.0).abs() < 0.2, "{life}");
     }

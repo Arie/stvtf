@@ -54,6 +54,8 @@ fn data_bits(d: &ExtraData<'_>) -> Vec<u8> {
 
 struct Table {
     name: String,
+    /// The most entries it has room for.
+    max: u16,
     entries: HashSet<u16>,
     /// For a kept table, its entries' values.
     values: Option<BTreeMap<u16, Value>>,
@@ -86,7 +88,7 @@ impl Tables {
                     }
                     let values = kept(&name).then(|| t.table.entries.iter().map(|(i, e)| (*i, value(e))).collect());
                     let entries = t.table.entries.iter().map(|(i, _)| *i).collect();
-                    self.by_id.push(Table { name, entries, values });
+                    self.by_id.push(Table { name, max: t.table.max_entries, entries, values });
                 }
                 Message::UpdateStringTable(u) => {
                     if self.by_id.get(usize::from(u.table_id)).is_some_and(|t| t.name == "modelprecache") {
@@ -129,6 +131,32 @@ impl Tables {
     /// The model index of a sprite to draw beams with, if one is loaded.
     pub(crate) fn beam_sprite(&self) -> Option<u16> {
         self.beam_sprite.map(|(_, i)| i)
+    }
+
+    /// The model index to draw beams with: the solid laser, loaded by the match or else by an
+    /// `svc_UpdateStringTable` (also given) putting it in `modelprecache`'s last slot, which
+    /// servers leave free; None when that slot is taken or the table unknown.
+    pub(crate) fn laser(&self, state: &ParserState) -> Option<(u16, Option<BitBuf>)> {
+        if let Some((0, index)) = self.beam_sprite {
+            return Some((index, None));
+        }
+        let (id, table) = self.by_id.iter().enumerate().find(|(_, t)| t.name == "modelprecache")?;
+        let slot = table.max.checked_sub(1)?;
+        if table.entries.contains(&slot) {
+            return None;
+        }
+        let entry = StringTableEntry { text: Some(Cow::Borrowed(BEAM_SPRITES[0])), extra_data: None };
+        let msg = UpdateStringTableMessage { entries: vec![(slot, entry)], table_id: u8::try_from(id).ok()? };
+        let mut bytes = Vec::new();
+        let nbits = {
+            let mut s = BitWriteStream::new(&mut bytes, LittleEndian);
+            msg.encode(&mut s, state).ok()?;
+            s.bit_len()
+        };
+        let mut w = BitWriter::new();
+        w.write_bits(SVC_UPDATESTRINGTABLE, TYPE_BITS);
+        w.write_buf(&BitReader::slice(&bytes, 0..nbits));
+        Some((slot, Some(w.finish())))
     }
 
     /// How many entries of `userinfo` and `instancebaseline` were rewritten so far: a client with

@@ -627,6 +627,13 @@ impl Hub {
         }
     }
 
+    /// Logs `msg` for every client, those in and those to come, unless it is already.
+    fn log_once(&mut self, msg: &BitBuf) {
+        if !self.logged_unreliable.contains(msg) {
+            self.log_tables(std::slice::from_ref(msg));
+        }
+    }
+
     /// Whether a client is ready for entities and waits for a full update.
     fn wants_keyframe(&self) -> bool {
         self.clients.values().any(|c| c.phase == Phase::WaitingFull && c.has_log(&self.log))
