@@ -33,6 +33,8 @@ pub struct Beam {
     pub life: f32,
     /// How wide it is, in units.
     pub width: f32,
+    /// How fast its texture runs along it, from `from` to `to`; 0 stands still.
+    pub speed: u8,
 }
 
 /// `life` as sent: rounded up to a whole step, one at least, never forever.
@@ -65,7 +67,7 @@ impl Decoder {
                 (BASE, "m_fEndWidth", SendPropValue::Float(b.width.clamp(0.0, MAX_WIDTH))),
                 (BASE, "m_nFadeLength", int(0)),
                 (BASE, "m_fAmplitude", SendPropValue::Float(0.0)),
-                (BASE, "m_nSpeed", int(0)),
+                (BASE, "m_nSpeed", int(i64::from(b.speed))),
                 (BASE, "r", int(r)),
                 (BASE, "g", int(g)),
                 (BASE, "b", int(bl)),

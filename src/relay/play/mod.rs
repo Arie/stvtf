@@ -775,8 +775,14 @@ mod tests {
                 Some(_) => drop(c.decode()),
             }
         }
-        let beam =
-            Beam { from: [1.0, 2.0, 3.0], to: [100.0, -200.0, 300.0], rgb: [255, 128, 0], life: 4.0, width: 2.0 };
+        let beam = Beam {
+            from: [1.0, 2.0, 3.0],
+            to: [100.0, -200.0, 300.0],
+            rgb: [255, 128, 0],
+            life: 4.0,
+            width: 2.0,
+            speed: 20,
+        };
         let msgs = c.dec.beams(&[beam; 40]).expect("a beam class and sprite");
         assert_eq!(msgs.len(), 3, "16 a message");
         assert!(msgs.iter().all(|m| m.nbits() / 8 < 1000), "each fits a datagram");
@@ -806,6 +812,7 @@ mod tests {
         };
         assert_eq!(get(POINTS, "m_vecEndPoint"), SendPropValue::Vector(Vector { x: 100.0, y: -200.0, z: 300.0 }));
         assert_eq!(get(BASE, "g"), SendPropValue::Integer(128));
+        assert_eq!(get(BASE, "m_nSpeed"), SendPropValue::Integer(20));
         assert!(matches!(get(BASE, "m_nModelIndex"), SendPropValue::Integer(i) if i > 0));
         let SendPropValue::Float(life) = get(BASE, "m_fLife") else { panic!() };
         assert!((life - 4.0).abs() < 0.2, "{life}");
