@@ -58,6 +58,7 @@ impl Extractor {
             points: self.modes.points(&player_at),
             mvm: self.modes.mvm().map(Box::new),
             timers: self.hud_timers(),
+            stopwatch: self.stopwatch(),
         }
     }
 

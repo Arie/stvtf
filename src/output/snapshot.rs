@@ -47,6 +47,9 @@ pub struct Snapshot {
     pub mvm: Option<Box<Mvm>>,
     /// The round timers the HUD shows.
     pub timers: Vec<Timer>,
+    /// Stopwatch (tournament attack/defend and payload), as its HUD panel shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopwatch: Option<Stopwatch>,
 }
 
 /// A player in a snapshot.
@@ -417,4 +420,34 @@ pub struct Timer {
     pub paused: bool,
     /// The setup timer.
     pub setup: bool,
+}
+
+/// Stopwatch: the first half's attackers set a time (and points), the second half's must beat it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Stopwatch {
+    /// The team attacking this half.
+    pub attackers: Team,
+    /// The first half: the attackers are setting the time.
+    pub setting: bool,
+    /// What the HUD shows.
+    pub state: StopwatchState,
+    /// Seconds: the time set, as of the last capture (first half), or left to beat it (second).
+    pub time: f64,
+    /// The time stands still (always while setting it: it moves at captures).
+    pub paused: bool,
+    /// Points: captured so far (first half), still to capture to beat the time (second), or to win
+    /// in overtime.
+    pub points: i64,
+}
+
+/// The stopwatch's state (TF2's `m_nStopWatchState`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StopwatchState {
+    /// No time set yet: no point captured.
+    Unset,
+    /// A time set (or being beaten): the time and points.
+    Running,
+    /// The second half's time ran out: points decide.
+    Overtime,
 }

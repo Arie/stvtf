@@ -51,6 +51,8 @@ pub(super) struct TeamScore {
     pub(super) score: i64,
     /// Flags captured this round, the score of a CTF round.
     pub(super) captures: i64,
+    /// `m_iRole`: none, defenders, attackers.
+    pub(super) role: i64,
 }
 
 /// Where a player was and where they looked.
@@ -118,6 +120,15 @@ pub(super) struct TrainWatcher {
     pub(super) speed: i64,
 }
 
+/// Stopwatch, from the game rules (`m_bStopWatch`, `m_nStopWatchState`) and the objective
+/// resource (`m_iStopWatchTimer`, its timer's entity).
+#[derive(Default)]
+pub(super) struct StopwatchRules {
+    pub(super) on: bool,
+    pub(super) state: i64,
+    pub(super) timer: Option<u32>,
+}
+
 // Mirrors the timer entity's netprops.
 #[derive(Default, Clone)]
 #[expect(clippy::struct_excessive_bools)]
@@ -129,12 +140,24 @@ pub(super) struct RoundTimer {
     pub(super) show: bool,
     pub(super) disabled: bool,
     pub(super) setup: bool,
+    /// The stopwatch's own timer, and whether it is timing captures (the first half), its total
+    /// the time of the last one.
+    pub(super) stopwatch: bool,
+    pub(super) watching_caps: bool,
+    pub(super) total: f32,
 }
 
 impl RoundTimer {
     /// Seconds left at a server tick; the end time is in server time (tick * interval).
+    /// Like TF2's `GetTimeRemaining`, a stopwatch timing captures has its total instead.
     pub(super) fn remaining_at(&self, tick: u32, interval: f32) -> f32 {
-        if self.paused { self.remaining } else { (self.end_time - tick as f32 * interval).max(0.0) }
+        if self.stopwatch && self.watching_caps {
+            self.total.max(0.0)
+        } else if self.paused {
+            self.remaining
+        } else {
+            (self.end_time - tick as f32 * interval).max(0.0)
+        }
     }
 }
 

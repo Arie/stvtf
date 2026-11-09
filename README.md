@@ -186,6 +186,13 @@ outside the playable area, so fit an overview image to per-map coordinates inste
   `{"name" (the icon: "scout", "soldier_barrage", "sentry_buster", "tank", …), "count" (left),
   "active" (on the field), "giant", "crit", "support" (not counted towards the wave), "mission"
   (sentry busters, spies, engineers)}`.
+- Stopwatch (tournament attack/defend and payload with `mp_tournament_stopwatch`) adds
+  `stopwatch`, as TF2's stopwatch panel shows it: `{"attackers" (team), "setting" (the first half:
+  the attackers set the time), "state", "time", "paused", "points"}`. `state` is `unset` (no
+  point captured yet), `running` or `overtime` (the second half's time ran out). While setting,
+  `time` is the time of the last capture and `points` those captured; then `time` counts down
+  to beat it, unless `paused`, with `points` still to capture to beat it, and in overtime the
+  points to win with. Absent outside stopwatch, before the match and once it is decided.
 - `cap_progress` runs 0 → 1 while `capping_team` caps, else 0. The server sends it every few
   seconds; like the HUD, the tool extrapolates it in between. `cap_rate` is progress per second.
   `on_point` counts the players of each team standing on the point.

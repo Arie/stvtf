@@ -30,13 +30,15 @@ mod entities;
 mod events;
 mod snapshot;
 mod state;
+mod stopwatch;
 #[cfg(test)]
 mod tests;
 
 pub(super) use convert::{building_kind, opt_user, strip_colors, team_num, xyz};
 use convert::{medigun_kind, player_id, projectile_kind, resist, uber_charge};
 use state::{
-    Charge, ControlPoint, Flag, Flamethrower, Medigun, Pose, RoundTimer, Sentry, Stats, TeamScore, TrainWatcher, Weapon,
+    Charge, ControlPoint, Flag, Flamethrower, Medigun, Pose, RoundTimer, Sentry, Stats, StopwatchRules, TeamScore,
+    TrainWatcher, Weapon,
 };
 
 /// `CTFObjectiveResource` has room for this many control points, and its per team arrays for
@@ -137,6 +139,7 @@ pub(crate) struct Extractor {
     tick_interval: Option<f32>,
     /// King of the hill: each team's own timer, which runs while that team holds the point.
     koth_timers: [Option<u32>; 2],
+    stopwatch: StopwatchRules,
     round_state: Round,
     /// Server time the match started (`m_flMapResetTime`) and the current round went live.
     match_start: f32,

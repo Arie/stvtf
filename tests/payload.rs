@@ -9,7 +9,7 @@ mod common;
 use common::{dist, of};
 use std::sync::LazyLock;
 use stvtf::Line;
-use stvtf::output::{Objective, Position, Round, Snapshot, Team};
+use stvtf::output::{Objective, Position, Round, Snapshot, StopwatchState, Team};
 
 static EVENTS: LazyLock<Vec<Line>> = LazyLock::new(|| common::demo("pl_upward.dem", 20.0));
 
@@ -108,5 +108,23 @@ fn setup_timer_runs_out_before_the_push() {
     for s in during {
         assert!(s.timers.iter().any(|t| t.setup), "tick {}", s.tick);
         assert_eq!(cart(s).unwrap().progress, 0.0, "the cart cannot move during setup");
+    }
+}
+
+#[test]
+fn stopwatch_time_is_set_at_the_first_capture() {
+    let cap = of!(EVENTS, PointCaptured).next().unwrap().tick;
+    let setup_end = of!(EVENTS, SetupFinished).next().unwrap().tick;
+    for s in snapshots().filter(|s| s.tick > setup_end + 10) {
+        let sw = s.stopwatch.as_ref().unwrap_or_else(|| panic!("no stopwatch at tick {}", s.tick));
+        assert_eq!((sw.attackers, sw.setting, sw.paused), (Team::Blue, true, true), "tick {}", s.tick);
+        if s.tick + 10 < cap {
+            assert_eq!((sw.state, sw.time), (StopwatchState::Unset, 0.0), "tick {}", s.tick);
+        } else if s.tick > cap + 66 {
+            // The team's score, the points, comes a moment after the capture.
+            assert_eq!((sw.state, sw.points), (StopwatchState::Running, 1), "tick {}", s.tick);
+            let push = f64::from(cap - setup_end) * 0.015;
+            assert!((sw.time - push).abs() < 1.0, "time set {} for a push of {push}", sw.time);
+        }
     }
 }

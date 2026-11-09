@@ -39,6 +39,12 @@ const PROP_TIMER_PAUSED: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bT
 const PROP_TIMER_SHOW_IN_HUD: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bShowInHUD");
 const PROP_TIMER_DISABLED: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bIsDisabled");
 const PROP_TIMER_STATE: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_nState");
+const PROP_TIMER_STOPWATCH: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bStopWatchTimer");
+const PROP_TIMER_WATCHING_CAPS: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_bInCaptureWatchState");
+const PROP_TIMER_TOTAL: SendPropIdentifier = prop_id("DT_TeamRoundTimer", "m_flTotalTime");
+const PROP_TEAM_ROLE: SendPropIdentifier = prop_id("DT_TFTeam", "m_iRole");
+const PROP_STOPWATCH: SendPropIdentifier = prop_id("DT_TeamplayRoundBasedRules", "m_bStopWatch");
+const PROP_STOPWATCH_STATE: SendPropIdentifier = prop_id("DT_TFGameRules", "m_nStopWatchState");
 const PROP_SENTRY_POSE_PITCH: SendPropIdentifier = prop_id("m_flPoseParameter", "000");
 const PROP_SENTRY_POSE_YAW: SendPropIdentifier = prop_id("m_flPoseParameter", "001");
 const PROP_SENTRY_ENEMY: SendPropIdentifier = prop_id("DT_ObjectSentrygun", "m_hEnemy");
@@ -92,6 +98,10 @@ impl Extractor {
                     }
                 }
             }
+            return;
+        }
+        if name.as_str() == "m_iStopWatchTimer" {
+            self.stopwatch.timer = u32::try_from(as_int(&p.value)).ok().filter(|i| *i != 0);
             return;
         }
         if name.as_str() == "m_iNumControlPoints" {
@@ -436,6 +446,7 @@ impl Extractor {
                 PROP_TEAM_NUM | PROP_TEAM_TEAM_NUM => t.team = team_byte(as_int(&p.value)),
                 PROP_TEAM_SCORE => t.score = as_int(&p.value),
                 PROP_FLAG_CAPTURES => t.captures = as_int(&p.value),
+                PROP_TEAM_ROLE => t.role = as_int(&p.value),
                 _ => {}
             }
         }
@@ -453,6 +464,9 @@ impl Extractor {
                 PROP_TIMER_SHOW_IN_HUD => t.show = f != 0.0,
                 PROP_TIMER_DISABLED => t.disabled = f != 0.0,
                 PROP_TIMER_STATE => t.setup = f == 0.0,
+                PROP_TIMER_STOPWATCH => t.stopwatch = f != 0.0,
+                PROP_TIMER_WATCHING_CAPS => t.watching_caps = f != 0.0,
+                PROP_TIMER_TOTAL => t.total = f,
                 _ => {}
             }
         }
@@ -537,6 +551,8 @@ impl Extractor {
                 PROP_BLUE_KOTH_TIMER => self.koth_timers[BLUE_SLOT] = opt_handle(as_int(&p.value)),
                 PROP_MAP_RESET_TIME => self.match_start = as_float(&p.value),
                 PROP_STATE_TRANSITION_TIME => self.state_transition = as_float(&p.value),
+                PROP_STOPWATCH => self.stopwatch.on = as_int(&p.value) != 0,
+                PROP_STOPWATCH_STATE => self.stopwatch.state = as_int(&p.value),
                 _ => {}
             }
         }
