@@ -119,8 +119,6 @@ pub(crate) struct World {
     /// Whether the stream's full update set baselines (as a server's to a viewer does): a
     /// keyframe does the same, so the client keeps the baselines the stream's frames expect.
     full_sets_baselines: bool,
-    /// The frame the latest one built on, if it was a delta: a client that has the latest has it.
-    latest_base: Option<u32>,
 }
 
 impl World {
@@ -194,7 +192,6 @@ impl World {
         } else {
             self.frames.clear();
         }
-        self.latest_base = pe.delta.map(u32::from);
         self.frames.push_back((tick, frame));
         if self.frames.len() > MAX_FRAMES {
             self.frames.pop_front();
@@ -243,7 +240,11 @@ impl World {
     /// not kept, or not given), as one message stream: the frame the next delta builds on, so a
     /// client that starts from it can follow. None when they cannot be trusted (see `broken`) or do
     /// not encode.
-    pub(crate) fn full_update(&self, state: &ParserState, at: Option<u32>) -> Option<(u32, BitBuf)> {
+    ///
+    /// With `hold` (the seconds a tick lasts), every running round timer is held where it is at that
+    /// frame: a client whose clock runs on with no frames coming (a room paused) shows the time as
+    /// it was, until a full update without.
+    pub(crate) fn full_update(&self, state: &ParserState, at: Option<u32>, hold: Option<f32>) -> Option<(u32, BitBuf)> {
         if self.broken || !self.seen_full {
             return None;
         }
@@ -253,7 +254,13 @@ impl World {
             .map(|(t, f)| (*t, f))?;
         let mut entities = Vec::new();
         for (index, e) in frame.iter() {
-            entities.push(enter(state, index, e)?);
+            let mut entering = enter(state, index, e)?;
+            if let Some(held) = hold.and_then(|interval| timer_held(state, e, tick as f32 * interval)) {
+                entering.props.retain(|p| !held.iter().any(|q| q.index == p.index));
+                entering.props.extend(held);
+                entering.props.sort_by_key(|p| p.index);
+            }
+            entities.push(entering);
         }
         let msg = PacketEntitiesMessage {
             entities,
@@ -264,48 +271,6 @@ impl World {
             updated_base_line: self.full_sets_baselines,
         };
         Some((tick, encode(state, &msg, tick)?))
-    }
-
-    /// The latest frame again, as a delta from the one it built on, with every running round timer
-    /// held where it is (ticking every `interval` seconds): a client whose clock runs on with no
-    /// frames coming (a room paused) shows the time as it was. None when no timer runs, the latest
-    /// frame is not a delta, or it does not encode.
-    pub(crate) fn timers_held(&self, state: &ParserState, interval: f32) -> Option<BitBuf> {
-        let from = self.latest_base?;
-        let (tick, frame) = self.frames.back().map(|(t, f)| (*t, f))?;
-        let mut entities = self.delta_entities(state, from, tick)?;
-        let now = tick as f32 * interval;
-        let mut held = 0;
-        for (index, e) in frame.iter() {
-            let Some(props) = timer_held(state, e, now) else { continue };
-            held += 1;
-            let entry = entities.entry(index).or_insert_with(|| PacketEntity {
-                server_class: e.class,
-                entity_index: index.into(),
-                props: Vec::new(),
-                in_pvs: true,
-                update_type: UpdateType::Delta,
-                serial_number: e.serial,
-                delay: None,
-                delta: Some(from.into()),
-                baseline_index: BaselineIndex::First,
-            });
-            entry.props.retain(|p| !props.iter().any(|q| q.index == p.index));
-            entry.props.extend(props);
-            entry.props.sort_by_key(|p| p.index);
-        }
-        if held == 0 {
-            return None;
-        }
-        let msg = PacketEntitiesMessage {
-            entities: entities.into_values().collect(),
-            removed_entities: Vec::new(),
-            max_entries: self.max_entries,
-            delta: Some(from.into()),
-            base_line: BaselineIndex::First,
-            updated_base_line: false,
-        };
-        encode(state, &msg, tick)
     }
 
     /// `net_Tick(to)` and the entities of frame `to` as a delta from frame `from`, both kept: a

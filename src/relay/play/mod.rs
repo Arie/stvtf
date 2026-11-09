@@ -547,15 +547,9 @@ impl Player<'_> {
             let demo_paused = self.cur.as_ref().is_some_and(|c| c.paused);
             let mut hub = self.relay.hub();
             hub.set_paused(demo_paused);
-            if want.paused {
-                let held = self.cur.as_ref().filter(|c| c.started).and_then(|c| c.dec.timers_held());
-                if let Some(held) = held {
-                    hub.tell_active(&held);
-                }
-            } else {
-                // The timers as they are, and anything else a client's own clock moved on.
-                hub.all_want_keyframe(Instant::now());
-            }
+            // A full update with the round timers held, or as they are going on: one that needs no
+            // frame a client may lack (one just in has only its own full update).
+            hub.all_want_keyframe(Instant::now());
         }
         let Some(c) = &mut self.cur else { return Ok(()) };
         if c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target) {
@@ -583,14 +577,13 @@ impl Player<'_> {
                 _ => None,
             };
             if next.is_some() || c.ended {
-                if let Some((tick, key)) = c.dec.keyframe(next.as_deref()) {
+                let key =
+                    if self.paused { c.dec.keyframe_held(next.as_deref()) } else { c.dec.keyframe(next.as_deref()) };
+                if let Some((tick, key)) = key {
                     let recent: Vec<(u32, BitBuf)> = c.recent.iter().cloned().collect();
                     let mut since = c.dec.catch_up(tick, &recent);
                     // The round's end shown, or hidden, as at this moment.
                     since.extend(c.dec.round_event());
-                    if self.paused {
-                        since.extend(c.dec.timers_held());
-                    }
                     self.relay.hub().send_keyframe(&key, &since, c.paused);
                     self.problem = None;
                     // Those just in are told where the camera is.
@@ -742,7 +735,7 @@ mod tests {
     use tf_demo_parser::demo::message::Message;
 
     #[test]
-    fn the_round_timer_held_reads_as_paused_where_it_was() {
+    fn a_full_update_with_the_round_timer_held_reads_as_paused_where_it_was() {
         let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
         let mut c = Cursor::open_with(&path, None).unwrap();
         // Twenty seconds in, with the round's timer on the HUD.
@@ -755,7 +748,11 @@ mod tests {
         }
         let running = c.dec.extractor().snapshot().timers;
         assert!(!running.is_empty() && running.iter().all(|t| !t.paused), "{running:?}");
-        let held = c.dec.timers_held().expect("a timer to hold");
+        let next = match c.peek() {
+            Some(Packet::Message { data, .. }) => Some(data.clone()),
+            _ => None,
+        };
+        let (_, held) = c.dec.keyframe_held(next.as_deref()).expect("a full update");
         c.dec.feed(held.bytes(), held.nbits());
         let timers = c.dec.extractor().snapshot().timers;
         assert_eq!(timers.len(), running.len());

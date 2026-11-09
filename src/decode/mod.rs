@@ -172,7 +172,14 @@ impl Decoder {
     /// [`Decoder::keep_world`], before a full update came, or after a frame may have been missed.
     pub(crate) fn keyframe(&self, next: Option<&[u8]>) -> Option<(u32, crate::net::bits::BitBuf)> {
         let base = next.and_then(|d| self.delta_base(d));
-        self.world.as_ref()?.full_update(self.handler.get_parser_state(), base)
+        self.world.as_ref()?.full_update(self.handler.get_parser_state(), base, None)
+    }
+
+    /// [`Decoder::keyframe`] with every running round timer held where it is, for clients whose
+    /// clock runs on while no frames come (a room paused).
+    pub(crate) fn keyframe_held(&self, next: Option<&[u8]>) -> Option<(u32, crate::net::bits::BitBuf)> {
+        let base = next.and_then(|d| self.delta_base(d));
+        self.world.as_ref()?.full_update(self.handler.get_parser_state(), base, Some(self.tick_interval()))
     }
 
     /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
@@ -425,12 +432,6 @@ impl Decoder {
     /// Sets the last round event, for a decoder that starts from a checkpoint.
     pub(crate) fn set_round_event(&mut self, event: Option<crate::net::bits::BitBuf>) {
         self.round = event;
-    }
-
-    /// The round timers held where they are now, for clients whose clock runs on while no frames
-    /// come (see [`world::World::timers_held`]).
-    pub(crate) fn timers_held(&self) -> Option<crate::net::bits::BitBuf> {
-        self.world.as_ref()?.timers_held(self.handler.get_parser_state(), self.tick_interval())
     }
 
     /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
