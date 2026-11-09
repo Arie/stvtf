@@ -59,7 +59,7 @@ macro_rules! trace {
 }
 
 mod play;
-pub use play::{Camera, Playback, Want};
+pub use play::{Beam, Camera, Playback, Want};
 
 /// How often the trace sums up what each client was sent.
 const TRACE_EVERY: Duration = Duration::from_secs(5);

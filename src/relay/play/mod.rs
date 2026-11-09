@@ -15,6 +15,7 @@
 mod index;
 
 use super::{Hub, Relay};
+pub use crate::decode::beams::Beam;
 use crate::decode::{Decoder, Lifecycle, Tables};
 use crate::demo::{self, Next, Packet};
 use crate::net::bits::BitBuf;
@@ -43,6 +44,8 @@ const RECENT: usize = 128;
 const RETRY: Duration = Duration::from_millis(200);
 /// How often the camera cue is repeated, for clients that looked away.
 const CUE_EVERY: Duration = Duration::from_secs(3);
+/// The most beams waiting to be shown: more are dropped.
+const MAX_BEAMS_QUEUED: usize = 4096;
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
 static OUR_CRC: std::sync::LazyLock<Option<u32>> = std::sync::LazyLock::new(|| {
@@ -96,12 +99,26 @@ pub struct Playback {
     want: Mutex<Want>,
     /// Why the demo wanted cannot be played, if it cannot.
     problem: Mutex<Option<String>>,
+    /// Beams to show the clients in the game, once.
+    beams: Mutex<Vec<Beam>>,
 }
 
 impl Playback {
     /// Playback that starts out wanting `want`.
     pub fn new(want: Want) -> Self {
-        Playback { want: Mutex::new(want), problem: Mutex::new(None) }
+        Playback { want: Mutex::new(want), problem: Mutex::new(None), beams: Mutex::new(Vec::new()) }
+    }
+
+    /// Shows `beams` to the clients in the game now; those that are not miss them.
+    pub fn draw(&self, beams: &[Beam]) {
+        let mut queued = self.beams.lock().unwrap_or_else(PoisonError::into_inner);
+        if queued.len() + beams.len() <= MAX_BEAMS_QUEUED {
+            queued.extend_from_slice(beams);
+        }
+    }
+
+    fn take_beams(&self) -> Vec<Beam> {
+        std::mem::take(&mut *self.beams.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// Where playback should be from now on.
@@ -402,6 +419,7 @@ impl Player<'_> {
                     }
                 }
             }
+            self.draw(&playback.take_beams());
             match self.step(&want) {
                 Ok(()) => playback.set_problem(self.problem.clone()),
                 Err(e) => {
@@ -576,6 +594,23 @@ impl Player<'_> {
 }
 
 impl Player<'_> {
+    /// Shows `beams` to the clients in the game.
+    fn draw(&self, beams: &[Beam]) {
+        let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
+        if beams.is_empty() {
+            return;
+        }
+        match c.dec.beams(beams) {
+            Some(msgs) => {
+                let mut hub = self.relay.hub();
+                for m in &msgs {
+                    hub.tell_active(m);
+                }
+            }
+            None => trace!("{} beams not drawn: no beam class or sprite in the demo", beams.len()),
+        }
+    }
+
     /// Tells the clients in the game to take `camera`, when it changed and every [`CUE_EVERY`].
     fn cue(&mut self, camera: Option<Camera>) {
         let Some(camera) = camera else {
@@ -635,6 +670,55 @@ mod tests {
     use super::*;
     use tf_demo_parser::demo::gameevent_gen::GameEvent;
     use tf_demo_parser::demo::message::Message;
+
+    #[test]
+    fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
+        use crate::decode::beams::{BASE, POINTS, SVC_TEMPENTITIES};
+        use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
+        use tf_demo_parser::demo::vector::Vector;
+        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
+        let mut c = Cursor::open_with(&path, None).unwrap();
+        while !c.started {
+            match c.next_tick() {
+                None => panic!("the demo ended"),
+                Some(i64::MIN) => c.next = None,
+                Some(_) => drop(c.decode()),
+            }
+        }
+        let beam =
+            Beam { from: [1.0, 2.0, 3.0], to: [100.0, -200.0, 300.0], rgb: [255, 128, 0], life: 4.0, width: 2.0 };
+        let msgs = c.dec.beams(&[beam; 40]).expect("a beam class and sprite");
+        assert_eq!(msgs.len(), 2, "32 a message");
+        let state = c.dec.parser_state_for_tests();
+        let mut events = Vec::new();
+        for m in &msgs {
+            let mut s = tf_demo_parser::Stream::from(bitbuffer::BitReadBuffer::new_owned(
+                m.bytes().to_vec(),
+                bitbuffer::LittleEndian,
+            ));
+            assert_eq!(s.read_int::<u32>(crate::net::messages::TYPE_BITS).unwrap(), SVC_TEMPENTITIES);
+            let Message::TempEntities(te) =
+                Message::from_type(tf_demo_parser::demo::message::MessageType::TempEntities, &mut s, state).unwrap()
+            else {
+                panic!()
+            };
+            events.extend(te.events);
+        }
+        assert_eq!(events.len(), 40);
+        let get = |t: &str, n: &str| {
+            events[39]
+                .props
+                .iter()
+                .find(|p| p.identifier == SendPropIdentifier::new(t, n))
+                .map(|p| p.value.clone())
+                .unwrap()
+        };
+        assert_eq!(get(POINTS, "m_vecEndPoint"), SendPropValue::Vector(Vector { x: 100.0, y: -200.0, z: 300.0 }));
+        assert_eq!(get(BASE, "g"), SendPropValue::Integer(128));
+        assert!(matches!(get(BASE, "m_nModelIndex"), SendPropValue::Integer(i) if i > 0));
+        let SendPropValue::Float(life) = get(BASE, "m_fLife") else { panic!() };
+        assert!((life - 4.0).abs() < 0.2, "{life}");
+    }
 
     #[test]
     fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {

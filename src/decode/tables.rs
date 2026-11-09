@@ -59,12 +59,17 @@ struct Table {
     values: Option<BTreeMap<u16, Value>>,
 }
 
+/// Sprites a beam can be drawn with, best first, as `modelprecache` names them.
+const BEAM_SPRITES: [&str; 3] = ["sprites/laserbeam.vmt", "sprites/physbeam.vmt", "sprites/laser.vmt"];
+
 #[derive(Default)]
 pub(crate) struct Tables {
     /// By table id.
-    tables: Vec<Table>,
+    by_id: Vec<Table>,
     /// How many updates rewrote an entry of a kept table.
     rewritten: u32,
+    /// The best of [`BEAM_SPRITES`] loaded: its rank there and its model index.
+    beam_sprite: Option<(usize, u16)>,
 }
 
 impl Tables {
@@ -74,12 +79,24 @@ impl Tables {
             match msg {
                 Message::CreateStringTable(t) => {
                     let name = t.table.name.to_string();
+                    if name == "modelprecache" {
+                        for (i, e) in &t.table.entries {
+                            self.note_model(*i, e.text.as_deref());
+                        }
+                    }
                     let values = kept(&name).then(|| t.table.entries.iter().map(|(i, e)| (*i, value(e))).collect());
                     let entries = t.table.entries.iter().map(|(i, _)| *i).collect();
-                    self.tables.push(Table { name, entries, values });
+                    self.by_id.push(Table { name, entries, values });
                 }
                 Message::UpdateStringTable(u) => {
-                    let Some(table) = self.tables.get_mut(usize::from(u.table_id)) else { continue };
+                    if self.by_id.get(usize::from(u.table_id)).is_some_and(|t| t.name == "modelprecache") {
+                        let models: Vec<(u16, Option<&str>)> =
+                            u.entries.iter().map(|(i, e)| (*i, e.text.as_deref())).collect();
+                        for (i, text) in models {
+                            self.note_model(i, text);
+                        }
+                    }
+                    let Some(table) = self.by_id.get_mut(usize::from(u.table_id)) else { continue };
                     for (i, e) in &u.entries {
                         let fresh = table.entries.insert(*i);
                         let Some(values) = &mut table.values else { continue };
@@ -102,6 +119,18 @@ impl Tables {
         }
     }
 
+    fn note_model(&mut self, index: u16, name: Option<&str>) {
+        let Some(rank) = name.and_then(|n| BEAM_SPRITES.iter().position(|s| n.eq_ignore_ascii_case(s))) else { return };
+        if self.beam_sprite.is_none_or(|(r, _)| rank < r) {
+            self.beam_sprite = Some((rank, index));
+        }
+    }
+
+    /// The model index of a sprite to draw beams with, if one is loaded.
+    pub(crate) fn beam_sprite(&self) -> Option<u16> {
+        self.beam_sprite.map(|(_, i)| i)
+    }
+
     /// How many entries of `userinfo` and `instancebaseline` were rewritten so far: a client with
     /// the tables of a later moment has the wrong ones for this only if the count grew since.
     pub(crate) fn rewritten(&self) -> u32 {
@@ -113,7 +142,7 @@ impl Tables {
     /// class not used yet. None if one does not encode, or the tables are not the same ones.
     pub(crate) fn set_back(&self, later: &Tables, state: &ParserState) -> Option<Vec<BitBuf>> {
         let mut out = Vec::new();
-        for (id, (ours, theirs)) in self.tables.iter().zip(&later.tables).enumerate() {
+        for (id, (ours, theirs)) in self.by_id.iter().zip(&later.by_id).enumerate() {
             if ours.name != theirs.name {
                 return None;
             }
@@ -185,7 +214,7 @@ mod tests {
     }
 
     fn value_of(t: &Tables, i: u16) -> Option<Vec<u8>> {
-        t.tables[0].values.as_ref()?.get(&i)?.data.as_ref().map(|d| d.1.clone())
+        t.by_id[0].values.as_ref()?.get(&i)?.data.as_ref().map(|d| d.1.clone())
     }
 
     #[test]

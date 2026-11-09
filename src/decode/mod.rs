@@ -6,6 +6,7 @@
 //! message stream is then wrapped as a demo `Message` packet and handed to the
 //! same `DemoHandler` a demo file would use.
 
+pub(crate) mod beams;
 mod crc;
 mod detail;
 mod extract;
