@@ -23,6 +23,7 @@ use crate::net::bits::BitBuf;
 use crate::output::Line;
 use anyhow::{Context, Result, bail};
 use index::Index;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -50,6 +51,26 @@ const MAX_BEAMS_QUEUED: usize = 4096;
 /// How often kept beams are shown again; each shows until then, its life rounded up to the step
 /// it is sent in, so they overlap by under a tenth of a second.
 const KEPT_EVERY: Duration = Duration::from_secs(2);
+/// Kept beams sent a second at most, and at once: well within what a client takes besides the
+/// frames (a burst of hundreds of datagrams loses some, frames among them).
+const KEPT_RATE: f64 = 800.0;
+const KEPT_BURST: f64 = 48.0;
+
+/// The kept beams shown: which of them were last handed over, when each was last sent, and
+/// how many may be sent now (refilled at [`KEPT_RATE`]).
+struct Kept {
+    version: u64,
+    sent: HashMap<BeamKey, Instant>,
+    tokens: f64,
+    refilled: Instant,
+}
+
+/// A beam as shown, but for how long.
+type BeamKey = ([u32; 3], [u32; 3], [u8; 3], u32, u8);
+
+fn beam_key(b: &Beam) -> BeamKey {
+    (b.from.map(f32::to_bits), b.to.map(f32::to_bits), b.rgb, b.width.to_bits(), b.speed)
+}
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
 static OUR_CRC: std::sync::LazyLock<Option<u32>> = std::sync::LazyLock::new(|| {
@@ -384,7 +405,7 @@ impl Relay {
                 problem: None,
                 index: None,
                 cued: None,
-                kept: (0, Arc::default(), None),
+                kept: Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: Instant::now() },
                 laser: None,
             }
             .run(playback, stop);
@@ -413,8 +434,8 @@ struct Player<'r> {
     index: Option<Arc<Index>>,
     /// The camera the clients were last told to take, and when.
     cued: Option<(Camera, Instant)>,
-    /// The kept beams last shown: which of them, those, and when all of them were.
-    kept: (u64, Arc<Vec<Beam>>, Option<Instant>),
+    /// The kept beams shown: when each last was, and what may be sent now.
+    kept: Kept,
     /// Where the clients were given the laser beams are drawn with, if they were.
     laser: Option<u16>,
 }
@@ -643,29 +664,42 @@ impl Player<'_> {
         c.dec.beams(beams, model)
     }
 
-    /// Shows the kept beams again when due, for [`KEPT_EVERY`]; new ones at once, until then.
+    /// Shows each kept beam again as it runs out, for [`KEPT_EVERY`], new ones at once: at most
+    /// [`KEPT_RATE`] a second, in bursts of [`KEPT_BURST`], so they never crowd out the frames
+    /// (a client that misses one cannot follow the next).
     fn show_kept(&mut self, playback: &Playback) {
         let (version, beams) = playback.kept();
         if self.cur.as_ref().is_none_or(|c| !c.started) {
             return;
         }
         let now = Instant::now();
-        let left = self.kept.2.map_or(Duration::ZERO, |at| KEPT_EVERY.saturating_sub(now.duration_since(at)));
-        let (show, life) = if left.is_zero() {
-            self.kept.2 = Some(now);
-            (beams.to_vec(), KEPT_EVERY)
-        } else if version != self.kept.0 {
-            (beams.iter().filter(|b| !self.kept.1.contains(b)).copied().collect(), left)
-        } else {
-            return;
-        };
-        self.kept.0 = version;
-        self.kept.1 = beams;
-        if show.is_empty() {
+        let k = &mut self.kept;
+        if version != k.version {
+            let keys: HashSet<BeamKey> = beams.iter().map(beam_key).collect();
+            k.sent.retain(|key, _| keys.contains(key));
+            k.version = version;
+        }
+        k.tokens = (k.tokens + now.duration_since(k.refilled).as_secs_f64() * KEPT_RATE).min(KEPT_BURST);
+        k.refilled = now;
+        // Those about to run out first, then those never shown.
+        let mut due: Vec<(bool, &Beam)> = beams
+            .iter()
+            .filter_map(|b| match k.sent.get(&beam_key(b)) {
+                Some(at) if now.duration_since(*at) < KEPT_EVERY => None,
+                at => Some((at.is_none(), b)),
+            })
+            .collect();
+        due.sort_by_key(|(new, _)| *new);
+        let n = due.len().min(k.tokens as usize);
+        if n == 0 {
             return;
         }
-        let life = life.as_secs_f32();
-        let show: Vec<Beam> = show.into_iter().map(|b| Beam { life, ..b }).collect();
+        k.tokens -= n as f64;
+        let life = KEPT_EVERY.as_secs_f32();
+        let show: Vec<Beam> = due[..n].iter().map(|(_, b)| Beam { life, ..**b }).collect();
+        for b in &show {
+            k.sent.insert(beam_key(b), now);
+        }
         if let Some(msgs) = self.beam_messages(&show) {
             let mut hub = self.relay.hub();
             for m in &msgs {
