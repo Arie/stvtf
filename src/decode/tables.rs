@@ -107,9 +107,8 @@ impl Tables {
                         if let Some(t) = &e.text {
                             v.text = Some(t.to_string());
                         }
-                        if let Some(d) = &e.extra_data {
-                            v.data = Some((d.to_owned(), data_bits(d)));
-                        }
+                        // No data clears it, as a game client does (a player who left, in `userinfo`).
+                        v.data = e.extra_data.as_ref().map(|d| (d.to_owned(), data_bits(d)));
                         // Sent again as it was is no change.
                         if !fresh && !v.same(&was) {
                             self.rewritten += 1;
@@ -277,5 +276,26 @@ mod tests {
         assert_eq!(value_of(&later, 1), value_of(&earlier, 1), "bob again");
         assert_eq!(value_of(&later, 0), value_of(&earlier, 0));
         assert!(value_of(&later, 2).is_some(), "a slot used only later stays");
+    }
+
+    #[test]
+    fn a_player_who_left_is_set_back_too() {
+        let mut state = ParserState::new(24, |_| true, false);
+        state.string_tables.push(StringTableMeta { max_entries: 256, fixed_userdata_size: None });
+        let created = userinfo(vec![(0, entry("0", b"alice"))]);
+        // Later, alice left: her slot's data cleared.
+        let left = update(vec![(0, StringTableEntry { text: None, extra_data: None })]);
+        let mut earlier = Tables::default();
+        earlier.note(std::slice::from_ref(&created));
+        let mut later = Tables::default();
+        later.note(&[created, left]);
+        assert_eq!(later.rewritten(), 1, "a clearing is a change");
+        assert_eq!(value_of(&later, 0), None);
+        let back = earlier.set_back(&later, &state).unwrap();
+        let mut s = BitReadStream::new(BitReadBuffer::new(back[0].bytes(), LittleEndian));
+        let t = MessageType::read(&mut s).unwrap();
+        let msg = Message::from_type(t, &mut s, &state).unwrap();
+        later.note(&[msg]);
+        assert_eq!(value_of(&later, 0), value_of(&earlier, 0), "alice again");
     }
 }
