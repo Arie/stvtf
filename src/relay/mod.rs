@@ -771,11 +771,10 @@ fn table_changes<'a>(bits: &'a BitBuf, life: &'a Lifecycle) -> impl Iterator<Ite
     life.spans.iter().filter(|s| is_table_change(s.id)).map(|s| BitReader::slice(bits.bytes(), s.bits.clone()))
 }
 
-/// The user message `ResetHUD` (no. 6, a byte): a game client resets every panel of its HUD.
-/// After a full update its clock may have gone back (a jump back, playback going on after a
-/// pause), and panels that redraw when it passes a time they noted (the round timer) would stand
-/// still until it passed that again.
-pub(crate) fn reset_hud() -> BitBuf {
+/// The user message `ResetHUD` (no. 6, a byte), as a match's own: a game client resets every panel
+/// of its HUD.
+#[cfg(test)]
+fn reset_hud() -> BitBuf {
     let mut w = BitWriter::new();
     w.write_bits(SVC_USERMESSAGE, TYPE_BITS);
     w.write_bits(USERMESSAGE_RESETHUD, 8);

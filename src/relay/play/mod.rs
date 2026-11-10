@@ -657,8 +657,8 @@ impl Player<'_> {
                     let mut since = c.dec.catch_up(tick, c.recent.make_contiguous());
                     // The round's end shown, or hidden, as at this moment.
                     since.extend(c.dec.round_event());
-                    // Its clock may have gone back: panels waiting for a time it passed redraw.
-                    since.push(super::reset_hud());
+                    // Its clock may have gone back: the timers, waiting for a time it passed, redraw.
+                    since.extend(c.dec.update_timer());
                     let mut hub = self.relay.hub();
                     hub.send_keyframe(&key, &since, c.paused);
                     hub.notes_again(Instant::now());
@@ -713,11 +713,12 @@ impl Player<'_> {
         // The match paused or went on: the clients are told reliably too.
         if c.paused != was_paused {
             hub.set_paused(c.paused);
-            // Going on after it, the HUD redraws its timer at once (as casters'
-            // `hud_reloadscheme` has it do).
-            if !c.paused {
-                hub.tell_active(&super::reset_hud());
-                hub.notes_again(Instant::now());
+            // Going on after it, the timers redraw at once (as casters' `hud_reloadscheme` has
+            // them do).
+            if !c.paused
+                && let Some(m) = c.dec.update_timer()
+            {
+                hub.tell_active(&m);
             }
         }
     }
@@ -936,6 +937,17 @@ mod tests {
         client.dec.feed(plain.bytes(), plain.nbits());
         let timers = client.dec.extractor().snapshot().timers;
         assert!(timers.iter().all(|t| !t.paused), "{timers:?}");
+    }
+
+    #[test]
+    fn the_timers_are_told_to_redraw_with_the_demos_own_event() {
+        let c = upward_until(|c| c.started);
+        let msg = c.dec.update_timer().expect("the demo has the event");
+        let state = c.dec.parser_state_for_tests();
+        let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
+        let t: tf_demo_parser::demo::message::MessageType = bitbuffer::BitRead::read(&mut s).unwrap();
+        let Message::GameEvent(e) = Message::from_type(t, &mut s, state).unwrap() else { panic!() };
+        assert!(matches!(e.event, GameEvent::TeamPlayUpdateTimer(_)), "{:?}", e.event);
     }
 
     #[test]

@@ -455,6 +455,14 @@ impl Decoder {
         Some(self.extractor().snapshot().players.iter().find(|p| p.id.0 == user && p.alive)?.ent)
     }
 
+    /// `teamplay_update_timer`: the HUD's timers redraw, as from a time the clock went back past
+    /// (a jump back, playback going on after a pause), and nothing else does (`ResetHUD` would
+    /// blank the medic's charge meter until the charge changes).
+    pub(crate) fn update_timer(&self) -> Option<BitBuf> {
+        use tf_demo_parser::demo::gameevent_gen::{GameEvent, TeamPlayUpdateTimerEvent};
+        self.game_event(GameEvent::TeamPlayUpdateTimer(TeamPlayUpdateTimerEvent {}))
+    }
+
     /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
     pub(crate) fn hltv_chase(&self, player: u16) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVChaseEvent};
