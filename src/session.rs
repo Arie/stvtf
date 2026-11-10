@@ -476,6 +476,16 @@ enum Next {
     Stop,
 }
 
+impl Next {
+    /// A recorded datagram, copied into the buffer.
+    fn recorded(d: &[u8], buf: &mut [u8]) -> Self {
+        // Recorded from a buffer of the same size, so a datagram always fits.
+        let n = d.len().min(buf.len());
+        buf[..n].copy_from_slice(&d[..n]);
+        Next::Datagram(n)
+    }
+}
+
 struct Outcome {
     end: End,
     decode_errors: u64,
@@ -578,13 +588,7 @@ pub fn replay(
 ) -> Result<()> {
     let mut s = Session::new(None, challenge, opt);
     let mut it = datagrams.iter();
-    let mut next = |buf: &mut [u8]| -> Result<Next> {
-        let Some(d) = it.next() else { return Ok(Next::Stop) };
-        // Recorded from a buffer of the same size, so a datagram always fits.
-        let n = d.len().min(buf.len());
-        buf[..n].copy_from_slice(&d[..n]);
-        Ok(Next::Datagram(n))
-    };
+    let mut next = |buf: &mut [u8]| -> Result<Next> { Ok(it.next().map_or(Next::Stop, |d| Next::recorded(d, buf))) };
     let outcome = drive(&mut s, tables, None, &mut next, emit)?;
     finish(&s, &outcome, emit);
     Ok(())
@@ -629,9 +633,7 @@ pub(crate) fn replay_paced(
             }
             std::thread::sleep((at - now).min(PACE_POLL));
         }
-        let n = d.len().min(buf.len());
-        buf[..n].copy_from_slice(&d[..n]);
-        Ok(Next::Datagram(n))
+        Ok(Next::recorded(d, buf))
     };
     let outcome = drive(&mut s, tables, None, &mut next, emit)?;
     finish(&s, &outcome, emit);
@@ -747,12 +749,7 @@ mod tests {
 
         let mut s = Session::new(None, challenge, &opt);
         let mut rest = datagrams[1..].iter();
-        let mut next = |buf: &mut [u8]| {
-            Ok(rest.next().map_or(Next::Stop, |d| {
-                buf[..d.len()].copy_from_slice(d);
-                Next::Datagram(d.len())
-            }))
-        };
+        let mut next = |buf: &mut [u8]| Ok(rest.next().map_or(Next::Stop, |d| Next::recorded(d, buf)));
         let mut lines = Vec::new();
         let outcome = drive(&mut s, &tables, Some(datagrams[0]), &mut next, &mut |l| lines.push(l)).unwrap();
         finish(&s, &outcome, &mut |l| lines.push(l));
