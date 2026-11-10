@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{LIMIT, wait_for};
+use common::{LIMIT, fixture, wait_for};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,19 +14,12 @@ use stvtf::output::{Snapshot, Status};
 use stvtf::relay::{Playback, Relay, RelayConfig, Want};
 use stvtf::watch::{self, Watch};
 
-const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem");
+const DEMO: &str = "pl_upward.dem";
 
 /// The demo's snapshots, one per frame, by tick.
 fn demo_snapshots() -> BTreeMap<u32, Snapshot> {
-    let bytes = std::fs::read(DEMO).unwrap();
-    let mut out = BTreeMap::new();
-    stvtf::decode::demo_file(&bytes, 1000.0, &mut |l| {
-        if let Line::Snapshot(s) = l {
-            out.insert(s.tick, s);
-        }
-    })
-    .unwrap();
-    out
+    let lines = common::demo(DEMO, 1000.0).into_iter();
+    lines.filter_map(|l| if let Line::Snapshot(s) = l { Some((s.tick, s)) } else { None }).collect()
 }
 
 /// Where the living players are, by id: what a client that came in late knows as well as one that
@@ -43,7 +36,7 @@ fn places(s: &Snapshot) -> BTreeMap<u16, (String, [f64; 3])> {
 }
 
 fn want(tick: u32, paused: bool, from_start: bool) -> Want {
-    Want { demo: PathBuf::from(DEMO), tick, at: Instant::now(), paused, speed: 4.0, from_start, camera: None }
+    Want { demo: PathBuf::from(fixture(DEMO)), tick, at: Instant::now(), paused, speed: 4.0, from_start, camera: None }
 }
 
 /// What one client got, with when.
