@@ -1089,8 +1089,8 @@ mod tests {
         (bits, life)
     }
 
-    #[test]
-    fn a_late_client_gets_the_table_changes_once_and_one_in_the_game_skips_them() {
+    /// A hub with a client in the game, and its address.
+    fn hub_with_one_in() -> (Hub, SocketAddr) {
         let config = RelayConfig::new("127.0.0.1:0");
         let mut hub = Hub::new(UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
         let now = Instant::now();
@@ -1099,6 +1099,13 @@ mod tests {
         c.gate = None;
         c.set_phase(Phase::Active, now);
         hub.clients.insert(active, c);
+        (hub, active)
+    }
+
+    #[test]
+    fn a_late_client_gets_the_table_changes_once_and_one_in_the_game_skips_them() {
+        let (mut hub, active) = hub_with_one_in();
+        let now = Instant::now();
         let (bits, life) = datagram_with_table_change();
         for _ in 0..3 {
             hub.upstream_stream(&bits, false, &life);
@@ -1116,14 +1123,7 @@ mod tests {
 
     #[test]
     fn tables_set_back_go_again_on_every_jump_back() {
-        let config = RelayConfig::new("127.0.0.1:0");
-        let mut hub = Hub::new(UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
-        let now = Instant::now();
-        let active: SocketAddr = "127.0.0.1:1".parse().unwrap();
-        let mut c = Client::new("in".into(), 1, 1, now);
-        c.gate = None;
-        c.set_phase(Phase::Active, now);
-        hub.clients.insert(active, c);
+        let (mut hub, active) = hub_with_one_in();
         let (later, life) = datagram_with_table_change();
         let mut w = BitWriter::new();
         w.write_bits(u32::from(SVC_UPDATESTRINGTABLE), TYPE_BITS);
