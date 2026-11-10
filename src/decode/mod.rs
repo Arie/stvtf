@@ -475,9 +475,9 @@ impl Decoder {
         Some(self.extractor().snapshot().players.iter().find(|p| p.id.0 == user)?.ent)
     }
 
-    /// The entity of user id `user`, while they are in the match and alive.
-    pub(crate) fn living_player_entity(&self, user: u16) -> Option<u32> {
-        Some(self.extractor().snapshot().players.iter().find(|p| p.id.0 == user && p.alive)?.ent)
+    /// The user id and entity of every player in the match and alive.
+    pub(crate) fn living_players(&self) -> Vec<(u16, u32)> {
+        self.extractor().snapshot().players.iter().filter(|p| p.alive).map(|p| (p.id.0, p.ent)).collect()
     }
 
     /// `teamplay_update_timer`: the HUD's timers redraw, as from a time the clock went back past

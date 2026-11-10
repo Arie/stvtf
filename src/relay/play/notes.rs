@@ -37,10 +37,11 @@ pub(super) struct Shown {
     tried: Option<Instant>,
 }
 
-/// `note`'s bubble, or none while its player is not in the match or dead.
-fn bubble(dec: &Decoder, note: &Note) -> Option<BitBuf> {
+/// `note`'s bubble, or none while its player is not among `living` (see
+/// [`Decoder::living_players`]): not in the match, or dead.
+fn bubble(dec: &Decoder, living: &[(u16, u32)], note: &Note) -> Option<BitBuf> {
     let follow = match note.player {
-        Some(user) => Some(dec.living_player_entity(user)?),
+        Some(user) => Some(living.iter().find(|(id, _)| *id == user)?.1),
         None => None,
     };
     dec.annotation(note.id, &note.text, note.at, follow)
@@ -68,8 +69,10 @@ impl Player<'_> {
             return;
         }
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
-        let bubbles: Vec<(u32, BitBuf)> = notes.iter().filter_map(|n| Some((n.id, bubble(&c.dec, n)?))).collect();
         let follows = notes.iter().any(|n| n.player.is_some());
+        let living = if follows { c.dec.living_players() } else { Vec::new() };
+        let bubbles: Vec<(u32, BitBuf)> =
+            notes.iter().filter_map(|n| Some((n.id, bubble(&c.dec, &living, n)?))).collect();
         let mut hub = self.relay.hub();
         for m in gone(&s.bubbles, &bubbles).filter_map(|id| c.dec.hide_annotation(id)) {
             hub.tell_active(&m);
@@ -103,13 +106,15 @@ mod tests {
         let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
         let player = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
         let spot = Note { id: 7, text: "lobby".into(), at: [1.0, 2.0, 3.0], player: None };
-        let GameEvent::ShowAnnotation(a) = event(&c.dec, &bubble(&c.dec, &spot).unwrap()) else { panic!() };
+        let GameEvent::ShowAnnotation(a) = event(&c.dec, &bubble(&c.dec, &[], &spot).unwrap()) else { panic!() };
         assert_eq!((a.id, a.text.to_string(), a.follow_ent_index), (7, "lobby".into(), 0));
         assert_eq!([a.world_pos_x, a.world_pos_y, a.world_pos_z], [1.0, 2.0, 3.0]);
         assert!(a.lifetime < 0.0 && !a.show_distance, "for good, no distance");
         assert_eq!(a.play_sound.to_string(), "common/null.wav", "a sound that is there, and silent");
         let on = Note { id: 8, text: "watch".into(), at: [0.0; 3], player: Some(player.id.0) };
-        let GameEvent::ShowAnnotation(a) = event(&c.dec, &bubble(&c.dec, &on).unwrap()) else { panic!() };
+        let GameEvent::ShowAnnotation(a) = event(&c.dec, &bubble(&c.dec, &c.dec.living_players(), &on).unwrap()) else {
+            panic!()
+        };
         assert_eq!(a.follow_ent_index, player.ent);
         let GameEvent::HideAnnotation(h) = event(&c.dec, &c.dec.hide_annotation(8).unwrap()) else { panic!() };
         assert_eq!(h.id, 8);
@@ -120,7 +125,7 @@ mod tests {
         let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
         let said = |id: u32, text: &str| {
             let note = Note { id, text: text.into(), at: [0.0; 3], player: None };
-            (id, bubble(&c.dec, &note).unwrap())
+            (id, bubble(&c.dec, &[], &note).unwrap())
         };
         let was = [said(1, "a"), said(2, "b")];
         // Cleared, then another put on the map: the first id again.
@@ -139,13 +144,16 @@ mod tests {
         };
         let c = upward_until(|c| dead(c).is_some());
         let note = Note { id: 1, text: "x".into(), at: [0.0; 3], player: dead(&c) };
-        assert!(bubble(&c.dec, &note).is_none(), "TF2 would leave it where their body was, then move it");
+        assert!(
+            bubble(&c.dec, &c.dec.living_players(), &note).is_none(),
+            "TF2 would leave it where their body was, then move it"
+        );
     }
 
     #[test]
     fn a_note_on_a_player_not_in_the_match_is_no_bubble_yet() {
         let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
         let gone = Note { id: 1, text: "x".into(), at: [0.0; 3], player: Some(u16::MAX) };
-        assert!(bubble(&c.dec, &gone).is_none());
+        assert!(bubble(&c.dec, &c.dec.living_players(), &gone).is_none());
     }
 }

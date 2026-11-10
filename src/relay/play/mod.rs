@@ -160,11 +160,13 @@ impl Playback {
     }
 
     /// Notes the clients in the game keep seeing (a room's), in place of those before: shown
-    /// again after every full update; those gone are hidden.
+    /// again after every full update; those gone are hidden. The same ones again change nothing.
     pub fn keep_notes(&self, notes: Vec<Note>) {
         let mut kept = lock(&self.notes);
-        kept.0 += 1;
-        kept.1 = Arc::new(notes);
+        if *kept.1 != notes {
+            kept.0 += 1;
+            kept.1 = Arc::new(notes);
+        }
     }
 
     /// Beams the clients in the game keep seeing (a room's marker), in place of those kept before:
