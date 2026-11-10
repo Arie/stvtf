@@ -27,6 +27,9 @@ const CHAT_RGBA: char = '\u{08}';
 const CHAT_CODES: std::ops::RangeInclusive<char> = '\u{01}'..='\u{08}';
 const RGB_DIGITS: usize = 6;
 const RGBA_DIGITS: usize = 8;
+/// What the client draws `CHAT_GREEN` and `CHAT_LIGHT_GREEN` in.
+const GREEN: [u8; 3] = [0x40, 0xFF, 0x40];
+const LIGHT_GREEN: [u8; 3] = [0x99, 0xFF, 0x99];
 
 /// `m_nFlagStatus`: at home, carried, dropped.
 const FLAG_CARRIED: i64 = 1;
@@ -258,8 +261,8 @@ pub(crate) fn color_parts(text: &str) -> Option<Vec<ChatPart>> {
                 Some(hex.get(..RGB_DIGITS).and_then(ChatColor::from_hex))
             }
             CHAT_TEAM => Some(Some(ChatColor::Team)),
-            CHAT_GREEN => Some(Some(ChatColor::Rgb([0x40, 0xFF, 0x40]))),
-            CHAT_LIGHT_GREEN => Some(Some(ChatColor::Rgb([0x99, 0xFF, 0x99]))),
+            CHAT_GREEN => Some(Some(ChatColor::Rgb(GREEN))),
+            CHAT_LIGHT_GREEN => Some(Some(ChatColor::Rgb(LIGHT_GREEN))),
             c if CHAT_DEFAULT.contains(&c) => Some(None),
             _ => {
                 run.push(c);
