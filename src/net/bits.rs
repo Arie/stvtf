@@ -1,6 +1,7 @@
 //! LSB-first bit reader and writer, matching Valve's `bf_read` / `bf_write`.
 
 use anyhow::{Result, bail};
+use std::ops::Range;
 
 /// A bit stream packed from bit 0: `bytes` holds exactly `nbits` bits, the last byte
 /// possibly partial. Only `BitWriter`, `from_bytes` and `read_remaining` build one,
@@ -90,16 +91,9 @@ impl<'a> BitReader<'a> {
     }
 
     /// The bits in `range`, repacked to start at bit 0.
-    pub fn slice(data: &'a [u8], range: std::ops::Range<usize>) -> BitBuf {
-        let mut r = BitReader::at(data, range.start);
+    pub fn slice(data: &'a [u8], range: Range<usize>) -> BitBuf {
         let mut w = BitWriter::new();
-        let mut left = range.len();
-        while left > 0 {
-            let n = left.min(32);
-            // In range: the caller's span lies within the stream.
-            w.write_bits(r.read_bits(n).unwrap_or(0), n);
-            left -= n;
-        }
+        w.write_range(data, range);
         w.finish()
     }
 
@@ -209,11 +203,15 @@ impl BitWriter {
 
     /// Appends all bits of another stream.
     pub fn write_buf(&mut self, buf: &BitBuf) {
-        let mut r = BitReader::new(&buf.bytes);
-        let mut left = buf.nbits;
+        self.write_range(&buf.bytes, 0..buf.nbits);
+    }
+
+    /// Appends the bits of `data` in `range`, which must lie within it.
+    pub(crate) fn write_range(&mut self, data: &[u8], range: Range<usize>) {
+        let mut r = BitReader::at(data, range.start);
+        let mut left = range.len();
         while left > 0 {
             let n = left.min(32);
-            // In range: a BitBuf holds exactly nbits bits.
             self.write_bits(r.read_bits(n).unwrap_or(0), n);
             left -= n;
         }
