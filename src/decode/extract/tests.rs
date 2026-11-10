@@ -3,7 +3,7 @@ use super::events::*;
 use super::state::*;
 use super::*;
 use crate::decode::modes::Placed;
-use crate::output::{ChatColor, ChatKind, ChatPart, Condition, Resist, Ubered};
+use crate::output::{ChatColor, ChatKind, ChatPart, Condition, Resist, Ubered, round1};
 use tf_demo_parser::demo::data::game_state::{PlayerClassData, PlayerCondition, ProjectileType};
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::message::PacketEntitiesMessage;
@@ -444,12 +444,12 @@ mod sentry_tests {
 mod timer_tests {
     use super::*;
 
-    fn at(x: &mut Extractor, state: i64, transition: f32, seconds: f32) -> Option<f32> {
+    fn at(x: &mut Extractor, state: i64, transition: f32, seconds: f32) -> Option<f64> {
         x.round_state = round_from_raw(state);
         x.state_transition = transition;
         x.server_tick = (seconds / DEFAULT_TICK_INTERVAL).round() as u32;
         x.track_round_time();
-        x.round_time().map(|t| (t * 10.0).round() / 10.0)
+        x.round_time().map(round1)
     }
 
     #[test]
