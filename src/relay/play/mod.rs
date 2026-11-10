@@ -54,8 +54,6 @@ const RECENT: usize = 128;
 const RETRY: Duration = Duration::from_millis(200);
 /// How often the camera cue is repeated, for clients that looked away.
 const CUE_EVERY: Duration = Duration::from_secs(3);
-/// The most beams waiting to be shown: more are dropped.
-const MAX_BEAMS_QUEUED: usize = 4096;
 /// How often kept beams are shown again; each shows until then, its life rounded up to the step
 /// it is sent in, so they overlap by under a tenth of a second.
 const KEPT_EVERY: Duration = Duration::from_secs(2);
@@ -141,8 +139,6 @@ pub struct Playback {
     want: Mutex<Want>,
     /// Why the demo wanted cannot be played, if it cannot.
     problem: Mutex<Option<String>>,
-    /// Beams to show the clients in the game, once.
-    beams: Mutex<Vec<Beam>>,
     /// Beams the clients in the game keep seeing, until replaced, and how many times they were.
     kept: Mutex<(u64, Arc<Vec<Beam>>)>,
     /// Notes they keep seeing, until replaced, and how many times they were.
@@ -157,7 +153,6 @@ impl Playback {
         Playback {
             want: Mutex::new(want),
             problem: Mutex::new(None),
-            beams: Mutex::new(Vec::new()),
             kept: Mutex::new((0, Arc::default())),
             notes: Mutex::new((0, Arc::default())),
             light: Mutex::new(None),
@@ -191,18 +186,6 @@ impl Playback {
 
     fn kept(&self) -> (u64, Arc<Vec<Beam>>) {
         lock(&self.kept).clone()
-    }
-
-    /// Shows `beams` to the clients in the game now; those that are not miss them.
-    pub fn draw(&self, beams: &[Beam]) {
-        let mut queued = lock(&self.beams);
-        if queued.len() + beams.len() <= MAX_BEAMS_QUEUED {
-            queued.extend_from_slice(beams);
-        }
-    }
-
-    fn take_beams(&self) -> Vec<Beam> {
-        std::mem::take(&mut *lock(&self.beams))
     }
 
     /// Where playback should be from now on.
@@ -535,7 +518,6 @@ impl Player<'_> {
                 }
             }
             if self.flushing.is_none() {
-                self.draw(&playback.take_beams());
                 self.show_kept(playback);
                 let (version, notes) = lock(&playback.notes).clone();
                 self.show_notes(version, &notes);
@@ -834,25 +816,6 @@ impl Player<'_> {
             }
             drop(hub);
             self.shown_for(life);
-        }
-    }
-
-    /// Shows `beams` to the clients in the game.
-    fn draw(&mut self, beams: &[Beam]) {
-        if beams.is_empty() {
-            return;
-        }
-        match self.beam_messages(beams) {
-            Some(msgs) => {
-                trace!("{} beams to the clients in", beams.len());
-                let mut hub = self.relay.hub();
-                for m in &msgs {
-                    hub.tell_active(m);
-                }
-                drop(hub);
-                self.shown_for(beams.iter().map(|b| b.life).fold(0.0, f32::max));
-            }
-            None => trace!("{} beams not drawn: no beam class or sprite in the demo", beams.len()),
         }
     }
 
