@@ -754,7 +754,7 @@ fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Life
     let mut spans = Vec::with_capacity(life.spans.len());
     for span in life.spans.iter().filter(|s| !dec.is_director_cue(bits.bytes(), s)) {
         let start = w.nbits();
-        w.write_buf(&BitReader::slice(bits.bytes(), span.bits.clone()));
+        w.write_range(bits.bytes(), span.bits.clone());
         spans.push(Span { id: span.id, bits: start..w.nbits() });
     }
     (w.finish(), Lifecycle { spans, ..life.clone() })

@@ -520,7 +520,7 @@ fn encode_message(svc: u32, msg: &impl tf_demo_parser::demo::parser::Encode, sta
     };
     let mut w = BitWriter::new();
     w.write_bits(svc, TYPE_BITS);
-    w.write_buf(&BitReader::slice(&bytes, 0..nbits));
+    w.write_range(&bytes, 0..nbits);
     Some(w.finish())
 }
 
