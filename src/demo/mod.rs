@@ -196,14 +196,14 @@ impl<R: Read + Seek> Reader<R> {
         let tick = self.u32()? as i32;
         Ok(match cmd {
             SIGNON | MESSAGE => {
-                self.skip(META_LEN)?;
+                self.skip_meta()?;
                 let data = self.data()?;
                 if cmd == SIGNON { Packet::Signon { tick, data } } else { Packet::Message { tick, data } }
             }
             SYNC_TICK => Packet::SyncTick { tick },
             CONSOLE_CMD => Packet::ConsoleCmd { tick, data: self.data()? },
             USER_CMD => {
-                self.skip(4)?;
+                self.u32()?; // its sequence number
                 Packet::UserCmd { tick, data: self.data()? }
             }
             DATA_TABLES => Packet::DataTables { tick, data: self.data()? },
@@ -224,9 +224,8 @@ impl<R: Read + Seek> Reader<R> {
         Ok(u32::from_le_bytes(b))
     }
 
-    fn skip(&mut self, n: usize) -> std::io::Result<()> {
-        let mut b = [0u8; META_LEN];
-        self.r.read_exact(&mut b[..n])
+    fn skip_meta(&mut self) -> std::io::Result<()> {
+        self.r.read_exact(&mut [0u8; META_LEN])
     }
 
     fn data(&mut self) -> Result<Vec<u8>> {
