@@ -134,8 +134,10 @@ struct Client {
     gate: Option<Signon>,
     /// Reliable messages not yet in a transfer.
     queue: Vec<BitBuf>,
-    /// When to give it the notes again (see [`Hub::notes`]).
-    notes_at: Option<Instant>,
+    /// When to give it the notes again: once its HUD is up, and past a HUD reset (see
+    /// [`Hub::notes`]). Each its own, a reset must not put off or bring forward the other.
+    notes_entered: Option<Instant>,
+    notes_reset: Option<Instant>,
     outgoing: Option<Outgoing>,
     last_heard: Instant,
     last_sent: Instant,
@@ -164,7 +166,8 @@ impl Client {
             // The client opens with net_SignonState(CONNECTED); then the log starts.
             gate: Some(Signon::Connected),
             queue: Vec::new(),
-            notes_at: None,
+            notes_entered: None,
+            notes_reset: None,
             outgoing: None,
             last_heard: now,
             last_sent: now,
@@ -204,7 +207,7 @@ impl Client {
     /// first entities they may come before it).
     fn enter_notes(&mut self, notes: &[BitBuf], now: Instant) {
         self.queue.extend(notes.iter().cloned());
-        self.notes_at = Some(now + NOTES_AFTER_ENTERING);
+        self.notes_entered = Some(now + NOTES_AFTER_ENTERING);
     }
 
     /// Whether the client waits for a full update and can take one.
@@ -485,16 +488,18 @@ impl Hub {
     /// a moment, past it (a reset in the same packet is read after its reliable part).
     fn notes_again(&mut self, now: Instant) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
-            c.notes_at = Some(now + NOTES_AFTER_RESET);
+            c.notes_reset = Some(now + NOTES_AFTER_RESET);
         }
     }
 
     /// The notes, reliably, to the clients in the game due them again.
     fn send_due_notes(&mut self, now: Instant) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
-            if c.notes_at.is_some_and(|t| now >= t) {
-                c.notes_at = None;
-                c.queue.extend(self.notes.iter().cloned());
+            for at in [&mut c.notes_entered, &mut c.notes_reset] {
+                if at.is_some_and(|t| now >= t) {
+                    *at = None;
+                    c.queue.extend(self.notes.iter().cloned());
+                }
             }
         }
     }
@@ -1197,7 +1202,14 @@ mod tests {
         assert_eq!(queued(&mut hub), [], "once");
         hub.notes_again(now);
         hub.send_due_notes(now + NOTES_AFTER_RESET);
-        assert_eq!(queued(&mut hub), [note], "past a HUD reset");
+        assert_eq!(queued(&mut hub), std::slice::from_ref(&note), "past a HUD reset");
+        // A reset as it goes in (a seek's full update) leaves the wait for its HUD.
+        hub.clients.get_mut(&active).unwrap().enter_notes(&[], now);
+        hub.notes_again(now);
+        hub.send_due_notes(now + NOTES_AFTER_RESET);
+        assert_eq!(queued(&mut hub), std::slice::from_ref(&note), "past the reset");
+        hub.send_due_notes(now + NOTES_AFTER_ENTERING);
+        assert_eq!(queued(&mut hub), [note], "and once its HUD is up");
     }
 
     #[test]
