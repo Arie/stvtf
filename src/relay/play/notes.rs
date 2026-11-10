@@ -30,7 +30,8 @@ const CHECK: Duration = Duration::from_millis(250);
 pub(super) struct Shown {
     /// The version of the room's notes; none before the first.
     version: Option<u64>,
-    ids: Vec<u32>,
+    /// Each one's id and bubble.
+    bubbles: Vec<(u32, BitBuf)>,
     /// A note follows a player: looked at again in a while.
     follows: bool,
     tried: Option<Instant>,
@@ -45,10 +46,20 @@ fn bubble(dec: &Decoder, note: &Note) -> Option<BitBuf> {
     dec.annotation(note.id, &note.text, note.at, follow)
 }
 
+/// The ids shown in `was` that `now` has no bubble for.
+fn gone<'a>(was: &'a [(u32, BitBuf)], now: &'a [(u32, BitBuf)]) -> impl Iterator<Item = u32> + 'a {
+    was.iter().map(|(id, _)| *id).filter(|id| !now.iter().any(|(n, _)| n == id))
+}
+
+/// The bubbles of `now` that `was` did not show as they are.
+fn fresh<'a>(was: &'a [(u32, BitBuf)], now: &'a [(u32, BitBuf)]) -> impl Iterator<Item = &'a BitBuf> {
+    now.iter().filter(|b| !was.contains(b)).map(|(_, m)| m)
+}
+
 impl Player<'_> {
     /// Gives the clients the room's notes when they changed, and those on players as their player
-    /// comes and goes, dies and respawns: new ones shown, gone ones hidden, all of them again after
-    /// full updates and HUD resets.
+    /// comes and goes, dies and respawns: new and changed ones shown (an id is used again after a
+    /// clear), gone ones hidden, all of them again after full updates and HUD resets.
     pub(super) fn show_notes(&mut self, version: u64, notes: &[Note]) {
         self.relay.hub().send_due_notes(Instant::now());
         let s = &mut self.shown_notes;
@@ -57,27 +68,18 @@ impl Player<'_> {
             return;
         }
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
-        let (mut ids, mut msgs) = (Vec::new(), Vec::new());
-        for n in notes {
-            if let Some(m) = bubble(&c.dec, n) {
-                ids.push(n.id);
-                msgs.push(m);
-            }
-        }
+        let bubbles: Vec<(u32, BitBuf)> = notes.iter().filter_map(|n| Some((n.id, bubble(&c.dec, n)?))).collect();
         let follows = notes.iter().any(|n| n.player.is_some());
         let mut hub = self.relay.hub();
-        for id in s.ids.iter().filter(|id| !ids.contains(id)) {
-            if let Some(m) = c.dec.hide_annotation(*id) {
-                hub.tell_active(&m);
-            }
+        for m in gone(&s.bubbles, &bubbles).filter_map(|id| c.dec.hide_annotation(id)) {
+            hub.tell_active(&m);
         }
-        for (id, m) in ids.iter().zip(&msgs) {
-            if !s.ids.contains(id) {
-                hub.tell_active(m);
-            }
+        // One with an id shown replaces that bubble.
+        for m in fresh(&s.bubbles, &bubbles) {
+            hub.tell_active(m);
         }
-        hub.set_notes(msgs);
-        *s = Shown { version: Some(version), ids, follows, tried: Some(Instant::now()) };
+        hub.set_notes(bubbles.iter().map(|(_, m)| m.clone()).collect());
+        *s = Shown { version: Some(version), bubbles, follows, tried: Some(Instant::now()) };
     }
 }
 
@@ -111,6 +113,21 @@ mod tests {
         assert_eq!(a.follow_ent_index, player.ent);
         let GameEvent::HideAnnotation(h) = event(&c.dec, &c.dec.hide_annotation(8).unwrap()) else { panic!() };
         assert_eq!(h.id, 8);
+    }
+
+    #[test]
+    fn a_note_with_an_id_shown_is_shown_again_when_it_says_something_else() {
+        let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
+        let said = |id: u32, text: &str| {
+            let note = Note { id, text: text.into(), at: [0.0; 3], player: None };
+            (id, bubble(&c.dec, &note).unwrap())
+        };
+        let was = [said(1, "a"), said(2, "b")];
+        // Cleared, then another put on the map: the first id again.
+        let now = [said(1, "c")];
+        assert_eq!(fresh(&was, &now).collect::<Vec<_>>(), [&now[0].1]);
+        assert_eq!(gone(&was, &now).collect::<Vec<_>>(), [2]);
+        assert_eq!(fresh(&was, &was).count() + gone(&was, &was).count(), 0, "as they were: nothing");
     }
 
     #[test]
