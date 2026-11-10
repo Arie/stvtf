@@ -259,12 +259,12 @@ impl<W: Write + Seek> Writer<W> {
 
     /// The data tables packet of the build, as a tables demo has it.
     pub fn data_tables(&mut self, data: &[u8]) -> Result<()> {
-        self.packet(DATA_TABLES, 0, None, data)
+        self.packet(DATA_TABLES, 0, data)
     }
 
     /// Signon messages, byte padded.
     pub fn signon(&mut self, data: &[u8]) -> Result<()> {
-        self.packet(SIGNON, 0, Some(&[0u8; META_LEN]), data)
+        self.packet(SIGNON, 0, data)
     }
 
     /// One datagram's messages at server tick `server_tick`, byte padded.
@@ -273,22 +273,22 @@ impl<W: Write + Seek> Writer<W> {
             // Everything up to the first frame is the signon, as the header counts it.
             self.in_signon = false;
             self.header.signon_bytes = (self.w.stream_position()? - HEADER_LEN as u64) as u32;
-            self.packet(SYNC_TICK, 0, None, &[])?;
+            self.packet(SYNC_TICK, 0, &[])?;
         }
         let first = *self.first_tick.get_or_insert(server_tick);
         let tick = (server_tick - first).max(0);
-        self.packet(MESSAGE, tick, Some(&[0u8; META_LEN]), data)?;
+        self.packet(MESSAGE, tick, data)?;
         self.header.frames += 1;
         self.header.ticks = self.header.ticks.max(tick as u32);
         self.header.seconds = self.header.ticks as f32 * self.tick_interval;
         Ok(())
     }
 
-    fn packet(&mut self, cmd: u8, tick: i32, meta: Option<&[u8]>, data: &[u8]) -> Result<()> {
+    fn packet(&mut self, cmd: u8, tick: i32, data: &[u8]) -> Result<()> {
         self.w.write_all(&[cmd])?;
         self.w.write_all(&tick.to_le_bytes())?;
-        if let Some(m) = meta {
-            self.w.write_all(m)?;
+        if matches!(cmd, SIGNON | MESSAGE) {
+            self.w.write_all(&[0u8; META_LEN])?;
         }
         if cmd != SYNC_TICK {
             self.w.write_all(&(data.len() as u32).to_le_bytes())?;
