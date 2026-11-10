@@ -282,10 +282,7 @@ impl Hub {
     /// The server started a signon (connected, or a new map): so does every client. A reconnect
     /// asked of a client (see [`Hub::reconnect_all`]) still goes first.
     fn restart_signon(&mut self, now: Instant) {
-        self.log.clear();
-        self.logged_unreliable.clear();
-        self.signon_open = true;
-        self.keyframe = None;
+        self.forget();
         let reconnect = messages::signonstate(Signon::Connected, -1);
         for c in self.clients.values_mut() {
             c.cursor = 0;
@@ -483,7 +480,7 @@ impl Hub {
         }
     }
 
-    /// Nobody is in: what was logged goes, and the next client starts afresh.
+    /// What was logged goes: the next signon starts afresh.
     fn forget(&mut self) {
         self.log.clear();
         self.logged_unreliable.clear();
