@@ -5,13 +5,13 @@
 use super::{Header, Writer};
 use crate::decode::{Lifecycle, Tables};
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
+use crate::net::messages::NET_TICK;
 use crate::session::Tap;
 use std::fs::File;
 use std::io::BufWriter;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-const NET_TICK: u8 = 3;
 const SVC_PACKETENTITIES: u8 = 26;
 /// The header's counts are written again this often; every frame reaches the file at once, so a
 /// file being written can be played while it grows.
@@ -91,7 +91,7 @@ impl Tap for Recorder {
         st.in_signon = false;
         // One frame per packet: a datagram can hold two (the full update after signon comes
         // reliably, beside the next frame's delta).
-        if life.spans.iter().any(|s| s.id == NET_TICK) && st.frame_tick.is_some() {
+        if life.spans.iter().any(|s| u32::from(s.id) == NET_TICK) && st.frame_tick.is_some() {
             self.write(&mut st);
         }
         if let Some(t) = tick {
