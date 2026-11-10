@@ -356,8 +356,9 @@ fn timer_props(state: &ParserState, e: &Entity, hold: Option<f32>) -> Option<Vec
 
 /// A TF weapon's `m_bResetParity` as a client creates the weapon with it, for a full update: one
 /// that differs from it, the client takes for a reset (`CTFWeaponBase::OnDataChanged`), and a
-/// medigun's charge goes to 0 until it changes. Its later flips, real resets, still differ. None
-/// for another entity.
+/// medigun's charge goes to 0 until it changes. A weapon whose own is the other one then misses
+/// its next real reset, whose flip is to what the client has; what a reset changes still comes, as
+/// props. None for another entity.
 fn reset_parity(state: &ParserState, e: &Entity) -> Option<Vec<SendProp>> {
     let table = state.send_tables.get(usize::from(e.class))?;
     let id = SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
