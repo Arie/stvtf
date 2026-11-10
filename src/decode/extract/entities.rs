@@ -181,24 +181,10 @@ impl Extractor {
         for id in &pe.removed_entities {
             frame.remove(&u32::from(*id));
         }
-        let gone: Vec<EntityId> = self
-            .gs
-            .state
-            .projectiles
-            .keys()
-            .chain(self.gs.state.buildings.keys())
-            .filter(|id| !frame.contains(&u32::from(**id)))
-            .copied()
-            .collect();
+        let gone: Vec<u32> = self.tracked().filter(|id| !frame.contains(id)).collect();
         for id in gone {
-            self.gs.state.projectile_destroy(id);
-            self.gs.state.remove_building(id);
-            self.forget_entity(u32::from(id));
-        }
-        // Flags (player destruction's pickups) and the game modes' entities go the same way.
-        let gone: Vec<u32> =
-            self.ents.flags.keys().copied().chain(self.modes.ids()).filter(|id| !frame.contains(id)).collect();
-        for id in gone {
+            self.gs.state.projectile_destroy(EntityId::from(id));
+            self.gs.state.remove_building(EntityId::from(id));
             self.forget_entity(id);
         }
         // A later delta never comes from a frame older than this one's base.

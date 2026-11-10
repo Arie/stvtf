@@ -245,7 +245,8 @@ impl Extractor {
         }
     }
 
-    /// The entities `track_frame` drops when a frame leaves them out.
+    /// The entities `track_frame` drops when a frame leaves them out: projectiles, buildings,
+    /// flags (player destruction's pickups) and the game modes' entities.
     fn tracked(&self) -> impl Iterator<Item = u32> + '_ {
         let state = &self.gs.state;
         (state.projectiles.keys().chain(state.buildings.keys()).map(|id| u32::from(*id)))
