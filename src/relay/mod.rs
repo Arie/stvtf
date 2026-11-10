@@ -65,7 +65,7 @@ mod client_msg;
 mod play;
 mod transfer;
 pub(crate) use client_msg::{ClientMsg, client_messages};
-pub use play::{Beam, Camera, Playback, Want};
+pub use play::{Beam, Camera, Note, Playback, Want};
 
 /// How often the trace sums up what each client was sent.
 const TRACE_EVERY: Duration = Duration::from_secs(5);
@@ -240,6 +240,9 @@ struct Hub {
     tail_full: bool,
     /// The unreliable parts since the last full update, while there are few.
     keyframe: Option<Vec<BitBuf>>,
+    /// Messages a client gets again, reliably, after every full update: what one drops (a room's
+    /// note bubbles).
+    notes: Vec<BitBuf>,
     map: String,
     build: String,
     seen_client: bool,
@@ -273,6 +276,7 @@ impl Hub {
             tail: None,
             tail_full: false,
             keyframe: None,
+            notes: Vec::new(),
             map: String::new(),
             build: crate::CURRENT_BUILD.to_string(),
             seen_client: false,
@@ -450,12 +454,18 @@ impl Hub {
                 trace!("{addr} gets a keyframe of {} bits", key.nbits());
                 c.set_phase(Phase::Active, now);
                 c.queue.push(pause.clone());
+                c.queue.extend(self.notes.iter().cloned());
                 self.out.send(*addr, c, Some(key), true, now);
                 for f in since {
                     self.out.send(*addr, c, Some(f), true, now);
                 }
             }
         }
+    }
+
+    /// What a client gets after every full update from now on, in place of what it got before.
+    fn set_notes(&mut self, notes: Vec<BitBuf>) {
+        self.notes = notes;
     }
 
     /// Tells the clients in the game that playback paused or went on, reliably.
@@ -494,6 +504,8 @@ impl Hub {
     fn forget(&mut self) {
         self.log.clear();
         self.logged_unreliable.clear();
+        // Of the last demo's entities: the player gives them again.
+        self.notes.clear();
         self.signon_open = true;
         self.keyframe = None;
     }
@@ -521,6 +533,7 @@ impl Hub {
             if full && c.takes_full_update(&self.log) {
                 trace!("{addr} gets a full update of {} bits", tail.as_ref().map_or(0, BitBuf::nbits));
                 c.set_phase(Phase::Active, now);
+                c.queue.extend(self.notes.iter().cloned());
             }
             if c.phase == Phase::Active {
                 // One packet per server datagram, as the server sends: a packet of our own
@@ -543,6 +556,7 @@ impl Hub {
             if let Mode::Play { paused } = self.mode {
                 c.queue.push(set_pause(paused));
             }
+            c.queue.extend(self.notes.iter().cloned());
             for t in frames {
                 self.out.send(addr, c, Some(t), false, now);
             }
@@ -1096,6 +1110,36 @@ mod tests {
         c.set_phase(Phase::Active, now);
         hub.clients.insert(active, c);
         (hub, active)
+    }
+
+    #[test]
+    fn notes_go_again_after_every_full_update() {
+        let (mut hub, active) = hub_with_one_in();
+        let msg = |v: u32| {
+            let mut w = BitWriter::new();
+            w.write_bits(v, 16);
+            w.finish()
+        };
+        let (key, note) = (msg(1), msg(2));
+        // The reliable data sent: the pause, then the note.
+        let sent = |hub: &mut Hub| {
+            let c = hub.clients.get_mut(&active).unwrap();
+            c.outgoing.take().map(|o| o.data().to_vec()).unwrap_or_default()
+        };
+        let mut w = BitWriter::new();
+        w.write_buf(&set_pause(false));
+        w.write_buf(&note);
+        let expected = w.into_bytes();
+        hub.set_notes(vec![note.clone()]);
+        assert!(hub.clients[&active].queue.is_empty(), "for full updates to come; shown now by the player");
+        hub.all_want_keyframe(Instant::now());
+        hub.send_keyframe(&key, &[], false);
+        assert!(sent(&mut hub).starts_with(&expected), "after its full update");
+        hub.clients.get_mut(&active).unwrap().set_phase(Phase::WaitingFull, Instant::now());
+        hub.mode = Mode::Play { paused: false };
+        hub.keyframe = Some(vec![key]);
+        hub.wants_entities(active, Instant::now());
+        assert!(sent(&mut hub).starts_with(&expected), "and after the datagrams since one");
     }
 
     #[test]

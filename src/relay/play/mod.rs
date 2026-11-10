@@ -15,6 +15,7 @@
 //!   [`Playback::problem`], and it tries again.
 
 mod index;
+mod notes;
 
 use super::{Hub, Relay};
 pub use crate::decode::beams::Beam;
@@ -26,6 +27,7 @@ use crate::net::messages::{self, TYPE_BITS};
 use crate::output::Line;
 use anyhow::{Context, Result, bail};
 use index::Index;
+pub use notes::Note;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::Read;
@@ -141,6 +143,8 @@ pub struct Playback {
     beams: Mutex<Vec<Beam>>,
     /// Beams the clients in the game keep seeing, until replaced, and how many times they were.
     kept: Mutex<(u64, Arc<Vec<Beam>>)>,
+    /// Notes they keep seeing, until replaced, and how many times they were.
+    notes: Mutex<(u64, Arc<Vec<Note>>)>,
 }
 
 impl Playback {
@@ -151,7 +155,16 @@ impl Playback {
             problem: Mutex::new(None),
             beams: Mutex::new(Vec::new()),
             kept: Mutex::new((0, Arc::default())),
+            notes: Mutex::new((0, Arc::default())),
         }
+    }
+
+    /// Notes the clients in the game keep seeing (a room's), in place of those before: shown
+    /// again after every full update; those gone are hidden.
+    pub fn keep_notes(&self, notes: Vec<Note>) {
+        let mut kept = lock(&self.notes);
+        kept.0 += 1;
+        kept.1 = Arc::new(notes);
     }
 
     /// Beams the clients in the game keep seeing (a room's marker), in place of those kept before:
@@ -420,6 +433,7 @@ impl Relay {
                 index: None,
                 cued: None,
                 kept: Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: Instant::now() },
+                shown_notes: notes::Shown::default(),
                 laser: None,
                 clock: None,
                 beams_until: 0.0,
@@ -454,6 +468,8 @@ struct Player<'r> {
     cued: Option<(Camera, Instant)>,
     /// The kept beams shown: when each last was, and what may be sent now.
     kept: Kept,
+    /// The notes the clients were given.
+    shown_notes: notes::Shown,
     /// Where the clients were given the laser beams are drawn with, if they were.
     laser: Option<u16>,
     /// The clients' clock (seconds) at an instant.
@@ -484,6 +500,7 @@ impl Player<'_> {
                         self.cur = Some(c);
                         // Its own tables: the clients sign on to them, the laser not among them.
                         self.laser = None;
+                        self.shown_notes = notes::Shown::default();
                         self.clock = None;
                         self.beams_until = 0.0;
                         playback.set_problem(None);
@@ -503,6 +520,8 @@ impl Player<'_> {
             if self.flushing.is_none() {
                 self.draw(&playback.take_beams());
                 self.show_kept(playback);
+                let (version, notes) = lock(&playback.notes).clone();
+                self.show_notes(version, &notes);
             }
             match self.step(&want) {
                 Ok(()) => playback.set_problem(self.problem.clone()),
@@ -867,7 +886,7 @@ mod tests {
     use tf_demo_parser::demo::message::Message;
 
     /// `pl_upward.dem` decoded until `done`.
-    fn upward_until(done: impl Fn(&Cursor) -> bool) -> Cursor {
+    pub(super) fn upward_until(done: impl Fn(&Cursor) -> bool) -> Cursor {
         let path = crate::fixture("pl_upward.dem");
         let mut c = Cursor::open_with(&path, None).unwrap();
         while !done(&c) {

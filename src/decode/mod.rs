@@ -11,6 +11,7 @@ mod crc;
 mod detail;
 mod extract;
 mod modes;
+mod notes;
 mod props;
 mod tables;
 mod world;
@@ -444,10 +445,15 @@ impl Decoder {
         self.round = event;
     }
 
+    /// The entity of user id `user`, while they are in the match.
+    pub(crate) fn player_entity(&self, user: u16) -> Option<u32> {
+        Some(self.extractor().snapshot().players.iter().find(|p| p.id.0 == user)?.ent)
+    }
+
     /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
     pub(crate) fn hltv_chase(&self, player: u16) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVChaseEvent};
-        let ent = self.extractor().snapshot().players.iter().find(|p| p.id.0 == player)?.ent;
+        let ent = self.player_entity(player)?;
         self.game_event(GameEvent::HLTVChase(HLTVChaseEvent {
             target_1: u16::try_from(ent).ok()?,
             target_2: 0,
