@@ -6,6 +6,8 @@ use tf_demo_parser::demo::gameevent_gen::{GameEvent, HideAnnotationEvent, ShowAn
 
 /// A lifetime under 0: shown until hidden.
 const FOR_GOOD: f32 = -1.0;
+/// The game's silent sound: with none, a client warns of a missing sound for every bubble.
+const SILENCE: &str = "common/null.wav";
 
 impl Decoder {
     /// `show_annotation`: bubble `id` saying `text` at `at`, or following entity `follow`, for
@@ -24,7 +26,7 @@ impl Decoder {
             visibility_bit_field: u32::MAX,
             follow_ent_index: follow.unwrap_or(0),
             show_distance: false,
-            play_sound: "".into(),
+            play_sound: SILENCE.into(),
             show_effect: true,
         }))
     }

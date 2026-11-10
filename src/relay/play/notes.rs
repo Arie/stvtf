@@ -105,6 +105,7 @@ mod tests {
         assert_eq!((a.id, a.text.to_string(), a.follow_ent_index), (7, "lobby".into(), 0));
         assert_eq!([a.world_pos_x, a.world_pos_y, a.world_pos_z], [1.0, 2.0, 3.0]);
         assert!(a.lifetime < 0.0 && !a.show_distance, "for good, no distance");
+        assert_eq!(a.play_sound.to_string(), "common/null.wav", "a sound that is there, and silent");
         let on = Note { id: 8, text: "watch".into(), at: [0.0; 3], player: Some(player.id.0) };
         let GameEvent::ShowAnnotation(a) = event(&c.dec, &bubble(&c.dec, &on).unwrap()) else { panic!() };
         assert_eq!(a.follow_ent_index, player.ent);
