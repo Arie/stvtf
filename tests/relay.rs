@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{fixture, tables};
+use common::{fixture, has_players, tables};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -239,10 +239,6 @@ fn watch_until(w: &Watch, mut done: impl FnMut(&Line) -> bool) -> Vec<Line> {
     })
     .unwrap();
     lines
-}
-
-fn has_players(l: &Line) -> bool {
-    matches!(l, Line::Snapshot(s) if !s.players.is_empty())
 }
 
 /// `connect --relay`: a watch passing its server on. Its upstream here is another relay, so

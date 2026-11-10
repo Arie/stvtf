@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{dist, fixture, of, tables};
+use common::{dist, fixture, of, players_seen, tables};
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use stvtf::decode::Tables;
@@ -128,7 +128,7 @@ fn shots_are_attributed_to_the_shooter() {
 #[test]
 fn events_reference_known_players() {
     let ev = replay("bots_cp_badlands.cap");
-    let ids: HashSet<PlayerId> = of!(ev, Snapshot).flat_map(|s| s.players.iter().map(|p| p.id)).collect();
+    let ids = players_seen(ev);
     let kills: Vec<_> = of!(ev, Kill).collect();
     assert!(!kills.is_empty(), "no kills");
     for k in &kills {

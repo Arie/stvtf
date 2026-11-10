@@ -2,8 +2,9 @@
 
 #![allow(dead_code, reason = "each test uses part of this")]
 
+use std::collections::HashSet;
 use stvtf::decode::Tables;
-use stvtf::output::Position;
+use stvtf::output::{PlayerId, Position};
 use stvtf::{Line, Options, capture};
 
 pub const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -44,6 +45,15 @@ pub fn replay(name: &str, opt: &Options) -> Vec<Line> {
     let mut out = Vec::new();
     capture::replay(&capture::read(&bytes).unwrap(), &tables(), opt, &mut |l| out.push(l)).unwrap();
     out
+}
+
+/// The players of every snapshot in `lines`.
+pub fn players_seen(lines: &[Line]) -> HashSet<PlayerId> {
+    of!(lines, Snapshot).flat_map(|s| s.players.iter().map(|p| p.id)).collect()
+}
+
+pub fn has_players(l: &Line) -> bool {
+    matches!(l, Line::Snapshot(s) if !s.players.is_empty())
 }
 
 pub fn dist(a: Position, b: Position) -> f64 {

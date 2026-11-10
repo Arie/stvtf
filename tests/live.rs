@@ -13,6 +13,9 @@
 //! /home/tf2/hlserver/tf2, a map `ctf_turbine` and bash. Its own entrypoint is not run, and `SourceMod`
 //! is moved aside. `STVTF_LIVE_SOAK` sets the seconds of play to decode (60).
 
+mod common;
+
+use common::has_players;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -385,10 +388,6 @@ fn state(l: &Line) -> Option<String> {
 
 fn is_state(name: &str) -> impl Fn(&Line) -> bool + '_ {
     move |l| state(l).as_deref() == Some(name)
-}
-
-fn has_players(l: &Line) -> bool {
-    matches!(l, Line::Snapshot(s) if !s.players.is_empty())
 }
 
 fn offered(lines: &[Line]) -> Option<String> {

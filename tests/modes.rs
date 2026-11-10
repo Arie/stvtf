@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{dist, of};
+use common::{dist, of, players_seen};
 use std::sync::LazyLock;
 use stvtf::Line;
 use stvtf::output::{Objective, PlayerId, Position, Snapshot, Team};
@@ -154,14 +154,9 @@ fn mode_fields_only_where_the_mode_has_them() {
     assert!(rd.mvm.is_none() && rd.captures.is_some(), "robot destruction has flags (cores)");
 }
 
-/// Each player id in the lines named, for the ids that must be players of the match.
-fn known(lines: &[Line]) -> std::collections::HashSet<PlayerId> {
-    of!(lines, Snapshot).flat_map(|s| s.players.iter().map(|p| p.id)).collect()
-}
-
 #[test]
 fn pass_time_events_name_the_players_with_the_ball() {
-    let players = known(&PASS);
+    let players = players_seen(&PASS);
     let gets: Vec<_> = of!(PASS, PassGet).collect();
     assert_eq!(gets.len(), 8);
     for get in gets {
@@ -204,14 +199,14 @@ fn pass_time_goals_add_up_to_the_captures() {
 
 #[test]
 fn destruction_events_name_players_of_the_match() {
-    let players = known(&RD);
+    let players = players_seen(&RD);
     let killed: Vec<_> = of!(RD, RobotKilled).collect();
     assert_eq!(killed.len(), 2);
     assert!(killed.iter().all(|k| k.attacker.is_some_and(|a| players.contains(&a)) && !k.weapon.is_empty()));
     let scored: Vec<_> = of!(RD, PointsScored).collect();
     assert_eq!(scored.len(), 10);
     assert!(scored.iter().all(|s| players.contains(&s.player) && s.method != stvtf::output::ScoreMethod::Unknown));
-    let players = known(&PD);
+    let players = players_seen(&PD);
     let special: Vec<_> = of!(PD, SpecialScore).collect();
     assert!(special.len() == 2 && special.iter().all(|s| players.contains(&s.player)));
     assert_eq!(of!(PD, TeamLeaderKilled).count(), 1);
@@ -262,7 +257,7 @@ fn mvm_waves_list_their_robots() {
 
 #[test]
 fn mvm_has_revive_markers_money_and_upgrades() {
-    let players = known(&MVM);
+    let players = players_seen(&MVM);
     let objectives: Vec<&Objective> = of!(MVM, Snapshot).flat_map(|s| &s.objectives).collect();
     let owners: Vec<_> = objectives
         .iter()

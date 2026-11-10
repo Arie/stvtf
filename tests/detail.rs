@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::of;
+use common::{of, players_seen};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use stvtf::Line;
@@ -297,7 +297,7 @@ fn scoreboard_damage_adds_up_the_damage_events() {
 
 #[test]
 fn engineer_and_spy_events_name_players() {
-    let players: HashSet<PlayerId> = of!(EVENTS, Snapshot).flat_map(|s| s.players.iter().map(|p| p.id)).collect();
+    let players = players_seen(&EVENTS);
     let teleports: Vec<_> = of!(EVENTS, Teleported).collect();
     assert_eq!(teleports.len(), 2);
     assert!(teleports.iter().all(|t| players.contains(&t.player) && t.builder.is_some() && t.dist > 100.0));
@@ -368,7 +368,7 @@ fn a_kill_names_everyone_in_it_as_players() {
 /// Every event with a player names one the scoreboard knows of, on every kind of line.
 #[test]
 fn players_of_every_line_appear_in_the_match() {
-    let in_snapshots: HashSet<_> = of!(EVENTS, Snapshot).flat_map(|s| s.players.iter().map(|p| p.id)).collect();
+    let in_snapshots = players_seen(&EVENTS);
     let (mut named, mut known) = (0, 0);
     for line in EVENTS.iter() {
         for id in line.players() {
