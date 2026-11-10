@@ -34,6 +34,13 @@ to clients that can join any time.
 Tables of the build reported by the server are built in for known builds; pass --tables
 (any demo recorded on that build) for others. --crc overrides the CRC the tables give.";
 
+/// Where `relay` listens unless told: `SourceTV`'s default port.
+const DEFAULT_LISTEN: &str = "0.0.0.0:27020";
+/// A server's max players is a byte.
+const MAX_RELAY_SLOTS: usize = 255;
+/// The exit status for a command line that is not understood.
+const EXIT_USAGE: i32 = 2;
+
 /// Set by Ctrl-C, or when nobody reads the output any more.
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -126,7 +133,7 @@ impl Args {
 fn main() -> Result<()> {
     let Some(args) = parse_args(std::env::args().skip(1))? else {
         eprintln!("{USAGE}");
-        std::process::exit(2);
+        std::process::exit(EXIT_USAGE);
     };
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
@@ -172,7 +179,7 @@ fn main() -> Result<()> {
 }
 
 fn relay(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
-    let relay = Relay::bind(&relay_config(args, args.get("listen").unwrap_or("0.0.0.0:27020"))?)?;
+    let relay = Relay::bind(&relay_config(args, args.get("listen").unwrap_or(DEFAULT_LISTEN))?)?;
     watch::stop_on_ctrl_c(&STOP)?;
     let file = std::path::Path::new(&args.target);
     if file.is_file() && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("dem")) {
@@ -252,8 +259,8 @@ fn relay_config(args: &Args, listen: &str) -> Result<RelayConfig> {
     }
     if let Some(n) = args.get("relay-slots") {
         config.slots = n.parse().with_context(|| format!("--relay-slots {n}: not a number"))?;
-        if !(1..=255).contains(&config.slots) {
-            bail!("--relay-slots must be 1 to 255");
+        if !(1..=MAX_RELAY_SLOTS).contains(&config.slots) {
+            bail!("--relay-slots must be 1 to {MAX_RELAY_SLOTS}");
         }
     }
     Ok(config)
