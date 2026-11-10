@@ -402,16 +402,16 @@ impl Extractor {
             let v = as_int(&p.value);
             let st = self.stats.entry(ent).or_default();
             // The match totals going down is the match restarting (after the warm-up, say).
-            let total = |old: i64, restarted: &mut HashSet<u32>| {
-                if v < old {
+            let mut total = |old: &mut i64| {
+                if v < *old {
                     restarted.insert(ent);
                 }
-                v
+                *old = v;
             };
             match table.as_str() {
-                "m_iTotalScore" => st.points = total(st.points, &mut restarted),
-                "m_iScore" => st.kills = total(st.kills, &mut restarted),
-                "m_iDeaths" => st.deaths = total(st.deaths, &mut restarted),
+                "m_iTotalScore" => total(&mut st.points),
+                "m_iScore" => total(&mut st.kills),
+                "m_iDeaths" => total(&mut st.deaths),
                 "m_iActiveDominations" => st.dominations = v,
                 "m_iStreaks" => st.streak = v,
                 "m_flNextRespawnTime" => st.respawn_at = as_float(&p.value),
