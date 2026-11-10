@@ -75,8 +75,7 @@ pub fn relay_hub(data: &[u8]) {
     bench.service();
 }
 
-static TABLES: LazyLock<Tables> =
-    LazyLock::new(|| Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap());
+static TABLES: LazyLock<Tables> = LazyLock::new(|| crate::watch::tables(crate::CURRENT_BUILD, None).unwrap());
 
 /// Message streams into a new decoder, as they come out of a channel.
 pub fn decoder(data: &[u8]) {

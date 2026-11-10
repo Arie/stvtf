@@ -4,7 +4,7 @@
 //! the same two values give the same inputs again.
 
 use crate::capture;
-use crate::decode::{self, Decoder, Tables};
+use crate::decode::{self, Decoder};
 use crate::net::compress;
 use crate::net::handshake::{parse_a2s_version, parse_challenge, parse_from_client};
 use crate::net::netchan::{self, Kind};
@@ -67,10 +67,6 @@ impl Rng {
             _ => data.truncate(self.below(data.len())),
         }
     }
-}
-
-fn tables() -> Tables {
-    Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap()
 }
 
 /// The prefix a packet needs to get past the first check of each parser, to reach the next ones.
@@ -150,7 +146,7 @@ fn captures_never_panic() {
 
 #[test]
 fn garbage_for_the_decoder_never_panics_the_process() {
-    let tables = tables();
+    let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
     let mut rng = Rng::seeded(5);
     for _ in 0..rounds(40) {
         let mut dec = Decoder::new(&tables, 20.0).unwrap();
@@ -165,7 +161,7 @@ fn garbage_for_the_decoder_never_panics_the_process() {
 /// each change, or the receiver would drop the packet before anything interesting.
 #[test]
 fn corrupted_sessions_never_panic_the_process() {
-    let tables = tables();
+    let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
     let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
     let records = capture::read(&bytes).unwrap();
     let mut sessions = records.iter().filter(|r| r.kind == capture::Kind::Session as u8);

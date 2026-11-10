@@ -719,16 +719,14 @@ mod tests {
         assert_eq!(s.ack_tick(), 0);
     }
 
-    fn tables() -> crate::decode::Tables {
-        crate::decode::Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap()
-    }
-
     #[test]
     fn a_failing_source_ends_the_session_saying_why() {
         let opt = Options::default();
         let mut s = Session::new(None, 0, &opt);
         let mut next = |_: &mut [u8]| Ok(Next::Failed("socket error: gone".to_string()));
-        let outcome = drive(&mut s, &tables(), None, &mut next, &mut |_| {}).unwrap();
+        let outcome =
+            drive(&mut s, &crate::watch::tables(crate::CURRENT_BUILD, None).unwrap(), None, &mut next, &mut |_| {})
+                .unwrap();
         assert!(matches!(outcome.end, End::Broken(b) if b.reason == "socket error: gone" && !b.streamed));
     }
 
@@ -740,7 +738,7 @@ mod tests {
         let records = crate::capture::read(&bytes).unwrap();
         let challenge = records[0].challenge().unwrap();
         let datagrams: Vec<&[u8]> = records[1..].iter().map(|r| r.data).take(200).collect();
-        let tables = tables();
+        let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
         let opt = Options::default();
         let mut whole = Vec::new();
         replay(challenge, &datagrams, &tables, &opt, &mut |l| whole.push(l)).unwrap();

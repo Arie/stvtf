@@ -4,7 +4,7 @@
 //! capture's full update. Ticks go back with it, which is how a test sees that it came.
 
 use crate::capture;
-use crate::decode::{Decoder, Tables};
+use crate::decode::Decoder;
 use crate::net::compress;
 use crate::net::handshake::{self, FromClient};
 use crate::net::netchan::{self, Kind};
@@ -65,7 +65,7 @@ impl Recording {
             packets.push(d);
         }
 
-        let tables = tables();
+        let tables = watch::tables(crate::CURRENT_BUILD, None).unwrap();
         let mut decoder = Decoder::new(&tables, 0.0).unwrap();
         let mut rx = Receiver::new(Some(challenge));
         let complete = packets
@@ -81,10 +81,6 @@ impl Recording {
         assert!(complete - full_update > 1, "a transfer of several packets");
         Recording { challenge, packets, full_update }
     }
-}
-
-fn tables() -> Tables {
-    Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap()
 }
 
 /// A server playing a recording, which goes back to its full update when asked for one.
