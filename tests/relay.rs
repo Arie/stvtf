@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{A2S_INFO, LIMIT, OOB, fixture, has_players, tables, wait_for};
+use common::{A2S_INFO, LIMIT, OOB, fixture, has_players, offered_build, tables, wait_for};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -86,10 +86,7 @@ fn through_relay(records: &[capture::Record<'_>], opt: &Options, speed: f64) -> 
         relay_stop.store(true, Ordering::Relaxed);
         (replaying.join().unwrap(), out)
     });
-    let connecting = lines.iter().find_map(|l| match l {
-        Line::Status(Status::Connecting { build, .. }) => Some(build.as_str()),
-        _ => None,
-    });
+    let connecting = offered_build(&lines);
     let failed = if let Err(e) = replay_result {
         Some(format!("the relay failed: {e:#}"))
     } else if let Err(e) = watch_result {

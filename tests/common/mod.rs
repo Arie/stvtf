@@ -7,7 +7,7 @@ use std::io::Read;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use stvtf::decode::Tables;
-use stvtf::output::{PlayerId, Position};
+use stvtf::output::{PlayerId, Position, Status};
 use stvtf::{Line, Options, capture};
 
 pub const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -92,6 +92,14 @@ pub fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
         assert!(Instant::now() < until, "{what} did not happen");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// The build a watch offered when it connected.
+pub fn offered_build(lines: &[Line]) -> Option<&str> {
+    lines.iter().find_map(|l| match l {
+        Line::Status(Status::Connecting { build, .. }) => Some(build.as_str()),
+        _ => None,
+    })
 }
 
 /// A `SourceTV`'s answer to a challenge request with `nonce`.

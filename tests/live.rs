@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{A2S_INFO, has_players, stvtf};
+use common::{A2S_INFO, has_players, offered_build, stvtf};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -383,13 +383,6 @@ fn is_state(name: &str) -> impl Fn(&Line) -> bool + '_ {
     move |l| state(l).as_deref() == Some(name)
 }
 
-fn offered(lines: &[Line]) -> Option<String> {
-    lines.iter().find_map(|l| match l {
-        Line::Status(Status::Connecting { build, .. }) => Some(build.clone()),
-        _ => None,
-    })
-}
-
 fn snapshot_tick(l: &Line) -> Option<u32> {
     match l {
         Line::Snapshot(s) => Some(s.tick),
@@ -410,8 +403,8 @@ fn secs(d: Duration) -> String {
 
 fn direct(server: &Server, checks: &mut Checks) {
     let ran = run(&["connect", &server.tv, "--hz", "5", "--seconds", "12"], WAIT);
-    let build = offered(&ran.lines);
-    checks.check("offers the build the server reports", build.as_deref() == Some(&server.build), format!("{build:?}"));
+    let build = offered_build(&ran.lines);
+    checks.check("offers the build the server reports", build == Some(&server.build), format!("{build:?}"));
     let players: Vec<&Line> = ran.lines.iter().filter(|l| has_players(l)).collect();
     checks.check("a watch gets entities", !players.is_empty(), format!("{} snapshots", players.len()));
     let undecoded = ran.lines.iter().rev().find_map(goodbye).map(|g| g.decode_errors);
@@ -442,8 +435,9 @@ fn why_undecoded(c: &Proc) -> String {
 fn relay_clients(server: &Server, relay: &Proc, checks: &mut Checks) -> Vec<Proc> {
     let a = client(RELAY_PORT);
     checks.check("a client of a relay gets entities", a.wait_line(Instant::now(), WAIT, has_players).is_some(), "");
-    let build = offered(&a.lines().into_iter().map(|(_, l)| l).collect::<Vec<_>>());
-    let ok = build.as_deref() == Some(&server.build);
+    let lines: Vec<Line> = a.lines().into_iter().map(|(_, l)| l).collect();
+    let build = offered_build(&lines);
+    let ok = build == Some(&server.build);
     checks.check("  and is offered the server's build by the relay", ok, format!("{build:?}"));
     std::thread::sleep(Duration::from_secs(3));
 
