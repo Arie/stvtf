@@ -215,32 +215,33 @@ impl Decoder {
 
     /// The server tick message stream `data` is of (its `net_Tick`), read, not decoded into anything.
     pub(crate) fn frame_tick(&self, data: &[u8]) -> Option<u32> {
-        let state = self.handler.get_parser_state();
-        let mut stream = BitReadStream::new(BitReadBuffer::new(data, LittleEndian));
-        while stream.bits_left() > TYPE_BITS {
-            let t = MessageType::read(&mut stream).ok()?;
-            if t == MessageType::NetTick {
-                return tf_demo_parser::demo::message::NetTickMessage::read(&mut stream)
-                    .ok()
-                    .map(|m| u32::from(m.tick));
-            }
-            Message::skip_type(t, &mut stream, state).ok()?;
-        }
-        None
+        self.find_message(data, MessageType::NetTick, |stream, _| {
+            tf_demo_parser::demo::message::NetTickMessage::read(stream).ok().map(|m| u32::from(m.tick))
+        })
     }
 
     /// The server tick of the frame the entities in message stream `data` build on, if they are a
     /// delta; it is read, not decoded into anything.
     fn delta_base(&self, data: &[u8]) -> Option<u32> {
+        self.find_message(data, MessageType::PacketEntities, |stream, state| {
+            let pe = tf_demo_parser::demo::message::packetentities::PacketEntitiesMessage::parse(stream, state).ok()?;
+            pe.delta.map(u32::from)
+        })
+    }
+
+    /// `read` of the first message of type `kind` in message stream `data`, the ones before it skipped.
+    fn find_message<T>(
+        &self,
+        data: &[u8],
+        kind: MessageType,
+        read: impl FnOnce(&mut BitReadStream<'_, LittleEndian>, &tf_demo_parser::ParserState) -> Option<T>,
+    ) -> Option<T> {
         let state = self.handler.get_parser_state();
         let mut stream = BitReadStream::new(BitReadBuffer::new(data, LittleEndian));
         while stream.bits_left() > TYPE_BITS {
             let t = MessageType::read(&mut stream).ok()?;
-            if t == MessageType::PacketEntities {
-                let pe =
-                    tf_demo_parser::demo::message::packetentities::PacketEntitiesMessage::parse(&mut stream, state)
-                        .ok()?;
-                return pe.delta.map(u32::from);
+            if t == kind {
+                return read(&mut stream, state);
             }
             Message::skip_type(t, &mut stream, state).ok()?;
         }
