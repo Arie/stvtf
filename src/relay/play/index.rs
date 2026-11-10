@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn relays_on_one_demo_share_its_index() {
-        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ctf_turbine.dem"));
+        let path = crate::fixture("ctf_turbine.dem");
         let a = Index::shared(&path);
         let b = Index::shared(&path);
         assert!(Arc::ptr_eq(&a, &b));
@@ -208,7 +208,7 @@ mod tests {
     fn a_cursor_from_a_checkpoint_reads_on_as_one_from_the_start() {
         let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
         let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
-        let demo = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
+        let demo = crate::fixture("pl_upward.dem");
         for path in [demo, live] {
             let index =
                 Arc::new(Index { path: path.clone(), marks: Mutex::new(Vec::new()), stop: AtomicBool::new(false) });

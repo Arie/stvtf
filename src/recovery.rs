@@ -45,7 +45,7 @@ struct Recording {
 
 impl Recording {
     fn read() -> Self {
-        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bots_cp_badlands.cap")).unwrap();
+        let bytes = std::fs::read(crate::fixture("bots_cp_badlands.cap")).unwrap();
         let records = capture::read(&bytes).unwrap();
         let challenge = records[0].challenge().unwrap();
         let now = Instant::now();

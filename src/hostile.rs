@@ -13,8 +13,6 @@ use crate::output::{Line, Status};
 use crate::session::{self, Options};
 use std::time::Instant;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-
 fn rounds(default: u64) -> u64 {
     default * std::env::var("STVTF_FUZZ_ROUNDS").ok().and_then(|r| r.parse().ok()).unwrap_or(1)
 }
@@ -122,7 +120,7 @@ fn sealed_garbage_never_panics() {
 #[test]
 fn captures_never_panic() {
     let mut rng = Rng::seeded(4);
-    let real = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
+    let real = std::fs::read(crate::fixture("bots_cp_badlands.cap")).unwrap();
     let real = &real[..real.len().min(4096)];
     for _ in 0..rounds(5_000) {
         let mut data = real.to_vec();
@@ -152,7 +150,7 @@ fn garbage_for_the_decoder_never_panics_the_process() {
 #[test]
 fn corrupted_sessions_never_panic_the_process() {
     let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
-    let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
+    let bytes = std::fs::read(crate::fixture("bots_cp_badlands.cap")).unwrap();
     let records = capture::read(&bytes).unwrap();
     let mut sessions = records.iter().filter(|r| r.kind == capture::Kind::Session as u8);
     let challenge = sessions.next().unwrap().challenge().unwrap();
@@ -188,7 +186,7 @@ fn corrupted_sessions_never_panic_the_process() {
 
 #[test]
 fn corrupted_demos_never_panic() {
-    let real = std::fs::read(format!("{FIXTURES}/tc_hydro.dem")).unwrap();
+    let real = std::fs::read(crate::fixture("tc_hydro.dem")).unwrap();
     // Well past the header and data tables, into the packets.
     let real = &real[..real.len().min(1 << 20)];
     let mut rng = Rng::seeded(6);

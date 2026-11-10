@@ -659,8 +659,7 @@ mod tests {
     #[test]
     fn the_crc_is_the_engines() {
         assert_eq!(tables().sendtable_crc(), 0x5FCD_4733);
-        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem");
-        let full_demo = Tables::from_demo(std::path::Path::new(fixture)).unwrap();
+        let full_demo = Tables::from_demo(&crate::fixture("pl_upward.dem")).unwrap();
         assert_eq!(full_demo.sendtable_crc(), 0x5FCD_4733, "any demo of the build");
     }
 
@@ -715,8 +714,7 @@ mod tests {
     fn a_delta_before_the_first_full_update_asks_for_nothing() {
         use crate::net::netchan::{self, Kind};
         use crate::net::receiver::Receiver;
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/delta_before_full_update.cap");
-        let bytes = std::fs::read(path).unwrap();
+        let bytes = std::fs::read(crate::fixture("delta_before_full_update.cap")).unwrap();
         let records = crate::capture::read(&bytes).unwrap();
         let challenge = records[0].challenge().unwrap();
         let tables = tables();
@@ -786,12 +784,11 @@ mod keyframe_tests {
 
     #[test]
     fn a_decoder_started_from_a_keyframe_follows_as_one_from_the_start() {
-        let fixture = |name: &str| format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
         // A live session recorded as a demo too: its deltas build on frames a few ticks back.
         let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
         let recorded = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
         let demos = ["pl_upward.dem", "ctf_turbine.dem", "pd_watergate.dem", "sd_doomsday.dem"]
-            .map(fixture)
+            .map(|name| crate::fixture(name).display().to_string())
             .into_iter()
             .chain([recorded.display().to_string()]);
         for demo in demos {

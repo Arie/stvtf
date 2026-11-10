@@ -788,7 +788,7 @@ mod tests {
 
     /// `pl_upward.dem` decoded until `done`.
     fn upward_until(done: impl Fn(&Cursor) -> bool) -> Cursor {
-        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
+        let path = crate::fixture("pl_upward.dem");
         let mut c = Cursor::open_with(&path, None).unwrap();
         while !done(&c) {
             match c.next_tick() {
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
-        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
+        let path = crate::fixture("pl_upward.dem");
         let mut c = Cursor::open_with(&path, None).unwrap();
         let mut cues = 0;
         // Ten seconds in, with the players there.

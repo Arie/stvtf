@@ -43,6 +43,12 @@ const BUILDS: &[(&str, &[u8])] = &[
 // add_build: tables
 const TABLES_11138802: &[u8] = include_bytes!("../assets/tables_11138802.dem");
 
+/// A file in `tests/fixtures`.
+#[cfg(test)]
+fn fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")).join(name)
+}
+
 /// Compiled-in data for one TF2 server build.
 #[derive(Debug, Clone, Copy)]
 pub struct Build {

@@ -328,13 +328,9 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    pub(super) fn fixture(name: &str) -> Vec<u8> {
-        std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
-    }
-
     #[test]
     fn a_demo_reads_as_its_packets() {
-        let bytes = fixture("pl_upward.dem");
+        let bytes = std::fs::read(crate::fixture("pl_upward.dem")).unwrap();
         let mut r = Reader::new(Cursor::new(&bytes)).unwrap();
         assert_eq!(r.header.map, "pl_upward_f12");
         let (mut signon, mut messages, mut tables) = (0, 0, 0);
@@ -353,7 +349,7 @@ mod tests {
 
     #[test]
     fn a_demo_cut_short_waits_for_the_rest() {
-        let bytes = fixture("pl_upward.dem");
+        let bytes = std::fs::read(crate::fixture("pl_upward.dem")).unwrap();
         // Cut a little way into the tenth packet.
         let mut whole = Reader::new(Cursor::new(&bytes)).unwrap();
         for _ in 0..9 {
