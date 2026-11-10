@@ -38,9 +38,8 @@ impl Extractor {
         objectives.extend(self.carts());
         objectives.extend(self.flag_objectives());
         objectives.extend(self.modes.objectives(&player_at));
-        let team_score =
-            |team: Team| self.ents.teams.values().find(|t| t.team == team as u8).copied().unwrap_or_default();
-        let (red, blue) = (team_score(Team::Red), team_score(Team::Blue));
+        let team_score = |team| self.ents.teams.values().find(|t| t.team == team).copied().unwrap_or_default();
+        let (red, blue) = (team_score(TEAM_RED), team_score(TEAM_BLUE));
         out::Snapshot {
             tick: self.server_tick,
             players: self.state().players.iter().filter_map(|p| self.player(p)).collect(),
