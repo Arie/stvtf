@@ -38,11 +38,13 @@ const JUMP: Duration = Duration::from_secs(1);
 const NOT_A_FRAME: i64 = i64::MIN;
 /// How long the player waits for a frame that is not due, or not written yet.
 const NAP: Duration = Duration::from_millis(5);
+/// How long the player waits for a client while nobody is in.
+const IDLE_NAP: Duration = Duration::from_millis(20);
 /// With nobody in for this long, the decoded demo is dropped.
 const IDLE: Duration = Duration::from_secs(60);
 /// Frames kept that a keyframe's client may need: those since the frame the next one builds on.
 const RECENT: usize = 128;
-/// How long the player waits after an error before trying the demo again.
+/// How long the player waits after an error, or a demo it cannot open, before trying it again.
 const RETRY: Duration = Duration::from_millis(200);
 /// How often the camera cue is repeated, for clients that looked away.
 const CUE_EVERY: Duration = Duration::from_secs(3);
@@ -432,7 +434,7 @@ impl Player<'_> {
     fn run(mut self, playback: &Playback, stop: &AtomicBool) {
         while !stop.load(Ordering::Relaxed) {
             if !self.anyone_in() {
-                std::thread::sleep(NAP * 4);
+                std::thread::sleep(IDLE_NAP);
                 continue;
             }
             let want = playback.get();
@@ -455,7 +457,7 @@ impl Player<'_> {
                         // Not written yet, or not playable: try again in a while.
                         trace!("cannot play {}: {e:#}", want.demo.display());
                         playback.set_problem(Some(format!("{e:#}")));
-                        std::thread::sleep(NAP * 40);
+                        std::thread::sleep(RETRY);
                         continue;
                     }
                 }
@@ -547,7 +549,7 @@ impl Player<'_> {
             self.dry = false;
         }
         self.last_target = Some(target);
-        if *super::TRACE && self.traced.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
+        if *super::TRACE && self.traced.is_none_or(|t| t.elapsed() >= super::TRACE_EVERY) {
             self.traced = Some(Instant::now());
             trace!("playing tick {}, wanted {target}, paused {}, speed {}", c.tick(), want.paused, want.speed);
         }
