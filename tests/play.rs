@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{LIMIT, fixture, wait_for};
+use common::{LIMIT, SECOND, TICK, fixture, wait_for};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,6 +38,9 @@ fn places(s: &Snapshot) -> BTreeMap<u16, (String, [f64; 3])> {
 fn want(tick: u32, paused: bool, from_start: bool) -> Want {
     Want { demo: PathBuf::from(fixture(DEMO)), tick, at: Instant::now(), paused, speed: 4.0, from_start, camera: None }
 }
+
+/// A second's snapshots: the client takes every frame.
+const FRAMES_A_SECOND: usize = SECOND as usize;
 
 /// What one client got, with when.
 type Seen = Arc<Mutex<Vec<(Instant, Line)>>>;
@@ -122,7 +125,7 @@ fn a_client_joins_a_playing_demo_where_it_is() {
     let playback = Playback::new(want(0, false, true));
     // The demo plays on before anyone is in: 1.5 s at 4x is 6 s into it.
     let got = watching(&playback, Duration::from_millis(1500), |seen| {
-        wait_for("a second of the demo", || snapshots(seen).len() > 66);
+        wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
         // The round started before it joined: it is told, so a win panel from before goes.
         let lines = seen.lock().unwrap();
         assert!(lines.iter().any(|(_, l)| matches!(l, Line::RoundStart(_))), "the round's start");
@@ -130,7 +133,7 @@ fn a_client_joins_a_playing_demo_where_it_is() {
         snapshots(seen)
     });
     let start = got[0].1.tick;
-    let into = f64::from(start - first) * 0.015;
+    let into = f64::from(start - first) * TICK;
     assert!((5.0..12.0).contains(&into), "the client started {into:.1} s into the demo");
     assert_as_the_demo(&got, &demo);
 }
@@ -139,14 +142,14 @@ fn a_client_joins_a_playing_demo_where_it_is() {
 fn a_client_follows_a_jump_back_and_a_pause() {
     let demo = demo_snapshots();
     let first = *demo.keys().next().unwrap();
-    let playback = Playback::new(want(first + 20 * 66, false, false));
+    let playback = Playback::new(want(first + 20 * SECOND, false, false));
     let got = watching(&playback, Duration::ZERO, |seen| {
-        wait_for("a second of the demo", || snapshots(seen).len() > 66);
+        wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
         // Back to 5 s in.
-        playback.set(want(first + 5 * 66, false, false));
+        playback.set(want(first + 5 * SECOND, false, false));
         let jumped = Instant::now();
-        wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick < first + 10 * 66));
-        wait_for("a second after the jump", || since(seen, jumped).len() > 66);
+        wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick < first + 10 * SECOND));
+        wait_for("a second after the jump", || since(seen, jumped).len() > FRAMES_A_SECOND);
         // Paused where it is: nothing new comes.
         let at = snapshots(seen).last().unwrap().1.tick;
         playback.set(want(at, true, false));
@@ -163,7 +166,7 @@ fn a_client_follows_a_jump_back_and_a_pause() {
         drop(lines);
         snapshots(seen)
     });
-    assert!(got[0].1.tick >= first + 19 * 66, "the client started at tick {}", got[0].1.tick);
+    assert!(got[0].1.tick >= first + 19 * SECOND, "the client started at tick {}", got[0].1.tick);
     assert_as_the_demo(&got, &demo);
 }
 
@@ -172,7 +175,7 @@ fn at_the_end_of_a_demo_playback_rests() {
     let demo = demo_snapshots();
     let last = *demo.keys().next_back().unwrap();
     // Two seconds before the end at 4x: half a second of frames, then the end.
-    let playback = Playback::new(want(last - 2 * 66, false, false));
+    let playback = Playback::new(want(last - 2 * SECOND, false, false));
     watching(&playback, Duration::ZERO, |seen| {
         wait_for("the last frame", || snapshots(seen).iter().any(|(_, s)| s.tick == last));
         // Nothing more: no full update over and over once past the end.
@@ -187,17 +190,20 @@ fn at_the_end_of_a_demo_playback_rests() {
 fn a_client_follows_a_jump_ahead() {
     let demo = demo_snapshots();
     let first = *demo.keys().next().unwrap();
-    let playback = Playback::new(want(first + 5 * 66, false, false));
+    let playback = Playback::new(want(first + 5 * SECOND, false, false));
     let got = watching(&playback, Duration::ZERO, |seen| {
-        wait_for("a second of the demo", || snapshots(seen).len() > 66);
+        wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
         let before = snapshots(seen).iter().map(|(_, s)| s.tick).max().unwrap();
-        playback.set(want(first + 100 * 66, false, false));
+        playback.set(want(first + 100 * SECOND, false, false));
         let jumped = Instant::now();
-        wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick >= first + 100 * 66));
-        wait_for("a second after it", || since(seen, jumped).len() > 66);
+        wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick >= first + 100 * SECOND));
+        wait_for("a second after it", || since(seen, jumped).len() > FRAMES_A_SECOND);
         // Frames on their way when it jumped aside, nothing between there and the moment wanted.
-        let between: Vec<u32> =
-            since(seen, jumped).iter().map(|s| s.tick).filter(|t| *t > before + 66 && *t < first + 100 * 66).collect();
+        let between: Vec<u32> = since(seen, jumped)
+            .iter()
+            .map(|s| s.tick)
+            .filter(|t| *t > before + SECOND && *t < first + 100 * SECOND)
+            .collect();
         assert!(between.is_empty(), "nothing in between: {:?}", &between[..between.len().min(20)]);
         snapshots(seen)
     });
@@ -208,18 +214,18 @@ fn a_client_follows_a_jump_ahead() {
 fn a_client_joining_while_paused_sees_the_moment_and_waits() {
     let demo = demo_snapshots();
     let first = *demo.keys().next().unwrap();
-    let at = first + 30 * 66;
+    let at = first + 30 * SECOND;
     let playback = Playback::new(want(at, true, false));
     watching(&playback, Duration::ZERO, |seen| {
         wait_for("the paused moment", || !snapshots(seen).is_empty());
         let start = snapshots(seen)[0].1.tick;
-        assert!(start.abs_diff(at) < 66, "joined at {start}, paused at {at}");
+        assert!(start.abs_diff(at) < SECOND, "joined at {start}, paused at {at}");
         let waited = Instant::now();
         std::thread::sleep(Duration::from_millis(800));
         assert!(since(seen, waited).iter().all(|s| s.tick == start), "frames while paused");
         playback.set(want(start, false, false));
         let resumed = Instant::now();
-        wait_for("playback going on", || since(seen, resumed).iter().any(|s| s.tick > start + 66));
+        wait_for("playback going on", || since(seen, resumed).iter().any(|s| s.tick > start + SECOND));
     });
 }
 
@@ -228,10 +234,10 @@ fn a_jump_back_before_the_first_round_start_still_gets_one() {
     let demo = demo_snapshots();
     let first = *demo.keys().next().unwrap();
     // The demo's round starts 5 s in.
-    let round = first + 5 * 66;
-    let playback = Playback::new(want(first + 20 * 66, false, false));
+    let round = first + 5 * SECOND;
+    let playback = Playback::new(want(first + 20 * SECOND, false, false));
     watching(&playback, Duration::ZERO, |seen| {
-        wait_for("a second of the demo", || snapshots(seen).len() > 66);
+        wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
         // A win panel up there would stay, without one of our own.
         let jumped = Instant::now();
         playback.set(want(first, false, false));

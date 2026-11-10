@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{dist, of};
+use common::{SECOND, TICK, dist, of};
 use std::sync::LazyLock;
 use stvtf::Line;
 use stvtf::output::{Objective, Position, Round, Snapshot, StopwatchState, Team};
@@ -120,10 +120,10 @@ fn stopwatch_time_is_set_at_the_first_capture() {
         assert_eq!((sw.attackers, sw.setting, sw.paused), (Team::Blue, true, true), "tick {}", s.tick);
         if s.tick + 10 < cap {
             assert_eq!((sw.state, sw.time), (StopwatchState::Unset, 0.0), "tick {}", s.tick);
-        } else if s.tick > cap + 66 {
+        } else if s.tick > cap + SECOND {
             // The team's score, the points, comes a moment after the capture.
             assert_eq!((sw.state, sw.points), (StopwatchState::Running, 1), "tick {}", s.tick);
-            let push = f64::from(cap - setup_end) * 0.015;
+            let push = f64::from(cap - setup_end) * TICK;
             assert!((sw.time - push).abs() < 1.0, "time set {} for a push of {push}", sw.time);
         }
     }

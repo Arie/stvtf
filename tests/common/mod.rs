@@ -10,6 +10,10 @@ use stvtf::output::{PlayerId, Position};
 use stvtf::{Line, Options, capture};
 
 pub const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+/// A second, in ticks: TF2 runs 66 a second, near enough.
+pub const SECOND: u32 = 66;
+/// A tick, in seconds.
+pub const TICK: f64 = 0.015;
 /// A bound on what should take moments.
 pub const LIMIT: Duration = Duration::from_secs(30);
 
