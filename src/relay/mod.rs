@@ -221,7 +221,7 @@ impl Client {
 
 /// Everything the upstream and client threads share.
 struct Hub {
-    sock: UdpSocket,
+    out: Out,
     password: String,
     slots: usize,
     /// Keys the challenge of each address, so none need be stored before it connects.
@@ -239,7 +239,6 @@ struct Hub {
     keyframe: Option<Vec<BitBuf>>,
     map: String,
     build: String,
-    split_group: i32,
     seen_client: bool,
     /// When the last full update came, to space out asking for more.
     last_full: Option<Instant>,
@@ -260,7 +259,7 @@ enum Mode {
 impl Hub {
     fn new(sock: UdpSocket, config: &RelayConfig) -> Self {
         Hub {
-            sock,
+            out: Out { sock, split_group: 0 },
             password: config.password.clone(),
             slots: config.slots.min(MAX_SLOTS),
             challenge_key: RandomState::new(),
@@ -273,7 +272,6 @@ impl Hub {
             keyframe: None,
             map: String::new(),
             build: crate::CURRENT_BUILD.to_string(),
-            split_group: 0,
             seen_client: false,
             last_full: None,
             mode: Mode::Live,
@@ -452,9 +450,9 @@ impl Hub {
                 trace!("{addr} gets a keyframe of {} bits", key.nbits());
                 c.set_phase(Phase::Active, now);
                 c.queue.push(pause.clone());
-                send(&self.sock, &mut self.split_group, *addr, c, Some(key), true, now);
+                self.out.send(*addr, c, Some(key), true, now);
                 for f in since {
-                    send(&self.sock, &mut self.split_group, *addr, c, Some(f), true, now);
+                    self.out.send(*addr, c, Some(f), true, now);
                 }
             }
         }
@@ -474,7 +472,7 @@ impl Hub {
     fn tell_active_now(&mut self, msg: &BitBuf) {
         let now = Instant::now();
         for (addr, c) in self.clients.iter_mut().filter(|(_, c)| c.phase == Phase::Active) {
-            send(&self.sock, &mut self.split_group, *addr, c, Some(msg), false, now);
+            self.out.send(*addr, c, Some(msg), false, now);
         }
     }
 
@@ -520,9 +518,9 @@ impl Hub {
             if c.phase == Phase::Active {
                 // One packet per server datagram, as the server sends: a packet of our own
                 // would show in a client's net_graph as one without entities.
-                send(&self.sock, &mut self.split_group, *addr, c, tail.as_ref(), true, now);
+                self.out.send(*addr, c, tail.as_ref(), true, now);
             } else {
-                burst(&self.sock, &mut self.split_group, *addr, c, false, now);
+                self.out.burst(*addr, c, false, now);
             }
         }
     }
@@ -539,7 +537,7 @@ impl Hub {
                 c.queue.push(set_pause(paused));
             }
             for t in frames {
-                send(&self.sock, &mut self.split_group, addr, c, Some(t), false, now);
+                self.out.send(addr, c, Some(t), false, now);
             }
         } else {
             trace!("{addr} waits for a full update");
@@ -591,7 +589,7 @@ impl Hub {
         // An active client hears from us with the next server datagram. During signon its acks
         // free subchannels for more of the transfer, and its reliable data is acked at once.
         if c.phase != Phase::Active {
-            burst(&self.sock, &mut self.split_group, from, c, pkt.header.reliable(), now);
+            self.out.burst(from, c, pkt.header.reliable(), now);
         }
         if ready {
             self.wants_entities(from, now);
@@ -647,7 +645,7 @@ impl Hub {
             Some(FromClient::Info { .. }) => handshake::build_info_challenge(expected),
             None => return,
         };
-        let _ = self.sock.send_to(&reply, from);
+        let _ = self.out.sock.send_to(&reply, from);
     }
 
     /// Resends, keepalives and timeouts.
@@ -668,10 +666,10 @@ impl Hub {
             let keepalive = now.duration_since(c.last_sent) > KEEPALIVE;
             if c.phase == Phase::Active {
                 if keepalive {
-                    send(&self.sock, &mut self.split_group, *addr, c, None, true, now);
+                    self.out.send(*addr, c, None, true, now);
                 }
             } else {
-                burst(&self.sock, &mut self.split_group, *addr, c, keepalive, now);
+                self.out.burst(*addr, c, keepalive, now);
             }
         }
         if *TRACE && now.duration_since(self.traced) > TRACE_EVERY {
@@ -692,7 +690,7 @@ impl Hub {
         let now = Instant::now();
         for (addr, c) in &mut self.clients {
             for _ in 0..2 {
-                send(&self.sock, &mut self.split_group, *addr, c, Some(&bye), true, now);
+                self.out.send(*addr, c, Some(&bye), true, now);
             }
         }
         self.clients.clear();
@@ -749,59 +747,59 @@ fn set_pause(paused: bool) -> BitBuf {
     w.finish()
 }
 
-/// Sends a client a packet: `tail` and a transfer block if one can go, or nothing when neither
-/// is there and `always` is not set. Whether it sent one.
-fn send(
-    sock: &UdpSocket,
-    split_group: &mut i32,
-    addr: SocketAddr,
-    c: &mut Client,
-    tail: Option<&BitBuf>,
-    always: bool,
-    now: Instant,
-) -> bool {
-    let region = c.next_region(c.out_seq);
-    if region.is_none() && tail.is_none() && !always {
-        return false;
-    }
-    if tail.is_some() {
-        c.sent_with_tail += 1;
-    } else {
-        c.sent_bare += 1;
-    }
-    let header = OutHeader {
-        sequence: c.out_seq,
-        ack: c.rx.in_seq,
-        challenge: c.challenge,
-        reliable_state: c.in_reliable_state,
-    };
-    c.out_seq += 1;
-    c.last_sent = now;
-    let mut pkt = netchan::build_packet(&header, region.as_ref(), tail);
-    if pkt.len() > split::SPLIT_SIZE {
-        pkt = compress::compress_datagram(&pkt);
-    }
-    // A send error is a client gone or unreachable: its timeout drops it.
-    if pkt.len() > split::SPLIT_SIZE {
-        *split_group = split_group.wrapping_add(1);
-        for part in split::split(&pkt, *split_group) {
-            let _ = sock.send_to(&part, addr);
-        }
-    } else {
-        let _ = sock.send_to(&pkt, addr);
-    }
-    true
+/// The socket the clients are sent from, and the id of the last split packet sent on it.
+struct Out {
+    sock: UdpSocket,
+    split_group: i32,
 }
 
-/// Sends a client every transfer block that can go now, one packet each; at least one packet
-/// when `always` is set.
-fn burst(sock: &UdpSocket, split_group: &mut i32, addr: SocketAddr, c: &mut Client, always: bool, now: Instant) {
-    let mut always = always;
-    for _ in 0..SUBCHANNELS {
-        if !send(sock, split_group, addr, c, None, always, now) {
-            break;
+impl Out {
+    /// Sends a client a packet: `tail` and a transfer block if one can go, or nothing when
+    /// neither is there and `always` is not set. Whether it sent one.
+    fn send(&mut self, addr: SocketAddr, c: &mut Client, tail: Option<&BitBuf>, always: bool, now: Instant) -> bool {
+        let region = c.next_region(c.out_seq);
+        if region.is_none() && tail.is_none() && !always {
+            return false;
         }
-        always = false;
+        if tail.is_some() {
+            c.sent_with_tail += 1;
+        } else {
+            c.sent_bare += 1;
+        }
+        let header = OutHeader {
+            sequence: c.out_seq,
+            ack: c.rx.in_seq,
+            challenge: c.challenge,
+            reliable_state: c.in_reliable_state,
+        };
+        c.out_seq += 1;
+        c.last_sent = now;
+        let mut pkt = netchan::build_packet(&header, region.as_ref(), tail);
+        if pkt.len() > split::SPLIT_SIZE {
+            pkt = compress::compress_datagram(&pkt);
+        }
+        // A send error is a client gone or unreachable: its timeout drops it.
+        if pkt.len() > split::SPLIT_SIZE {
+            self.split_group = self.split_group.wrapping_add(1);
+            for part in split::split(&pkt, self.split_group) {
+                let _ = self.sock.send_to(&part, addr);
+            }
+        } else {
+            let _ = self.sock.send_to(&pkt, addr);
+        }
+        true
+    }
+
+    /// Sends a client every transfer block that can go now, one packet each; at least one packet
+    /// when `always` is set.
+    fn burst(&mut self, addr: SocketAddr, c: &mut Client, always: bool, now: Instant) {
+        let mut always = always;
+        for _ in 0..SUBCHANNELS {
+            if !self.send(addr, c, None, always, now) {
+                break;
+            }
+            always = false;
+        }
     }
 }
 
