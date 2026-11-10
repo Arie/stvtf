@@ -77,27 +77,32 @@ fn a_reused_entity_slot_forgets_the_medic_charge() {
     assert!(x.ents.medic_charge.is_empty());
 }
 
+/// Condition words with these condition numbers set, 0-31 in `m_nPlayerCond`.
+fn cond_words(conds: impl IntoIterator<Item = usize>) -> [u32; COND_WORDS] {
+    let mut w = [0; COND_WORDS];
+    for n in conds {
+        let word = if n < COND_BITS { 0 } else { n / COND_BITS + 1 };
+        w[word] |= 1 << (n % COND_BITS);
+    }
+    w
+}
+
 mod cond_tests {
     use super::*;
 
-    fn words(conds: &[u8]) -> [u32; 6] {
-        let mut w = [0u32; 6];
-        for &c in conds {
-            let n = c as usize;
-            if n < 32 { w[0] |= 1 << n } else { w[n / 32 + 1] |= 1 << (n % 32) }
-        }
-        w
+    fn words(conds: &[usize]) -> [u32; COND_WORDS] {
+        cond_words(conds.iter().copied())
     }
 
     #[test]
     fn conditions_decode_by_bit() {
-        let names = |w: &[u32; 6]| conditions(w).into_iter().map(Condition::name).collect::<Vec<_>>();
+        let names = |w: &[u32; COND_WORDS]| conditions(w).into_iter().map(Condition::name).collect::<Vec<_>>();
         assert_eq!(
             names(&words(&[1, 4, 32, 64, 130])),
             ["Zoomed", "Stealthed", "SpeedBoost", "StealthedUserBuff", "ImmuneToPushback"]
         );
         // m_nPlayerCond and _condition_bits both carry conditions 0-31.
-        let mut w = [0u32; 6];
+        let mut w = [0; COND_WORDS];
         w[1] = 1 << 5;
         assert_eq!(names(&w), ["Invulnerable"]);
     }
@@ -163,7 +168,7 @@ mod stopwatch_tests {
     use crate::output::StopwatchState;
 
     /// Stopwatch with BLU (3 points) attacking RED (`red` points), its timer entity 9.
-    fn stopwatch(state: i64, timer: &RoundTimer, red: i64) -> Option<out::Stopwatch> {
+    fn with_stopwatch(state: i64, timer: &RoundTimer, red: i64) -> Extractor {
         let mut x = Extractor {
             round_state: Round::Running,
             stopwatch: StopwatchRules { on: true, state, timer: Some(9) },
@@ -172,7 +177,11 @@ mod stopwatch_tests {
         x.ents.teams.insert(1, TeamScore { team: 2, score: red, role: 1, ..Default::default() });
         x.ents.teams.insert(2, TeamScore { team: 3, score: 3, role: 2, ..Default::default() });
         x.ents.timers.insert(9, RoundTimer { stopwatch: true, ..timer.clone() });
-        x.snapshot().stopwatch
+        x
+    }
+
+    fn stopwatch(state: i64, timer: &RoundTimer, red: i64) -> Option<out::Stopwatch> {
+        with_stopwatch(state, timer, red).snapshot().stopwatch
     }
 
     #[test]
@@ -194,14 +203,7 @@ mod stopwatch_tests {
 
     #[test]
     fn its_time_is_said_to_be_on_the_hud_only_while_the_round_timer_shows_it() {
-        let mut x = Extractor {
-            round_state: Round::Running,
-            stopwatch: StopwatchRules { on: true, state: 1, timer: Some(9) },
-            ..Default::default()
-        };
-        x.ents.teams.insert(1, TeamScore { team: 2, score: 4, role: 1, ..Default::default() });
-        x.ents.teams.insert(2, TeamScore { team: 3, score: 3, role: 2, ..Default::default() });
-        x.ents.timers.insert(9, RoundTimer { stopwatch: true, end_time: 100.0, ..Default::default() });
+        let mut x = with_stopwatch(1, &RoundTimer { end_time: 100.0, ..Default::default() }, 4);
         x.ents.timers.insert(5, RoundTimer { show: true, end_time: 150.0, ..Default::default() });
         assert!(!x.snapshot().stopwatch.unwrap().in_hud, "the map's own time, longer");
         x.ents.timers.get_mut(&5).unwrap().end_time = 100.0;
@@ -256,7 +258,7 @@ mod flag_tests {
 mod frame_tests {
     use super::*;
     use tf_demo_parser::demo::data::ServerTick;
-    use tf_demo_parser::demo::message::packetentities::{BaselineIndex, EntityId};
+    use tf_demo_parser::demo::message::packetentities::BaselineIndex;
     use tf_demo_parser::demo::packet::datatable::{ClassId, ServerClassName};
 
     fn update(id: u32, update_type: UpdateType) -> PacketEntity {
@@ -361,7 +363,6 @@ mod frame_tests {
 mod medic_tests {
     use super::*;
     use tf_demo_parser::demo::data::game_state::Player;
-    use tf_demo_parser::demo::message::packetentities::EntityId;
     use tf_demo_parser::demo::parser::analyser::UserInfo;
 
     fn with_medic(charge: u8, releasing: bool) -> Extractor {
@@ -570,15 +571,7 @@ mod cap_tests {
         use PlayerCondition::{
             CritBoosted, Invulnerable, MedigunUberBlastResist, MedigunUberBulletResist, MedigunUberFireResist, MegaHeal,
         };
-        let words = |conds: &[PlayerCondition]| {
-            let mut w = [0; COND_WORDS];
-            for c in conds {
-                let n = *c as usize;
-                let word = if n < COND_BITS { 0 } else { n / COND_BITS + 1 };
-                w[word] |= 1 << (n % COND_BITS);
-            }
-            w
-        };
+        let words = |conds: &[PlayerCondition]| cond_words(conds.iter().map(|&c| c as usize));
         let want = [
             (Invulnerable, Ubered::Uber),
             (MegaHeal, Ubered::Quickfix),
