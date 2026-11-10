@@ -3,11 +3,11 @@
 
 use super::Decoder;
 use crate::net::bits::BitBuf;
+use crate::net::messages::SVC_TEMPENTITIES;
 use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage};
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
 
-pub(crate) const SVC_TEMPENTITIES: u32 = 27;
 /// Beams in one message: well under a datagram, as some go unreliably.
 const PER_MESSAGE: usize = 16;
 /// The longest a beam can last, and widest it can be, as the game sends them.

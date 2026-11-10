@@ -16,7 +16,7 @@ mod tables;
 mod world;
 
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::{Signon, TYPE_BITS};
+use crate::net::messages::{SVC_GAMEEVENT, Signon, TYPE_BITS};
 use crate::output::Line;
 use anyhow::{Context, Result, bail};
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
@@ -124,7 +124,6 @@ pub(crate) struct Span {
 /// The type of a span that could not be decoded.
 pub(crate) const UNPARSED: u8 = u8::MAX;
 
-const SVC_GAMEEVENT: u32 = 25;
 /// `svc_GameEvent`: its length's bits, then the event id's.
 const GAMEEVENT_LENGTH_BITS: usize = 11;
 const EVENT_ID_BITS: usize = 9;
@@ -743,8 +742,7 @@ mod keyframe_tests {
     use crate::demo::{Next, Packet, Reader};
     use std::collections::BTreeMap;
 
-    const SVC_CREATESTRINGTABLE: u8 = 12;
-    const SVC_UPDATESTRINGTABLE: u8 = 13;
+    use crate::net::messages::{SVC_CREATESTRINGTABLE, SVC_UPDATESTRINGTABLE};
 
     /// The demo's tables, signon streams and frames.
     fn packets(path: &str) -> (Tables, Vec<Vec<u8>>, Vec<Vec<u8>>) {
@@ -828,7 +826,10 @@ mod keyframe_tests {
             for f in &frames[..half] {
                 let life = whole.feed(f, f.len() * 8);
                 ticks.push(whole.server_tick());
-                for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE))
+                for span in life
+                    .spans
+                    .iter()
+                    .filter(|s| matches!(u32::from(s.id), SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE))
                 {
                     tables_since.push(BitReader::slice(f, span.bits.clone()));
                 }

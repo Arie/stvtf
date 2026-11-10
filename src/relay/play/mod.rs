@@ -335,7 +335,7 @@ impl Cursor {
         self.offset = i64::from(self.dec.server_tick()) - i64::from(tick);
         self.started = true;
         self.first.get_or_insert(i64::from(self.dec.server_tick()));
-        for span in life.spans.iter().filter(|s| u32::from(s.id) == super::SVC_SETPAUSE) {
+        for span in life.spans.iter().filter(|s| u32::from(s.id) == messages::SVC_SETPAUSE) {
             if let Ok(p) = BitReader::at(bits.bytes(), span.bits.start + TYPE_BITS).read_bit() {
                 self.paused = p;
             }
@@ -782,10 +782,9 @@ fn skim(c: &mut Cursor, hub: &Mutex<Hub>, target: i64) -> (usize, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::messages::{SVC_GAMEEVENT, SVC_TEMPENTITIES};
     use tf_demo_parser::demo::gameevent_gen::GameEvent;
     use tf_demo_parser::demo::message::Message;
-
-    const SVC_GAMEEVENT: u8 = 25;
 
     /// `pl_upward.dem` decoded until `done`.
     fn upward_until(done: impl Fn(&Cursor) -> bool) -> Cursor {
@@ -831,7 +830,7 @@ mod tests {
 
     #[test]
     fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
-        use crate::decode::beams::{BASE, POINTS, SVC_TEMPENTITIES};
+        use crate::decode::beams::{BASE, POINTS};
         use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
         use tf_demo_parser::demo::vector::Vector;
         let c = upward_until(|c| c.started);
@@ -882,7 +881,7 @@ mod tests {
             load.bytes().to_vec(),
             bitbuffer::LittleEndian,
         ));
-        assert_eq!(s.read_int::<u32>(TYPE_BITS).unwrap(), u32::from(crate::relay::SVC_UPDATESTRINGTABLE));
+        assert_eq!(s.read_int::<u32>(TYPE_BITS).unwrap(), messages::SVC_UPDATESTRINGTABLE);
         let msg =
             Message::from_type(tf_demo_parser::demo::message::MessageType::UpdateStringTable, &mut s, state).unwrap();
         let Message::UpdateStringTable(u) = msg else { panic!() };
@@ -917,7 +916,7 @@ mod tests {
         eprintln!("{cues} director cues in the first 10 s");
         let player = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
         let msg = c.dec.hltv_chase(player.id.0).unwrap();
-        let span = Span { id: SVC_GAMEEVENT, bits: 0..msg.nbits() };
+        let span = Span { id: u8::try_from(SVC_GAMEEVENT).unwrap(), bits: 0..msg.nbits() };
         assert!(c.dec.is_director_cue(msg.bytes(), &span));
         let state = c.dec.parser_state_for_tests();
         let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));

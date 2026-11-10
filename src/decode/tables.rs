@@ -8,14 +8,13 @@
 //! entries that differ ([`Tables::set_back`]).
 
 use crate::net::bits::BitBuf;
+use crate::net::messages::SVC_UPDATESTRINGTABLE;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::Message;
 use tf_demo_parser::demo::message::stringtable::UpdateStringTableMessage;
 use tf_demo_parser::demo::packet::stringtable::{ExtraData, StringTableEntry};
-
-const SVC_UPDATESTRINGTABLE: u32 = 13;
 
 /// The tables whose values are kept.
 fn kept(name: &str) -> bool {

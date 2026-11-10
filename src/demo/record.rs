@@ -5,14 +5,13 @@
 use super::{Header, Writer};
 use crate::decode::{Lifecycle, Tables};
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::NET_TICK;
+use crate::net::messages::{NET_TICK, SVC_PACKETENTITIES};
 use crate::session::Tap;
 use std::fs::File;
 use std::io::BufWriter;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-const SVC_PACKETENTITIES: u8 = 26;
 /// The header's counts are written again this often; every frame reaches the file at once, so a
 /// file being written can be played while it grows.
 const FLUSH_EVERY: Duration = Duration::from_millis(100);
@@ -79,7 +78,7 @@ impl Tap for Recorder {
             st.failed = false;
         }
         let tick = life.tick.map(|t| t.max(0) as u32);
-        let entities = life.spans.iter().any(|s| s.id == SVC_PACKETENTITIES);
+        let entities = life.spans.iter().any(|s| u32::from(s.id) == SVC_PACKETENTITIES);
         let msgs = cut(bits, life);
         if st.in_signon && !entities {
             st.tick = tick.or(st.tick);

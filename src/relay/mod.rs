@@ -27,7 +27,10 @@ use crate::capture::{self, Record};
 use crate::decode::{Lifecycle, Tables};
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::handshake::{self, FromClient};
-use crate::net::messages::{self, NET_SIGNONSTATE, Signon, TYPE_BITS};
+use crate::net::messages::{
+    self, NET_SIGNONSTATE, SVC_CREATESTRINGTABLE, SVC_PACKETENTITIES, SVC_SERVERINFO, SVC_SETPAUSE,
+    SVC_UPDATESTRINGTABLE, SVC_USERMESSAGE, Signon, TYPE_BITS,
+};
 use crate::net::netchan::{self, Header, OutHeader};
 use crate::net::receiver::Receiver;
 use crate::net::reliable::SUBCHANNELS;
@@ -66,13 +69,7 @@ pub use play::{Beam, Camera, Playback, Want};
 /// How often the trace sums up what each client was sent.
 const TRACE_EVERY: Duration = Duration::from_secs(5);
 
-const SVC_SERVERINFO: u8 = 8;
-const SVC_SETPAUSE: u32 = 11;
-const SVC_USERMESSAGE: u32 = 23;
 const USERMESSAGE_RESETHUD: u32 = 6;
-const SVC_CREATESTRINGTABLE: u8 = 12;
-const SVC_UPDATESTRINGTABLE: u8 = 13;
-const SVC_PACKETENTITIES: u8 = 26;
 
 /// Clients a relay takes unless told otherwise.
 pub const DEFAULT_SLOTS: usize = 10;
@@ -318,7 +315,7 @@ impl Hub {
         // The server sends the first full update after signon reliably (`net_Tick` and the
         // entities): like any entities, it goes to the clients in the datagram's unreliable
         // part, so it is never in the log and reaches a client in order with the deltas after it.
-        let entities = life.spans.iter().any(|s| s.id == SVC_PACKETENTITIES);
+        let entities = life.spans.iter().any(|s| u32::from(s.id) == SVC_PACKETENTITIES);
         if !reliable || entities {
             if entities {
                 self.signon_open = false;
@@ -341,7 +338,7 @@ impl Hub {
         }
         for span in &life.spans {
             let msg = BitReader::slice(bits.bytes(), span.bits.clone());
-            if span.id == SVC_SERVERINFO {
+            if u32::from(span.id) == SVC_SERVERINFO {
                 self.restart_signon(now);
             }
             if self.signon_open || is_table_change(span.id) {
@@ -717,7 +714,7 @@ fn signon_state(id: u8, msg: &BitBuf) -> Option<Signon> {
 }
 
 fn is_table_change(id: u8) -> bool {
-    matches!(id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)
+    matches!(u32::from(id), SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)
 }
 
 /// The string table changes of a stream.
@@ -1079,11 +1076,11 @@ mod tests {
     /// the next ones until acked.
     fn datagram_with_table_change() -> (BitBuf, Lifecycle) {
         let mut w = BitWriter::new();
-        w.write_bits(u32::from(SVC_UPDATESTRINGTABLE), TYPE_BITS);
+        w.write_bits(SVC_UPDATESTRINGTABLE, TYPE_BITS);
         w.write_bits(0xabcd, 16);
         let bits = w.finish();
         let life = Lifecycle {
-            spans: vec![Span { id: SVC_UPDATESTRINGTABLE, bits: 0..bits.nbits() }],
+            spans: vec![Span { id: u8::try_from(SVC_UPDATESTRINGTABLE).unwrap(), bits: 0..bits.nbits() }],
             ..Lifecycle::default()
         };
         (bits, life)
@@ -1126,7 +1123,7 @@ mod tests {
         let (mut hub, active) = hub_with_one_in();
         let (later, life) = datagram_with_table_change();
         let mut w = BitWriter::new();
-        w.write_bits(u32::from(SVC_UPDATESTRINGTABLE), TYPE_BITS);
+        w.write_bits(SVC_UPDATESTRINGTABLE, TYPE_BITS);
         w.write_bits(0x1234, 16);
         let back = w.finish();
         // Back from past the change, on to it again, and back again: the same set-back each time.

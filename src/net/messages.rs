@@ -1,12 +1,30 @@
-//! Outbound client message bodies, as bit streams.
+//! Message type ids, and outbound client message bodies as bit streams.
 
 use super::bits::{BitBuf, BitWriter};
 
+// Message types (`net_*` either way, `clc_*` from a client, `svc_*` from a server).
+pub const NET_NOP: u32 = 0;
 pub const NET_DISCONNECT: u32 = 1;
+pub const NET_FILE: u32 = 2;
 pub const NET_TICK: u32 = 3;
+pub const NET_STRINGCMD: u32 = 4;
 pub const NET_SETCONVAR: u32 = 5;
 pub const NET_SIGNONSTATE: u32 = 6;
 pub const CLC_CLIENTINFO: u32 = 8;
+pub const CLC_MOVE: u32 = 9;
+pub const CLC_VOICEDATA: u32 = 10;
+pub const CLC_BASELINEACK: u32 = 11;
+pub const CLC_LISTENEVENTS: u32 = 12;
+pub const CLC_RESPONDCVARVALUE: u32 = 13;
+pub const CLC_CMDKEYVALUES: u32 = 16;
+pub const SVC_SERVERINFO: u32 = 8;
+pub const SVC_SETPAUSE: u32 = 11;
+pub const SVC_CREATESTRINGTABLE: u32 = 12;
+pub const SVC_UPDATESTRINGTABLE: u32 = 13;
+pub const SVC_USERMESSAGE: u32 = 23;
+pub const SVC_GAMEEVENT: u32 = 25;
+pub const SVC_PACKETENTITIES: u32 = 26;
+pub const SVC_TEMPENTITIES: u32 = 27;
 /// Bits of a net message's type.
 pub const TYPE_BITS: usize = 6;
 const FRAME_TIME_BITS: usize = 16;

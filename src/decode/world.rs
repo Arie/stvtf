@@ -13,15 +13,13 @@
 //! full update is written.
 
 use crate::net::bits::{BitBuf, BitWriter};
-use crate::net::messages;
+use crate::net::messages::{self, SVC_PACKETENTITIES};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::packetentities::{BaselineIndex, PacketEntitiesMessage, PacketEntity, UpdateType};
 use tf_demo_parser::demo::packet::datatable::ClassId;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
-
-const SVC_PACKETENTITIES: u32 = 26;
 
 /// Frames kept for later deltas to build on, at most.
 const MAX_FRAMES: usize = 128;

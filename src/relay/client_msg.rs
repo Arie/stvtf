@@ -1,22 +1,15 @@
 //! The messages a client sends: the few the relay acts on, the rest read past.
 
 use crate::net::bits::{BitBuf, BitReader};
-use crate::net::messages::{self, NET_DISCONNECT, NET_SIGNONSTATE, NET_TICK, Signon, TYPE_BITS};
+use crate::net::messages::{
+    CLC_BASELINEACK, CLC_CLIENTINFO, CLC_CMDKEYVALUES, CLC_LISTENEVENTS, CLC_MOVE, CLC_RESPONDCVARVALUE, CLC_VOICEDATA,
+    NET_DISCONNECT, NET_FILE, NET_NOP, NET_SETCONVAR, NET_SIGNONSTATE, NET_STRINGCMD, NET_TICK, Signon, TYPE_BITS,
+};
 use anyhow::{Result, bail};
 
 /// Longest string read from a client message.
 const MAX_STRING: usize = 4096;
 
-// Client message types the relay reads past (`net_*` and `clc_*` in the engine).
-const NET_NOP: u32 = 0;
-const NET_FILE: u32 = 2;
-const NET_STRINGCMD: u32 = 4;
-const CLC_MOVE: u32 = 9;
-const CLC_VOICEDATA: u32 = 10;
-const CLC_BASELINEACK: u32 = 11;
-const CLC_LISTENEVENTS: u32 = 12;
-const CLC_RESPONDCVARVALUE: u32 = 13;
-const CLC_CMDKEYVALUES: u32 = 16;
 /// The engine's `MAX_CUSTOM_FILES`: a CRC for each in `clc_ClientInfo`.
 const CUSTOM_FILES: usize = 4;
 /// `clc_ListenEvents` has a bit per game event, of the engine's `MAX_EVENT_NUMBER`.
@@ -56,7 +49,7 @@ fn read_client_messages(r: &mut BitReader<'_>, nbits: usize, out: &mut Vec<Clien
             NET_STRINGCMD => {
                 r.read_string(MAX_STRING)?;
             }
-            messages::NET_SETCONVAR => {
+            NET_SETCONVAR => {
                 for _ in 0..2 * usize::from(r.read_u8()?) {
                     r.read_string(MAX_STRING)?;
                 }
@@ -68,7 +61,7 @@ fn read_client_messages(r: &mut BitReader<'_>, nbits: usize, out: &mut Vec<Clien
                     out.push(ClientMsg::Signon(s));
                 }
             }
-            messages::CLC_CLIENTINFO => {
+            CLC_CLIENTINFO => {
                 r.skip(32 + 32 + 1 + 32)?; // spawncount, CRC, is HLTV, friends id
                 r.read_string(MAX_STRING)?;
                 for _ in 0..CUSTOM_FILES {
@@ -110,6 +103,7 @@ fn read_client_messages(r: &mut BitReader<'_>, nbits: usize, out: &mut Vec<Clien
 mod tests {
     use super::*;
     use crate::net::bits::BitWriter;
+    use crate::net::messages;
 
     #[test]
     fn client_messages_from_stvtf_parse() {
@@ -141,11 +135,11 @@ mod tests {
         w.write_bit(true);
         msg(&mut w, NET_STRINGCMD);
         string(&mut w, "status");
-        msg(&mut w, messages::NET_SETCONVAR);
+        msg(&mut w, NET_SETCONVAR);
         w.write_bits(1, 8);
         string(&mut w, "name");
         string(&mut w, "value");
-        msg(&mut w, messages::CLC_CLIENTINFO);
+        msg(&mut w, CLC_CLIENTINFO);
         w.write_bits(0, 32);
         w.write_bits(0, 32);
         w.write_bit(true);
