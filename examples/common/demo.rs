@@ -26,8 +26,12 @@ pub const FRAMES: usize = 1064;
 pub const CMD_INFO: usize = 76;
 pub const SIGNON: u8 = 1;
 pub const PACKET: u8 = 2;
+pub const SYNC_TICK: u8 = 3;
+pub const CONSOLE_CMD: u8 = 4;
+pub const USER_CMD: u8 = 5;
 pub const DATA_TABLES: u8 = 6;
 pub const STOP: u8 = 7;
+pub const STRING_TABLES: u8 = 8;
 
 pub fn i32_at(data: &[u8], pos: usize) -> Result<i32> {
     let bytes = data.get(pos..pos + 4).context("demo truncated")?;
@@ -62,9 +66,9 @@ pub fn packets(data: &[u8]) -> Result<Vec<Packet>> {
         pos += 5;
         pos = match cmd {
             SIGNON | PACKET => skip_sized(data, pos + CMD_INFO + 8)?,
-            3 => pos,
-            4 | DATA_TABLES | 8 => skip_sized(data, pos)?,
-            5 => skip_sized(data, pos + 4)?,
+            SYNC_TICK => pos,
+            CONSOLE_CMD | DATA_TABLES | STRING_TABLES => skip_sized(data, pos)?,
+            USER_CMD => skip_sized(data, pos + 4)?,
             STOP => break,
             _ => bail!("unknown demo command {cmd} at byte {start}"),
         };

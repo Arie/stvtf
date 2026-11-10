@@ -64,7 +64,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use demo::{CMD_INFO, MAGIC, SIGNON};
+    use demo::{CMD_INFO, DATA_TABLES, MAGIC, SIGNON, STRING_TABLES, SYNC_TICK};
 
     fn packet(out: &mut Vec<u8>, cmd: u8, tick: i32) {
         out.push(cmd);
@@ -75,7 +75,7 @@ mod tests {
                 out.extend_from_slice(&1i32.to_le_bytes());
                 out.push(cmd);
             }
-            6 | 8 => {
+            DATA_TABLES | STRING_TABLES => {
                 out.extend_from_slice(&1i32.to_le_bytes());
                 out.push(cmd);
             }
@@ -86,10 +86,10 @@ mod tests {
     fn demo(setup_tick: i32) -> Vec<u8> {
         let mut d = MAGIC.to_vec();
         d.resize(HEADER, 0);
-        for cmd in [SIGNON, 6, 8] {
+        for cmd in [SIGNON, DATA_TABLES, STRING_TABLES] {
             packet(&mut d, cmd, setup_tick);
         }
-        packet(&mut d, 3, 0);
+        packet(&mut d, SYNC_TICK, 0);
         for tick in [2, 4, 10] {
             packet(&mut d, PACKET, tick);
         }
@@ -104,7 +104,14 @@ mod tests {
             let kept: Vec<(u8, i32)> = packets(&cut).unwrap().iter().map(|p| (p.cmd, p.tick)).collect();
             assert_eq!(
                 kept,
-                [(SIGNON, setup_tick), (6, setup_tick), (8, setup_tick), (3, 0), (PACKET, 2), (PACKET, 4)]
+                [
+                    (SIGNON, setup_tick),
+                    (DATA_TABLES, setup_tick),
+                    (STRING_TABLES, setup_tick),
+                    (SYNC_TICK, 0),
+                    (PACKET, 2),
+                    (PACKET, 4)
+                ]
             );
         }
     }
