@@ -736,7 +736,7 @@ pub(crate) fn reset_hud() -> BitBuf {
     let mut w = BitWriter::new();
     w.write_bits(SVC_USERMESSAGE, TYPE_BITS);
     w.write_bits(USERMESSAGE_RESETHUD, 8);
-    w.write_bits(8, 11);
+    w.write_bits(8, 11); // the length of its data in bits
     w.write_bits(0, 8);
     w.finish()
 }
