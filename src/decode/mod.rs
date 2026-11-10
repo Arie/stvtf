@@ -450,6 +450,11 @@ impl Decoder {
         Some(self.extractor().snapshot().players.iter().find(|p| p.id.0 == user)?.ent)
     }
 
+    /// The entity of user id `user`, while they are in the match and alive.
+    pub(crate) fn living_player_entity(&self, user: u16) -> Option<u32> {
+        Some(self.extractor().snapshot().players.iter().find(|p| p.id.0 == user && p.alive)?.ent)
+    }
+
     /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
     pub(crate) fn hltv_chase(&self, player: u16) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVChaseEvent};

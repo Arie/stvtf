@@ -21,8 +21,9 @@ pub struct Note {
     pub player: Option<u16>,
 }
 
-/// How often notes on players not in the match are tried again.
-const RETRY: Duration = Duration::from_secs(2);
+/// How often notes on players are looked at again: whether their player is in the match and
+/// alive (TF2 leaves a dead player's bubble where they died, then moves it about).
+const CHECK: Duration = Duration::from_millis(250);
 
 /// The notes as the clients were last given them.
 #[derive(Default)]
@@ -30,42 +31,40 @@ pub(super) struct Shown {
     /// The version of the room's notes; none before the first.
     version: Option<u64>,
     ids: Vec<u32>,
-    /// A note's player was not in the match: tried again in a while.
-    missing: bool,
+    /// A note follows a player: looked at again in a while.
+    follows: bool,
     tried: Option<Instant>,
 }
 
-/// `note`'s bubble, or none while its player is not in the match.
+/// `note`'s bubble, or none while its player is not in the match or dead.
 fn bubble(dec: &Decoder, note: &Note) -> Option<BitBuf> {
     let follow = match note.player {
-        Some(user) => Some(dec.player_entity(user)?),
+        Some(user) => Some(dec.living_player_entity(user)?),
         None => None,
     };
     dec.annotation(note.id, &note.text, note.at, follow)
 }
 
 impl Player<'_> {
-    /// Gives the clients the room's notes when they changed (and those on players not in the match
-    /// yet, in a while): new ones shown, gone ones hidden, all of them again after full updates
-    /// and HUD resets.
+    /// Gives the clients the room's notes when they changed, and those on players as their player
+    /// comes and goes, dies and respawns: new ones shown, gone ones hidden, all of them again after
+    /// full updates and HUD resets.
     pub(super) fn show_notes(&mut self, version: u64, notes: &[Note]) {
         self.relay.hub().send_due_notes(Instant::now());
         let s = &mut self.shown_notes;
-        let retry = s.missing && s.tried.is_none_or(|t| t.elapsed() >= RETRY);
-        if s.version == Some(version) && !retry {
+        let check = s.follows && s.tried.is_none_or(|t| t.elapsed() >= CHECK);
+        if s.version == Some(version) && !check {
             return;
         }
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
-        let (mut ids, mut msgs, mut missing) = (Vec::new(), Vec::new(), false);
+        let (mut ids, mut msgs) = (Vec::new(), Vec::new());
         for n in notes {
-            match bubble(&c.dec, n) {
-                Some(m) => {
-                    ids.push(n.id);
-                    msgs.push(m);
-                }
-                None => missing = true,
+            if let Some(m) = bubble(&c.dec, n) {
+                ids.push(n.id);
+                msgs.push(m);
             }
         }
+        let follows = notes.iter().any(|n| n.player.is_some());
         let mut hub = self.relay.hub();
         for id in s.ids.iter().filter(|id| !ids.contains(id)) {
             if let Some(m) = c.dec.hide_annotation(*id) {
@@ -78,7 +77,7 @@ impl Player<'_> {
             }
         }
         hub.set_notes(msgs);
-        *s = Shown { version: Some(version), ids, missing, tried: Some(Instant::now()) };
+        *s = Shown { version: Some(version), ids, follows, tried: Some(Instant::now()) };
     }
 }
 
@@ -111,6 +110,18 @@ mod tests {
         assert_eq!(a.follow_ent_index, player.ent);
         let GameEvent::HideAnnotation(h) = event(&c.dec, &c.dec.hide_annotation(8).unwrap()) else { panic!() };
         assert_eq!(h.id, 8);
+    }
+
+    #[test]
+    fn a_note_on_a_dead_player_is_no_bubble_until_they_respawn() {
+        use crate::output::Team;
+        let dead = |c: &super::super::Cursor| {
+            let players = c.dec.extractor().snapshot().players;
+            players.iter().find(|p| !p.alive && matches!(p.team, Team::Red | Team::Blue)).map(|p| p.id.0)
+        };
+        let c = upward_until(|c| dead(c).is_some());
+        let note = Note { id: 1, text: "x".into(), at: [0.0; 3], player: dead(&c) };
+        assert!(bubble(&c.dec, &note).is_none(), "TF2 would leave it where their body was, then move it");
     }
 
     #[test]
