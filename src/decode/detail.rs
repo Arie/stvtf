@@ -531,16 +531,17 @@ mod tests {
         )
     }
 
+    /// A `dom_canalzone` score counter, as recorded.
+    const HUD_MSG: &str =
+        "02 66 66 26 3f 85 eb 51 3f ff 55 42 00 ff ff ff 00 00 00 00 00 3f 00 00 00 3f 00 00 80 3f 00 00 80 3e 30 00";
+
     fn hex(text: &str) -> Vec<u8> {
         text.split(' ').map(|b| u8::from_str_radix(b, 16).unwrap()).collect()
     }
 
     #[test]
     fn hud_messages_and_votes_are_read_by_hand() {
-        // A dom_canalzone score counter, as recorded.
-        let hud = hex(
-            "02 66 66 26 3f 85 eb 51 3f ff 55 42 00 ff ff ff 00 00 00 00 00 3f 00 00 00 3f 00 00 80 3f 00 00 80 3e 30 00",
-        );
+        let hud = hex(HUD_MSG);
         assert_eq!(
             read_raw(USER_MESSAGE_HUD_MSG, &hud),
             Some(Line::HudText(HudText {
@@ -605,9 +606,7 @@ mod tests {
 
     #[test]
     fn short_user_messages_give_nothing() {
-        let hud = hex(
-            "02 66 66 26 3f 85 eb 51 3f ff 55 42 00 ff ff ff 00 00 00 00 00 3f 00 00 00 3f 00 00 80 3f 00 00 80 3e 30 00",
-        );
+        let hud = hex(HUD_MSG);
         // Each cut before its last field; a vote failure is 6 bytes in all.
         for (kind, lens) in [
             (USER_MESSAGE_HUD_MSG, &[0, 1, 5, 12, 35][..]),
