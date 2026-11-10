@@ -132,7 +132,7 @@ impl World {
                 Frame::default()
             }
             Some(base) => {
-                if let Some((_, f)) = self.frames.iter().rev().find(|(t, _)| *t == u32::from(base)) {
+                if let Some((_, f)) = self.kept(u32::from(base)) {
                     f.clone()
                 } else {
                     self.broken = true;
@@ -198,7 +198,12 @@ impl World {
 
     /// Whether frame `tick` is kept.
     pub(crate) fn has(&self, tick: u32) -> bool {
-        self.frames.iter().any(|(t, _)| *t == tick)
+        self.kept(tick).is_some()
+    }
+
+    /// Frame `tick`, with its tick, if kept.
+    fn kept(&self, tick: u32) -> Option<&(u32, Frame)> {
+        self.frames.iter().rev().find(|(t, _)| *t == tick)
     }
 
     fn latest(&self) -> Option<&Frame> {
@@ -246,10 +251,7 @@ impl World {
         if self.broken || !self.seen_full {
             return None;
         }
-        let (tick, frame) = at
-            .and_then(|at| self.frames.iter().rev().find(|(t, _)| *t == at))
-            .or(self.frames.back())
-            .map(|(t, f)| (*t, f))?;
+        let (tick, frame) = at.and_then(|at| self.kept(at)).or(self.frames.back()).map(|(t, f)| (*t, f))?;
         let mut entities = Vec::new();
         for (index, e) in frame.iter() {
             let mut entering = enter(state, index, e)?;
@@ -292,8 +294,7 @@ impl World {
         if self.broken {
             return None;
         }
-        let frame = |t: u32| self.frames.iter().rev().find(|(tick, _)| *tick == t).map(|(_, f)| f);
-        let (old, new) = (frame(from)?, frame(to)?);
+        let (old, new) = (&self.kept(from)?.1, &self.kept(to)?.1);
         // By index, as the message lists them: what changed or entered, and what is gone. A game
         // client keeps every entity a delta does not name, so one gone is named, leaving and
         // deleted, as a server does (the message's own deletion list only frees what is left).
