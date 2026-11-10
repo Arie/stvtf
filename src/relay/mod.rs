@@ -186,6 +186,21 @@ impl Outgoing {
         Some(self.region(sub as u8, start, num))
     }
 
+    /// Reads the acks of the blocks in flight from a packet header; `state` has a subchannel's
+    /// bit flipped for each block acked (the engine's way).
+    fn acked(&mut self, h: &Header, state: &mut u8) {
+        for (sub, slot) in self.inflight.iter_mut().enumerate() {
+            let Some(f) = slot.take_if(|f| h.ack >= f.seq) else { continue };
+            let bit = 1 << sub;
+            if (*state ^ h.reliable_state) & bit == 0 {
+                // The client got a later packet but not this block.
+                self.lost.push((f.start, f.num));
+            } else {
+                *state ^= bit;
+            }
+        }
+    }
+
     /// The reliable region carrying fragments `start..start + num` on subchannel `sub`.
     fn region(&self, sub: u8, start: usize, num: usize) -> BitBuf {
         let single = self.frags <= FRAGMENTS_PER_PACKET;
@@ -316,16 +331,7 @@ impl Client {
     /// Reads the client's acks of our transfer blocks from a packet header.
     fn acked(&mut self, h: &Header) {
         let Some(o) = &mut self.outgoing else { return };
-        for (sub, slot) in o.inflight.iter_mut().enumerate() {
-            let Some(f) = slot.take_if(|f| h.ack >= f.seq) else { continue };
-            let bit = 1 << sub;
-            if (self.out_reliable_state ^ h.reliable_state) & bit == 0 {
-                // The client got a later packet but not this block.
-                o.lost.push((f.start, f.num));
-            } else {
-                self.out_reliable_state ^= bit;
-            }
-        }
+        o.acked(h, &mut self.out_reliable_state);
         if o.done() {
             self.outgoing = None;
         }
