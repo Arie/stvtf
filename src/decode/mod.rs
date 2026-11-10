@@ -15,11 +15,13 @@ mod props;
 mod tables;
 mod world;
 
+use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::messages::{Signon, TYPE_BITS};
 use crate::output::Line;
 use anyhow::{Context, Result, bail};
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
 use extract::Extractor;
+use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::generated::SignOnState;
@@ -143,7 +145,7 @@ pub(crate) struct Decoder {
     /// The string tables, as far as a jump back needs them (see `tables`).
     tables: tables::Tables,
     /// The last round start, win panel or game over event (see [`Decoder::round_event`]).
-    round: Option<crate::net::bits::BitBuf>,
+    round: Option<BitBuf>,
     out: Vec<Line>,
 }
 
@@ -175,14 +177,14 @@ impl Decoder {
     /// stream, if known) builds on, or else the latest, with that frame's server tick: a client
     /// that starts from it, and gets the frames after it, can follow. None without
     /// [`Decoder::keep_world`], before a full update came, or after a frame may have been missed.
-    pub(crate) fn keyframe(&self, next: Option<&[u8]>) -> Option<(u32, crate::net::bits::BitBuf)> {
+    pub(crate) fn keyframe(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
         let base = next.and_then(|d| self.delta_base(d));
         self.world.as_ref()?.full_update(self.handler.get_parser_state(), base, None)
     }
 
     /// [`Decoder::keyframe`] with every running round timer held where it is, for clients whose
     /// clock runs on while no frames come (a room paused).
-    pub(crate) fn keyframe_held(&self, next: Option<&[u8]>) -> Option<(u32, crate::net::bits::BitBuf)> {
+    pub(crate) fn keyframe_held(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
         let base = next.and_then(|d| self.delta_base(d));
         self.world.as_ref()?.full_update(self.handler.get_parser_state(), base, Some(self.tick_interval()))
     }
@@ -190,11 +192,7 @@ impl Decoder {
     /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
     /// tick): those after it, each as played if the client has the frame it builds on, else (from
     /// a live server, a frame a few ticks back) rewritten as a delta from `key`.
-    pub(crate) fn catch_up(
-        &self,
-        key: u32,
-        recent: &[(u32, crate::net::bits::BitBuf)],
-    ) -> Vec<crate::net::bits::BitBuf> {
+    pub(crate) fn catch_up(&self, key: u32, recent: &[(u32, BitBuf)]) -> Vec<BitBuf> {
         let Some(world) = &self.world else { return Vec::new() };
         let state = self.handler.get_parser_state();
         let mut have = vec![key];
@@ -239,7 +237,7 @@ impl Decoder {
         &self,
         data: &[u8],
         kind: MessageType,
-        read: impl FnOnce(&mut BitReadStream<'_, LittleEndian>, &tf_demo_parser::ParserState) -> Option<T>,
+        read: impl FnOnce(&mut BitReadStream<'_, LittleEndian>, &ParserState) -> Option<T>,
     ) -> Option<T> {
         let state = self.handler.get_parser_state();
         let mut stream = BitReadStream::new(BitReadBuffer::new(data, LittleEndian));
@@ -417,7 +415,7 @@ impl Decoder {
                 )
                 && let Some(span) = spans.get(i)
             {
-                self.round = Some(crate::net::bits::BitReader::slice(data, span.bits.clone()));
+                self.round = Some(BitReader::slice(data, span.bits.clone()));
             }
         }
     }
@@ -426,7 +424,7 @@ impl Decoder {
     /// (a jump, or one just in) is sent after a full update, so its HUD shows the round's end, or
     /// hides it, as the game does. Before the demo's first, a round start of our own: one jumped
     /// back there from a win panel has it hidden.
-    pub(crate) fn round_event(&self) -> Option<crate::net::bits::BitBuf> {
+    pub(crate) fn round_event(&self) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, TeamPlayRoundStartEvent};
         self.round
             .clone()
@@ -434,12 +432,12 @@ impl Decoder {
     }
 
     /// Sets the last round event, for a decoder that starts from a checkpoint.
-    pub(crate) fn set_round_event(&mut self, event: Option<crate::net::bits::BitBuf>) {
+    pub(crate) fn set_round_event(&mut self, event: Option<BitBuf>) {
         self.round = event;
     }
 
     /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
-    pub(crate) fn hltv_chase(&self, player: u16) -> Option<crate::net::bits::BitBuf> {
+    pub(crate) fn hltv_chase(&self, player: u16) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVChaseEvent};
         let ent = self.extractor().snapshot().players.iter().find(|p| p.id.0 == player)?.ent;
         self.game_event(GameEvent::HLTVChase(HLTVChaseEvent {
@@ -454,7 +452,7 @@ impl Decoder {
     }
 
     /// `event` as an `svc_GameEvent`, if the demo's event list has its kind.
-    fn game_event(&self, event: tf_demo_parser::demo::gameevent_gen::GameEvent) -> Option<crate::net::bits::BitBuf> {
+    fn game_event(&self, event: tf_demo_parser::demo::gameevent_gen::GameEvent) -> Option<BitBuf> {
         use tf_demo_parser::demo::message::gameevent::GameEventMessage;
         let state = self.handler.get_parser_state();
         let event_type = event.event_type();
@@ -469,7 +467,7 @@ impl Decoder {
             return false;
         }
         let at = span.bits.start + TYPE_BITS + GAMEEVENT_LENGTH_BITS;
-        let Ok(id) = crate::net::bits::BitReader::at(data, at).read_bits(EVENT_ID_BITS) else { return false };
+        let Ok(id) = BitReader::at(data, at).read_bits(EVENT_ID_BITS) else { return false };
         let defs = &self.handler.get_parser_state().event_definitions;
         defs.get(id as usize).is_some_and(|d| {
             matches!(
@@ -486,12 +484,12 @@ impl Decoder {
 
     /// Messages that set a client with the string tables of `later` (a decoder further on in the
     /// same demo) back to this one's, as far as they matter; None if they cannot be written.
-    pub(crate) fn set_tables_back(&self, later: &Decoder) -> Option<Vec<crate::net::bits::BitBuf>> {
+    pub(crate) fn set_tables_back(&self, later: &Decoder) -> Option<Vec<BitBuf>> {
         self.tables.set_back(&later.tables, self.handler.get_parser_state())
     }
 
     #[cfg(test)]
-    pub(crate) fn parser_state_for_tests(&self) -> &tf_demo_parser::ParserState {
+    pub(crate) fn parser_state_for_tests(&self) -> &ParserState {
         self.handler.get_parser_state()
     }
 
@@ -514,20 +512,16 @@ impl Decoder {
 }
 
 /// `msg` as a message stream of it alone, its type `svc` first.
-fn encode_message(
-    svc: u32,
-    msg: &impl tf_demo_parser::demo::parser::Encode,
-    state: &tf_demo_parser::ParserState,
-) -> Option<crate::net::bits::BitBuf> {
+fn encode_message(svc: u32, msg: &impl tf_demo_parser::demo::parser::Encode, state: &ParserState) -> Option<BitBuf> {
     let mut bytes = Vec::new();
     let nbits = {
         let mut s = bitbuffer::BitWriteStream::new(&mut bytes, LittleEndian);
         msg.encode(&mut s, state).ok()?;
         s.bit_len()
     };
-    let mut w = crate::net::bits::BitWriter::new();
+    let mut w = BitWriter::new();
     w.write_bits(svc, TYPE_BITS);
-    w.write_buf(&crate::net::bits::BitReader::slice(&bytes, 0..nbits));
+    w.write_buf(&BitReader::slice(&bytes, 0..nbits));
     Some(w.finish())
 }
 
@@ -747,7 +741,6 @@ mod tests {
 mod keyframe_tests {
     use super::*;
     use crate::demo::{Next, Packet, Reader};
-    use crate::net::bits::BitReader;
     use std::collections::BTreeMap;
 
     const SVC_CREATESTRINGTABLE: u8 = 12;
@@ -856,11 +849,8 @@ mod keyframe_tests {
             let life = late.feed(key.bytes(), key.nbits());
             assert!(life.full_update && !life.lost_frame, "{demo}");
             // Then the frames played since the one it is of, as the relay sends them with it.
-            let recent: Vec<(u32, crate::net::bits::BitBuf)> = frames[..half]
-                .iter()
-                .zip(&ticks)
-                .map(|(f, t)| (*t, crate::net::bits::BitBuf::from_bytes(f.clone())))
-                .collect();
+            let recent: Vec<(u32, BitBuf)> =
+                frames[..half].iter().zip(&ticks).map(|(f, t)| (*t, BitBuf::from_bytes(f.clone()))).collect();
             for f in whole.catch_up(key_tick, &recent) {
                 let life = late.feed(f.bytes(), f.nbits());
                 assert!(!life.lost_frame, "{demo}: a frame sent with the keyframe builds on one the client lacks");
