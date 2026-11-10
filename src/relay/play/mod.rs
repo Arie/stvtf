@@ -379,6 +379,11 @@ fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Life
     (w.finish(), fixed)
 }
 
+/// String table changes as messages of their own.
+fn owned(tables: &[Arc<BitBuf>]) -> Vec<BitBuf> {
+    tables.iter().map(|t| (**t).clone()).collect()
+}
+
 /// The tables of the demo at `path`, read up to where `reader` is: just past its data tables.
 fn tables_of(path: &Path, reader: &demo::Reader<File>) -> Result<Tables> {
     let mut prefix = vec![0u8; reader.position() as usize];
@@ -522,20 +527,15 @@ impl Player<'_> {
         if again.dec.tables_rewritten() < rewritten {
             // The clients' tables are set back to these, or failing that, they sign on again.
             // The stream's changes after here are sent again when playback comes to them.
-            let set_back = self.cur.as_ref().and_then(|c| again.dec.set_tables_back(&c.dec));
-            let later: Vec<BitBuf> = self
-                .cur
-                .as_ref()
-                .map_or_else(Vec::new, |c| c.tables.iter().skip(again.tables.len()).map(|t| (**t).clone()).collect());
-            if let Some(msgs) = set_back {
+            let later = owned(c.tables.get(again.tables.len()..).unwrap_or_default());
+            if let Some(msgs) = again.dec.set_tables_back(&c.dec) {
                 trace!("string tables set back with {} messages", msgs.len());
                 self.relay.hub().set_tables_back(&later, &msgs);
             } else {
                 trace!("the string tables changed since: the clients sign on again");
                 self.relay.hub().reconnect_all();
                 drop(Cursor::open(&want.demo, &self.relay.hub)?);
-                let tables: Vec<BitBuf> = again.tables.iter().map(|t| (**t).clone()).collect();
-                self.relay.hub().log_tables(&tables);
+                self.relay.hub().log_tables(&owned(&again.tables));
             }
         }
         self.cur = Some(again);

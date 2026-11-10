@@ -44,7 +44,7 @@ pub(super) struct Checkpoint {
 impl Checkpoint {
     /// The string table changes up to it, as a client given them would have them.
     pub(super) fn tables(&self) -> Vec<BitBuf> {
-        self.tables.iter().map(|t| (**t).clone()).collect()
+        super::owned(&self.tables)
     }
 }
 
