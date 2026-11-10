@@ -111,8 +111,15 @@ impl Args {
         self.get("hz").map_or(Ok(stvtf::DEFAULT_SNAPSHOT_HZ), stvtf::parse_snapshot_hz)
     }
 
-    fn tables(&self, build: &str) -> Result<Tables> {
+    /// The tables of `--build`, or of the current build.
+    fn tables(&self) -> Result<Tables> {
+        let build = self.get("build").unwrap_or(stvtf::CURRENT_BUILD);
         watch::tables(build, self.get("tables").map(PathBuf::from).as_deref())
+    }
+
+    /// The file given as the target.
+    fn read_target(&self) -> Result<Vec<u8>> {
+        std::fs::read(&self.target).with_context(|| format!("reading {}", self.target))
     }
 }
 
@@ -144,15 +151,13 @@ fn main() -> Result<()> {
     };
     match args.command.as_str() {
         "demo" => {
-            let bytes = std::fs::read(&args.target).with_context(|| format!("reading {}", args.target))?;
-            decode::demo_file(&bytes, args.hz()?, &mut emit)?;
+            decode::demo_file(&args.read_target()?, args.hz()?, &mut emit)?;
         }
         "replay" => {
-            let bytes = std::fs::read(&args.target).with_context(|| format!("reading {}", args.target))?;
+            let bytes = args.read_target()?;
             let records = capture::read(&bytes)?;
             let opt = Options { snapshot_hz: args.hz()?, ..Options::default() };
-            let build = args.get("build").unwrap_or(stvtf::CURRENT_BUILD);
-            capture::replay(&records, &args.tables(build)?, &opt, &mut emit)?;
+            capture::replay(&records, &args.tables()?, &opt, &mut emit)?;
         }
         "relay" => relay(&args, &mut |line| {
             if matches!(line, Line::Status(_)) {
@@ -182,10 +187,9 @@ fn relay(args: &Args, emit: &mut dyn FnMut(Line)) -> Result<()> {
         };
         relay.play(&Playback::new(want), &STOP, emit)?;
     } else if file.is_file() {
-        let bytes = std::fs::read(&args.target).with_context(|| format!("reading {}", args.target))?;
+        let bytes = args.read_target()?;
         let records = capture::read(&bytes)?;
-        let build = args.get("build").unwrap_or(stvtf::CURRENT_BUILD);
-        relay.replay(&records, &args.tables(build)?, speed(args)?, &STOP, emit)?;
+        relay.replay(&records, &args.tables()?, speed(args)?, &STOP, emit)?;
     } else {
         relay.watch(&watch_args(args)?, &STOP, emit)?;
     }
