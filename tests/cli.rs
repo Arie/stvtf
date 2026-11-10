@@ -1,6 +1,9 @@
 //! The `stvtf` program as its users run it: arguments, exit status, and what goes to stdout,
 //! which carries JSON lines and nothing else.
 
+mod common;
+
+use common::fixture;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -8,7 +11,6 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 /// A bound on what should take moments.
 const LIMIT: Duration = Duration::from_secs(30);
 
@@ -20,10 +22,6 @@ fn stvtf() -> Command {
 
 fn run(args: &[&str]) -> Output {
     stvtf().args(args).output().unwrap()
-}
-
-fn fixture(name: &str) -> String {
-    format!("{FIXTURES}/{name}")
 }
 
 fn lines(stdout: &[u8]) -> Vec<Value> {

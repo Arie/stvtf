@@ -1,23 +1,20 @@
 //! The relay end to end: it replays a recorded capture as its upstream, and stvtf connects to
 //! it over UDP as any client would. What the client decodes must be what the capture holds.
 
+mod common;
+
+use common::{fixture, tables};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use stvtf::capture;
-use stvtf::decode::Tables;
 use stvtf::output::Status;
 use stvtf::relay::{Relay, RelayConfig};
 use stvtf::watch::{self, Watch, WatchError};
 use stvtf::{Fatal, Line, Options};
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 /// A bound on what should take moments, for a broken relay.
 const LIMIT: Duration = Duration::from_secs(30);
-
-fn tables() -> Tables {
-    Tables::from_demo_bytes(stvtf::builtin(stvtf::CURRENT_BUILD).unwrap().tables).unwrap()
-}
 
 /// Everything but the connection statuses, which differ (connecting, the reason for leaving).
 fn data(lines: &[Line]) -> Vec<&Line> {
@@ -117,7 +114,7 @@ fn through_relay(records: &[capture::Record<'_>], opt: &Options, speed: f64) -> 
 /// at any speed. The failure message says what each speed got.
 #[test]
 fn a_client_of_the_relay_decodes_what_the_capture_holds() {
-    let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
+    let bytes = std::fs::read(fixture("bots_cp_badlands.cap")).unwrap();
     let records = capture::read(&bytes).unwrap();
     let opt = Options { snapshot_hz: 10.0, ..Options::default() };
     let mut want = Vec::new();
@@ -141,7 +138,7 @@ fn config(password: &str, slots: usize) -> RelayConfig {
 
 /// Runs a relay of a capture while `client` runs against its address.
 fn with_relay<T>(config: &RelayConfig, client: impl FnOnce(String) -> T) -> T {
-    let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
+    let bytes = std::fs::read(fixture("bots_cp_badlands.cap")).unwrap();
     let records = capture::read(&bytes).unwrap();
     let relay = Relay::bind(config).unwrap();
     let addr = relay.local_addr().unwrap().to_string();
@@ -272,7 +269,7 @@ fn a_relay_can_relay_a_relay() {
 /// A map change restarts signon on the upstream connection, and so on every client's.
 #[test]
 fn a_client_of_the_relay_follows_a_map_change() {
-    let bytes = std::fs::read(format!("{FIXTURES}/bots_map_change.cap")).unwrap();
+    let bytes = std::fs::read(fixture("bots_map_change.cap")).unwrap();
     let records = capture::read(&bytes).unwrap();
     let relay = Relay::bind(&config("", 10)).unwrap();
     let addr = relay.local_addr().unwrap().to_string();

@@ -6,19 +6,13 @@
 
 mod common;
 
-use common::{dist, of};
+use common::{dist, fixture, of, tables};
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use stvtf::capture;
-use stvtf::decode::{self, Tables};
+use stvtf::decode::Tables;
 use stvtf::output::{BuildingKind, Class, Condition, Objective, PlayerId, Position, Round, Score, Status, Team, Timer};
 use stvtf::{Line, Options};
-
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-
-fn tables() -> Tables {
-    Tables::from_demo_bytes(stvtf::builtin(stvtf::CURRENT_BUILD).unwrap().tables).unwrap()
-}
 
 /// Decodes a fixture once and shares the result between tests.
 fn replay(name: &str) -> &'static [Line] {
@@ -30,7 +24,7 @@ fn replay(name: &str) -> &'static [Line] {
 }
 
 fn replay_with(name: &str, opt: &Options) -> Vec<Line> {
-    let bytes = std::fs::read(format!("{FIXTURES}/{name}")).unwrap();
+    let bytes = std::fs::read(fixture(name)).unwrap();
     let records = capture::read(&bytes).unwrap();
     let mut out = Vec::new();
     capture::replay(&records, &tables(), opt, &mut |l| out.push(l)).unwrap();
@@ -62,7 +56,7 @@ fn current_build_tables_are_built_in() {
     let t = tables();
     assert!(t.class_names().count() > 300);
     assert!(t.class_names().any(|c| c == "CTFPlayer"));
-    let full = Tables::from_demo(format!("{FIXTURES}/tables_11138802.dem").as_ref()).unwrap();
+    let full = Tables::from_demo(fixture("tables_11138802.dem").as_ref()).unwrap();
     assert_eq!(t.class_names().count(), full.class_names().count());
     assert_eq!(t.send_table_count(), full.send_table_count());
 }
@@ -176,9 +170,7 @@ fn map_change_is_followed_in_place() {
 
 #[test]
 fn demo_files_use_the_same_extractor() {
-    let bytes = std::fs::read(format!("{FIXTURES}/tables_11138802.dem")).unwrap();
-    let mut out = Vec::new();
-    decode::demo_file(&bytes, 10.0, &mut |l| out.push(l)).unwrap();
+    let out = common::demo("tables_11138802.dem", 10.0);
     assert_eq!(of!(out, Server).next().unwrap().map, "cp_badlands");
 }
 
