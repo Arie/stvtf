@@ -359,8 +359,7 @@ fn timer_props(state: &ParserState, e: &Entity, hold: Option<f32>) -> Option<Vec
     let table = state.send_tables.get(usize::from(e.class))?;
     let prop = |name: &str| {
         let id = SendPropIdentifier::new("DT_TeamRoundTimer", name);
-        let index = table.flattened_props.iter().position(|d| d.identifier == id)?;
-        Some((u32::try_from(index).ok()?, id))
+        Some((super::props::prop_index(table, id)?, id))
     };
     let ((paused_at, paused_id), (left_at, left_id), (end_at, end_id)) =
         (prop("m_bTimerPaused")?, prop("m_flTimeRemaining")?, prop("m_flTimerEndTime")?);

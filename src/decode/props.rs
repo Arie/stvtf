@@ -1,5 +1,6 @@
 //! Reading send props: values as numbers, entity handles, and the props every entity has.
 
+use tf_demo_parser::demo::packet::datatable::SendTable;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
 
@@ -83,6 +84,11 @@ pub(crate) fn prop_vec(props: &[SendProp], id: SendPropIdentifier) -> Option<Vec
         SendPropValue::Vector(v) => Some(*v),
         _ => None,
     }
+}
+
+/// Where prop `id` is among `table`'s props, as a prop's index counts.
+pub(crate) fn prop_index(table: &SendTable, id: SendPropIdentifier) -> Option<u32> {
+    u32::try_from(table.flattened_props.iter().position(|d| d.identifier == id)?).ok()
 }
 
 #[cfg(test)]

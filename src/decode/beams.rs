@@ -83,8 +83,7 @@ impl Decoder {
             let mut props = Vec::with_capacity(values.len());
             for (t, name, value) in values {
                 let id = SendPropIdentifier::new(t, name);
-                let index = table.flattened_props.iter().position(|d| d.identifier == id)?;
-                props.push(SendProp { index: u32::try_from(index).ok()?, identifier: id, value });
+                props.push(SendProp { index: super::props::prop_index(table, id)?, identifier: id, value });
             }
             props.sort_by_key(|p| p.index);
             Some(EventInfo { class_id: u16::try_from(class).ok()?.into(), fire_delay: 0.0, reliable: false, props })
