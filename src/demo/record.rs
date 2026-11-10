@@ -209,7 +209,7 @@ pub(crate) mod tests {
         static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let bytes = crate::demo::tests::fixture(name);
         let records = capture::read(&bytes).unwrap();
-        let tables = Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap();
+        let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
         let mut want = Vec::new();
         capture::replay(&records, &tables, opt, &mut |l| want.push(l)).unwrap();
         let n = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -218,7 +218,7 @@ pub(crate) mod tests {
         let recorder = Recorder::new(Arc::new(Folder(dir.clone())));
         recorder.tables(&tables);
         let mut sessions = records.iter().skip_while(|r| r.kind != capture::Kind::Session as u8);
-        let challenge = u32::from_le_bytes(sessions.next().unwrap().data.try_into().unwrap());
+        let challenge = sessions.next().unwrap().challenge().unwrap();
         let datagrams: Vec<(u64, &[u8])> = sessions
             .take_while(|r| r.kind != capture::Kind::Session as u8)
             .filter(|r| r.kind == capture::Kind::Datagram as u8)

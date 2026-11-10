@@ -646,7 +646,7 @@ mod tests {
     }
 
     fn tables() -> Tables {
-        Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap()
+        crate::watch::tables(crate::CURRENT_BUILD, None).unwrap()
     }
 
     #[test]
@@ -718,7 +718,7 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/delta_before_full_update.cap");
         let bytes = std::fs::read(path).unwrap();
         let records = crate::capture::read(&bytes).unwrap();
-        let challenge = u32::from_le_bytes(records[0].data.try_into().unwrap());
+        let challenge = records[0].challenge().unwrap();
         let tables = tables();
         let mut dec = Decoder::new(&tables, 0.0).unwrap();
         let mut rx = Receiver::new(Some(challenge));
