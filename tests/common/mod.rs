@@ -3,6 +3,7 @@
 #![allow(dead_code, reason = "each test uses part of this")]
 
 use std::collections::HashSet;
+use std::io::Read;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use stvtf::decode::Tables;
@@ -44,6 +45,13 @@ pub fn stvtf() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_stvtf"));
     c.env_remove("STVTF_PASSWORD").env_remove("STVTF_RELAY_PASSWORD").env_remove("STVTF_DEBUG");
     c
+}
+
+/// A gzipped fixture's text.
+pub fn gunzipped(name: &str) -> String {
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(fixture(name)).unwrap()).read_to_string(&mut text).unwrap();
+    text
 }
 
 /// The current build's built-in tables.

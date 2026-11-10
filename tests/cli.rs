@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{LIMIT, OOB, challenge, fixture, stvtf};
+use common::{LIMIT, OOB, challenge, fixture, gunzipped, stvtf};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -80,10 +80,8 @@ fn a_replay_writes_the_recorded_lines_without_times() {
     let out = run(&["replay", &fixture("bots_cp_badlands.cap")]);
     assert!(out.status.success());
     let got = lines(&out.stdout);
-    let gz = std::fs::File::open(fixture("bots_cp_badlands.jsonl.gz")).unwrap();
-    let mut recorded = Vec::new();
-    flate2::read::GzDecoder::new(gz).read_to_end(&mut recorded).unwrap();
-    assert_eq!(got, lines(&recorded), "as tests/golden.rs, through stdout");
+    let recorded = gunzipped("bots_cp_badlands.jsonl.gz");
+    assert_eq!(got, lines(recorded.as_bytes()), "as tests/golden.rs, through stdout");
     assert!(got.iter().all(|l| l.get("time").is_none()), "offline output has no receive time");
 }
 
