@@ -77,6 +77,46 @@ fn a_reused_entity_slot_forgets_the_medic_charge() {
     assert!(x.ents.medic_charge.is_empty());
 }
 
+/// A pyro's firing flamethrower whose slot becomes a medigun with no delete between is gone.
+#[test]
+fn a_slot_taken_over_by_another_class_keeps_nothing_of_the_old_one() {
+    use crate::decode::props::prop_id;
+    use tf_demo_parser::demo::message::packetentities::BaselineIndex;
+    use tf_demo_parser::demo::packet::datatable::{ClassId, ServerClass};
+    use tf_demo_parser::demo::sendprop::{SendProp, SendPropValue};
+
+    let mut state = ParserState::new(24, |_| true, false);
+    state.server_classes = ["CTFFlameThrower", "CWeaponMedigun"]
+        .iter()
+        .zip(0u16..)
+        .map(|(name, id)| ServerClass { id: ClassId::from(id), name: (*name).into(), data_table: "".into() })
+        .collect();
+    let prop =
+        |table, name, v| SendProp { index: 0, identifier: prop_id(table, name), value: SendPropValue::Integer(v) };
+    let enter = |class: u16| PacketEntity {
+        server_class: ClassId::from(class),
+        entity_index: EntityId::from(300u32),
+        props: vec![
+            prop("DT_BaseCombatWeapon", "m_hOwner", 5),
+            prop("DT_WeaponFlameThrower", "m_iWeaponState", FLAMETHROWER_FIRING),
+        ],
+        in_pvs: true,
+        update_type: UpdateType::Enter,
+        serial_number: 0,
+        delay: None,
+        delta: None,
+        baseline_index: BaselineIndex::First,
+    };
+    let mut x = Extractor::default();
+    x.entity(&enter(0), &state);
+    assert!(x.flames_of(5).is_some());
+    x.entity(&enter(1), &state);
+    assert!(x.flames_of(5).is_none(), "no flames from a medigun");
+    assert!(x.ents.mediguns.contains_key(&300));
+    x.entity(&enter(0), &state);
+    assert!(!x.ents.mediguns.contains_key(&300), "no medigun in a flamethrower's slot");
+}
+
 /// Condition words with these condition numbers set, 0-31 in `m_nPlayerCond`.
 fn cond_words(conds: impl IntoIterator<Item = usize>) -> [u32; COND_WORDS] {
     let mut w = [0; COND_WORDS];

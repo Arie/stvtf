@@ -241,7 +241,7 @@ impl Extractor {
         }
     }
 
-    fn entity(&mut self, e: &PacketEntity, state: &ParserState) {
+    pub(super) fn entity(&mut self, e: &PacketEntity, state: &ParserState) {
         let idx = u32::from(e.entity_index);
         if e.update_type == UpdateType::Delete {
             self.forget_entity(idx);
@@ -281,21 +281,7 @@ impl Extractor {
         }
         let Some(class) = class else { return };
         if e.update_type == UpdateType::Enter {
-            // A slot reused without a delete: what was there is gone (an Enter carries the full state).
-            self.modes.forget(idx);
-            self.ents.flags.remove(&idx);
-            self.ents.sentries.remove(&idx);
-            let same = |b: &Building| {
-                matches!(
-                    (b, class.name.as_str()),
-                    (Building::Sentry(_), "CObjectSentrygun")
-                        | (Building::Dispenser(_), "CObjectDispenser")
-                        | (Building::Teleporter(_), "CObjectTeleporter")
-                )
-            };
-            if self.gs.state.buildings.get(&e.entity_index).is_some_and(|b| !same(b)) {
-                self.gs.state.buildings.remove(&e.entity_index);
-            }
+            self.entered(e.entity_index, class.name.as_str());
         }
         if debug(class.name.as_str()) {
             for p in e.props(state) {
@@ -335,6 +321,41 @@ impl Extractor {
             "CTFFlameThrower" => self.on_flamethrower(idx, props),
             "CTFObjectiveResource" => self.on_objective_resource(props),
             other => self.modes.entity(other, idx, props),
+        }
+    }
+
+    /// A slot reused without a delete: what was there is gone (an Enter carries the full state).
+    fn entered(&mut self, id: EntityId, class: &str) {
+        let idx = u32::from(id);
+        self.modes.forget(idx);
+        self.ents.flags.remove(&idx);
+        self.ents.sentries.remove(&idx);
+        // What only one class keeps goes with a slot of another; the same class's is overwritten.
+        if class != "CWeaponMedigun" {
+            self.ents.mediguns.remove(&idx);
+        }
+        if class != "CTFFlameThrower" {
+            self.ents.flamethrowers.remove(&idx);
+        }
+        if class != "CTFTeam" {
+            self.ents.teams.remove(&idx);
+        }
+        if class != "CTeamRoundTimer" {
+            self.ents.timers.remove(&idx);
+        }
+        if class != "CTeamTrainWatcher" {
+            self.ents.train_watchers.remove(&idx);
+        }
+        let same = |b: &Building| {
+            matches!(
+                (b, class),
+                (Building::Sentry(_), "CObjectSentrygun")
+                    | (Building::Dispenser(_), "CObjectDispenser")
+                    | (Building::Teleporter(_), "CObjectTeleporter")
+            )
+        };
+        if self.gs.state.buildings.get(&id).is_some_and(|b| !same(b)) {
+            self.gs.state.buildings.remove(&id);
         }
     }
 
