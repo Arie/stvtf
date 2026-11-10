@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{fixture, has_players, tables};
+use common::{A2S_INFO, OOB, fixture, has_players, tables};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -212,13 +212,12 @@ fn connectionless_replies_are_no_larger_than_their_queries_until_a_challenge_com
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut buf = [0u8; 2048];
-        let info = b"\xff\xff\xff\xffTSource Engine Query\0";
-        sock.send_to(info, &addr).unwrap();
+        sock.send_to(A2S_INFO, &addr).unwrap();
         let n = sock.recv(&mut buf).unwrap();
-        assert!(n <= info.len(), "A2S_INFO answered with {n} bytes");
+        assert!(n <= A2S_INFO.len(), "A2S_INFO answered with {n} bytes");
         assert_eq!(buf[4], b'A', "a challenge first");
         // A connect with a made-up challenge gets nothing at all.
-        let mut connect = b"\xff\xff\xff\xffk".to_vec();
+        let mut connect = [OOB.as_slice(), b"k"].concat();
         connect.extend_from_slice(&24i32.to_le_bytes());
         connect.extend_from_slice(&2u32.to_le_bytes());
         connect.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);

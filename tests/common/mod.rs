@@ -10,6 +10,11 @@ use stvtf::{Line, Options, capture};
 
 pub const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
+/// What starts a connectionless packet.
+pub const OOB: [u8; 4] = [0xff; 4];
+pub const A2S_INFO: &[u8] = b"\xff\xff\xff\xffTSource Engine Query\0";
+pub const AUTH_HASHEDCDKEY: u32 = 2;
+
 /// The payloads of one kind of line: `of!(lines, Kill)` iterates over every `Kill` in `lines`.
 #[allow(unused_macros, reason = "each test uses part of this")]
 macro_rules! of {
@@ -62,6 +67,18 @@ pub fn players_seen(lines: &[Line]) -> HashSet<PlayerId> {
 
 pub fn has_players(l: &Line) -> bool {
     matches!(l, Line::Snapshot(s) if !s.players.is_empty())
+}
+
+/// A `SourceTV`'s answer to a challenge request with `nonce`.
+pub fn challenge(nonce: &[u8]) -> Vec<u8> {
+    const MAGIC_VERSION: u32 = 0x5A4F_4933;
+    let mut v = OOB.to_vec();
+    v.push(b'A');
+    v.extend_from_slice(&MAGIC_VERSION.to_le_bytes());
+    v.extend_from_slice(&7u32.to_le_bytes());
+    v.extend_from_slice(nonce);
+    v.extend_from_slice(&AUTH_HASHEDCDKEY.to_le_bytes());
+    v
 }
 
 pub fn dist(a: Position, b: Position) -> f64 {

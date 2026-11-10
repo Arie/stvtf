@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{has_players, stvtf};
+use common::{A2S_INFO, has_players, stvtf};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -119,12 +119,11 @@ impl Server {
     fn a2s(&self) -> Option<String> {
         let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
         sock.set_read_timeout(Some(Duration::from_secs(1))).ok()?;
-        let query = b"\xff\xff\xff\xffTSource Engine Query\0".to_vec();
         let mut buf = [0u8; 2048];
-        sock.send_to(&query, (self.ip.as_str(), TV_PORT)).ok()?;
+        sock.send_to(A2S_INFO, (self.ip.as_str(), TV_PORT)).ok()?;
         let mut n = sock.recv(&mut buf).ok()?;
         if buf.get(4) == Some(&b'A') {
-            sock.send_to(&[query.as_slice(), &buf[5..9]].concat(), (self.ip.as_str(), TV_PORT)).ok()?;
+            sock.send_to(&[A2S_INFO, &buf[5..9]].concat(), (self.ip.as_str(), TV_PORT)).ok()?;
             n = sock.recv(&mut buf).ok()?;
         }
         // Name, map, folder, game, then 9 bytes: app id, players, slots, bots, type, OS, password, VAC.

@@ -1,15 +1,15 @@
 //! Which build a watch offers: a fake `SourceTV` reports builds over `A2S_INFO` and refuses every
 //! connect, as a server does a build not its own, and records the build each connect carried.
 
+mod common;
+
+use common::{AUTH_HASHEDCDKEY, OOB, challenge};
 use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use stvtf::watch::{self, Watch};
 
-const OOB: [u8; 4] = [0xff; 4];
-const MAGIC_VERSION: u32 = 0x5A4F_4933;
-const AUTH_HASHEDCDKEY: u32 = 2;
 /// A bound on a watch that never connects as often as the test waits for.
 const LIMIT: Duration = Duration::from_secs(30);
 
@@ -24,21 +24,13 @@ fn info(build: &str) -> Vec<u8> {
     v
 }
 
-fn challenge(nonce: &[u8]) -> Vec<u8> {
-    let mut v = OOB.to_vec();
-    v.push(b'A');
-    v.extend_from_slice(&MAGIC_VERSION.to_le_bytes());
-    v.extend_from_slice(&7u32.to_le_bytes());
-    v.extend_from_slice(nonce);
-    v.extend_from_slice(&AUTH_HASHEDCDKEY.to_le_bytes());
-    v
-}
-
-fn refusal(nonce: &[u8]) -> Vec<u8> {
+/// A refused connect, with the reason a client shows.
+fn refusal(nonce: &[u8], reason: &str) -> Vec<u8> {
     let mut v = OOB.to_vec();
     v.push(b'9');
     v.extend_from_slice(nonce);
-    v.extend_from_slice(b"#GameUI_ServerRejectNewVersion\0");
+    v.extend_from_slice(reason.as_bytes());
+    v.push(0);
     v
 }
 
@@ -75,7 +67,7 @@ fn offered(reports: &[&str], connects: usize, setup: impl FnOnce(&mut Watch)) ->
                     b'k' => {
                         let (nonce, build) = connect_fields(data);
                         seen.push(build);
-                        refusal(nonce)
+                        refusal(nonce, "#GameUI_ServerRejectNewVersion")
                     }
                     kind => panic!("unexpected packet {:?}", char::from(kind)),
                 };
@@ -157,11 +149,7 @@ fn a_game_port_leads_to_the_tv_port_beside_it() {
             let mut buf = [0u8; 2048];
             let (n, from) = tv.recv_from(&mut buf).unwrap();
             let (nonce, _) = connect_fields(&buf[..n]);
-            let mut refused = OOB.to_vec();
-            refused.push(b'9');
-            refused.extend_from_slice(nonce);
-            refused.extend_from_slice(b"#GameUI_ServerRejectBadPassword\0");
-            tv.send_to(&refused, from).unwrap();
+            tv.send_to(&refusal(nonce, "#GameUI_ServerRejectBadPassword"), from).unwrap();
         });
         watch::watch(&w, &AtomicBool::new(false), &mut |_| {}).unwrap_err()
     });

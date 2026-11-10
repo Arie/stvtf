@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{fixture, stvtf};
+use common::{OOB, challenge, fixture, stvtf};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -236,7 +236,6 @@ struct SilentServer {
 impl SilentServer {
     fn start(answers: bool) -> Self {
         use std::sync::atomic::{AtomicBool, Ordering};
-        const OOB: [u8; 4] = [0xff; 4];
         let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
         let addr = sock.local_addr().unwrap().to_string();
@@ -247,13 +246,7 @@ impl SilentServer {
             while !stopping.load(Ordering::Relaxed) {
                 let Ok((n, from)) = sock.recv_from(&mut buf) else { continue };
                 if answers && n >= 9 && buf[..4] == OOB && buf[4] == b'q' {
-                    let mut reply = OOB.to_vec();
-                    reply.push(b'A');
-                    reply.extend_from_slice(&0x5A4F_4933u32.to_le_bytes());
-                    reply.extend_from_slice(&7u32.to_le_bytes());
-                    reply.extend_from_slice(&buf[5..9]);
-                    reply.extend_from_slice(&2u32.to_le_bytes());
-                    sock.send_to(&reply, from).unwrap();
+                    sock.send_to(&challenge(&buf[5..9]), from).unwrap();
                 }
             }
         });
