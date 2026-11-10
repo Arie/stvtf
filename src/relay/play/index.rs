@@ -13,9 +13,10 @@ use super::{Cursor, RECENT};
 use crate::net::bits::BitBuf;
 use crate::relay::{Hub, lock};
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 /// Server ticks between checkpoints: 30 s on a 66-tick server.
@@ -55,8 +56,7 @@ pub(super) struct Index {
 }
 
 /// The indexes in use, by demo file: relays playing the same demo (rooms on one match) share one.
-static INDEXES: std::sync::LazyLock<Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<Index>>>> =
-    std::sync::LazyLock::new(Mutex::default);
+static INDEXES: LazyLock<Mutex<HashMap<PathBuf, Weak<Index>>>> = LazyLock::new(Mutex::default);
 
 impl Index {
     /// The index of the demo at `path`: the one a relay already has, or a new one. Indexing stops
@@ -64,7 +64,7 @@ impl Index {
     pub(super) fn shared(path: &Path) -> Arc<Index> {
         let mut all = lock(&INDEXES);
         all.retain(|_, w| w.strong_count() > 0);
-        if let Some(index) = all.get(path).and_then(std::sync::Weak::upgrade) {
+        if let Some(index) = all.get(path).and_then(Weak::upgrade) {
             return index;
         }
         let index = Self::start(path);
@@ -104,7 +104,7 @@ impl Drop for Index {
 }
 
 /// Decodes the demo, a checkpoint every `every` ticks, until it ends or the index is dropped.
-fn index_demo(path: &Path, index: &std::sync::Weak<Index>, every: u32) -> Result<()> {
+fn index_demo(path: &Path, index: &Weak<Index>, every: u32) -> Result<()> {
     let mut c = Cursor::open_with(path, None)?;
     let mut last: Option<u32> = None;
     loop {

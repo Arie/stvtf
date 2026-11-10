@@ -17,18 +17,19 @@ mod index;
 
 use super::{Hub, Relay, lock};
 pub use crate::decode::beams::Beam;
-use crate::decode::{Decoder, Lifecycle, Tables};
+use crate::decode::{Decoder, Lifecycle, Span, Tables};
 use crate::demo::{self, Next, Packet};
-use crate::net::bits::BitBuf;
+use crate::net::bits::{BitBuf, BitReader, BitWriter};
+use crate::net::messages::{self, TYPE_BITS};
 use crate::output::Line;
 use anyhow::{Context, Result, bail};
 use index::Index;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 /// Off from the wanted moment by more than this, playback jumps instead of catching up.
@@ -70,7 +71,7 @@ fn beam_key(b: &Beam) -> BeamKey {
 }
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
-static OUR_CRC: std::sync::LazyLock<Option<u32>> = std::sync::LazyLock::new(|| {
+static OUR_CRC: LazyLock<Option<u32>> = LazyLock::new(|| {
     let b = crate::builtin(crate::CURRENT_BUILD)?;
     Tables::from_demo_bytes(b.tables).ok().map(|t| t.sendtable_crc())
 });
@@ -199,7 +200,7 @@ struct Cursor {
     /// The demo's stop packet was read: no more frames come.
     ended: bool,
     /// The last frames decoded, by server tick, cut after their last message.
-    recent: std::collections::VecDeque<(u32, BitBuf)>,
+    recent: VecDeque<(u32, BitBuf)>,
     /// The match itself was paused (`svc_SetPause` in the demo) as of the last frame decoded: a
     /// client that jumps here, past the frame that said so, is told.
     paused: bool,
@@ -268,7 +269,7 @@ impl Cursor {
             started: false,
             first: None,
             ended: false,
-            recent: std::collections::VecDeque::default(),
+            recent: VecDeque::default(),
             paused: false,
             next_pos: 0,
             tables: Vec::new(),
@@ -323,10 +324,7 @@ impl Cursor {
         self.started = true;
         self.first.get_or_insert(i64::from(self.dec.server_tick()));
         for span in life.spans.iter().filter(|s| u32::from(s.id) == super::SVC_SETPAUSE) {
-            if let Ok(p) =
-                crate::net::bits::BitReader::at(bits.bytes(), span.bits.start + crate::net::messages::TYPE_BITS)
-                    .read_bit()
-            {
+            if let Ok(p) = BitReader::at(bits.bytes(), span.bits.start + TYPE_BITS).read_bit() {
                 self.paused = p;
             }
         }
@@ -347,8 +345,6 @@ impl Cursor {
 /// A signon stream with its `net_SignonState`s at `count`, the `ServerInfo`'s: a game client refuses
 /// any other ("Received wrong spawn count"), and an STV demo's differ from its `ServerInfo`'s.
 fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Lifecycle) {
-    use crate::net::bits::{BitReader, BitWriter};
-    use crate::net::messages;
     let mut w = BitWriter::new();
     let mut spans = Vec::with_capacity(life.spans.len());
     for span in &life.spans {
@@ -359,7 +355,7 @@ fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Life
         };
         let start = w.nbits();
         w.write_buf(&msg);
-        spans.push(crate::decode::Span { id: span.id, bits: start..w.nbits() });
+        spans.push(Span { id: span.id, bits: start..w.nbits() });
     }
     let fixed = Lifecycle {
         signon: life.signon.clone(),
@@ -743,7 +739,6 @@ impl Player<'_> {
 
 /// A frame's stream without the director's camera cues.
 fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
-    use crate::net::bits::{BitReader, BitWriter};
     if !life.spans.iter().any(|s| dec.is_director_cue(bits.bytes(), s)) {
         return (bits.clone(), life.clone());
     }
@@ -752,7 +747,7 @@ fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Life
     for span in life.spans.iter().filter(|s| !dec.is_director_cue(bits.bytes(), s)) {
         let start = w.nbits();
         w.write_buf(&BitReader::slice(bits.bytes(), span.bits.clone()));
-        spans.push(crate::decode::Span { id: span.id, bits: start..w.nbits() });
+        spans.push(Span { id: span.id, bits: start..w.nbits() });
     }
     (w.finish(), Lifecycle { spans, ..life.clone() })
 }
@@ -852,7 +847,7 @@ mod tests {
                 m.bytes().to_vec(),
                 bitbuffer::LittleEndian,
             ));
-            assert_eq!(s.read_int::<u32>(crate::net::messages::TYPE_BITS).unwrap(), SVC_TEMPENTITIES);
+            assert_eq!(s.read_int::<u32>(TYPE_BITS).unwrap(), SVC_TEMPENTITIES);
             let Message::TempEntities(te) =
                 Message::from_type(tf_demo_parser::demo::message::MessageType::TempEntities, &mut s, state).unwrap()
             else {
@@ -880,7 +875,7 @@ mod tests {
             load.bytes().to_vec(),
             bitbuffer::LittleEndian,
         ));
-        assert_eq!(s.read_int::<u32>(crate::net::messages::TYPE_BITS).unwrap(), 13);
+        assert_eq!(s.read_int::<u32>(TYPE_BITS).unwrap(), 13);
         let msg =
             Message::from_type(tf_demo_parser::demo::message::MessageType::UpdateStringTable, &mut s, state).unwrap();
         let Message::UpdateStringTable(u) = msg else { panic!() };
@@ -915,7 +910,7 @@ mod tests {
         eprintln!("{cues} director cues in the first 10 s");
         let player = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
         let msg = c.dec.hltv_chase(player.id.0).unwrap();
-        let span = crate::decode::Span { id: 25, bits: 0..msg.nbits() };
+        let span = Span { id: 25, bits: 0..msg.nbits() };
         assert!(c.dec.is_director_cue(msg.bytes(), &span));
         let state = c.dec.parser_state_for_tests();
         let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
