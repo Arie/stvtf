@@ -58,6 +58,9 @@ struct Table {
     values: Option<BTreeMap<u16, Value>>,
 }
 
+/// The table of the models loaded, by model index.
+const MODEL_PRECACHE: &str = "modelprecache";
+
 /// Sprites a beam can be drawn with, best first, as `modelprecache` names them.
 const BEAM_SPRITES: [&str; 3] = ["sprites/laserbeam.vmt", "sprites/physbeam.vmt", "sprites/laser.vmt"];
 
@@ -78,7 +81,7 @@ impl Tables {
             match msg {
                 Message::CreateStringTable(t) => {
                     let name = t.table.name.to_string();
-                    if name == "modelprecache" {
+                    if name == MODEL_PRECACHE {
                         for (i, e) in &t.table.entries {
                             self.note_model(*i, e.text.as_deref());
                         }
@@ -88,7 +91,7 @@ impl Tables {
                     self.by_id.push(Table { name, max: t.table.max_entries, entries, values });
                 }
                 Message::UpdateStringTable(u) => {
-                    if self.by_id.get(usize::from(u.table_id)).is_some_and(|t| t.name == "modelprecache") {
+                    if self.by_id.get(usize::from(u.table_id)).is_some_and(|t| t.name == MODEL_PRECACHE) {
                         for (i, e) in &u.entries {
                             self.note_model(*i, e.text.as_deref());
                         }
@@ -136,7 +139,7 @@ impl Tables {
         if let Some((0, index)) = self.beam_sprite {
             return Some((index, None));
         }
-        let (id, table) = self.by_id.iter().enumerate().find(|(_, t)| t.name == "modelprecache")?;
+        let (id, table) = self.by_id.iter().enumerate().find(|(_, t)| t.name == MODEL_PRECACHE)?;
         let next = table.entries.iter().max().map_or(0, |i| i + 1);
         let slot = match before {
             Some(b) if !table.entries.contains(&b) => b,
