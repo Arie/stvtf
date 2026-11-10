@@ -370,8 +370,7 @@ mod tests {
         assert_eq!(r.pos, at, "it stays before the packet");
         // The rest arrives: reading goes on with that packet.
         let mut grown = Reader::new(Cursor::new(&bytes)).unwrap();
-        grown.r.seek(SeekFrom::Start(r.pos)).unwrap();
-        grown.pos = r.pos;
+        grown.seek_to(r.pos).unwrap();
         assert_eq!(grown.next_packet().unwrap(), tenth);
     }
 
