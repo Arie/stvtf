@@ -230,13 +230,17 @@ fn watch_of(target: SocketAddr) -> Watch {
     w
 }
 
+fn with_players(line: &Line) -> bool {
+    matches!(line, Line::Snapshot(s) if !s.players.is_empty())
+}
+
 /// A client until `done`, with `in_game` called on the first snapshot with players.
 fn client_until(w: &Watch, in_game: impl FnOnce(), mut done: impl FnMut(&Line) -> bool) -> Vec<Line> {
     let stop = AtomicBool::new(false);
     let mut in_game = Some(in_game);
     let mut lines = Vec::new();
     watch::watch(w, &stop, &mut |line| {
-        if matches!(&line, Line::Snapshot(s) if !s.players.is_empty())
+        if with_players(&line)
             && let Some(f) = in_game.take()
         {
             f();
@@ -294,7 +298,7 @@ fn without_loss_nobody_asks_for_a_full_update() {
             &w,
             || {},
             |l| {
-                snapshots += usize::from(matches!(l, Line::Snapshot(s) if !s.players.is_empty()));
+                snapshots += usize::from(with_players(l));
                 snapshots >= 40
             },
         );
@@ -321,26 +325,39 @@ fn a_client_that_loses_frames_gets_a_full_update_and_goes_on() {
 }
 
 /// Serves a relay of `server` while `client` runs against the relay.
-fn with_relay_of<T>(server: &FakeServer, client: impl FnOnce(SocketAddr, &Relay) -> T) -> T {
+fn with_relay_of<T>(server: &FakeServer, client: impl FnOnce(SocketAddr) -> T) -> T {
+    with_relay_watching(server, watch_of(server.addr()), client)
+}
+
+/// [`with_relay_of`], the relay watching with `upstream`.
+fn with_relay_watching<T>(server: &FakeServer, mut upstream: Watch, client: impl FnOnce(SocketAddr) -> T) -> T {
     let relay = Relay::bind(&RelayConfig { password: String::new(), ..RelayConfig::new("127.0.0.1:0") }).unwrap();
-    let mut w = watch_of(server.addr());
-    w.snapshot_hz = 0.0;
+    upstream.snapshot_hz = 0.0;
     let stop = AtomicBool::new(false);
     std::thread::scope(|s| {
         s.spawn(|| server.run());
-        s.spawn(|| relay.watch(&w, &stop, &mut |_| {}).unwrap());
-        let out = client(relay.local_addr().unwrap(), &relay);
+        s.spawn(|| relay.watch(&upstream, &stop, &mut |_| {}).unwrap());
+        let out = client(relay.local_addr().unwrap());
         stop.store(true, Ordering::Relaxed);
         server.stop.store(true, Ordering::Relaxed);
         out
     })
 }
 
+/// Waits until the server has sent `packets`, or `LIMIT`; false then.
+fn sent(server: &FakeServer, packets: usize) -> bool {
+    let limit = Instant::now() + LIMIT;
+    while server.position.load(Ordering::Relaxed) < packets && Instant::now() < limit {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    server.position.load(Ordering::Relaxed) >= packets
+}
+
 /// Lost on the way from the relay: the server knows of no loss, and the relay must ask for it.
 #[test]
 fn a_client_losing_frames_from_a_relay_gets_a_full_update_through_it() {
     let server = FakeServer::new();
-    let lines = with_relay_of(&server, |relay, _| {
+    let lines = with_relay_of(&server, |relay| {
         let link = LossyLink::new(relay);
         let stop = AtomicBool::new(false);
         let w = watch_of(link.addr());
@@ -361,7 +378,7 @@ fn a_client_losing_frames_from_a_relay_gets_a_full_update_through_it() {
 #[test]
 fn frames_lost_on_the_way_to_a_relay_are_made_up_for_its_clients() {
     let server = FakeServer::new();
-    let lines = with_relay_of(&server, |relay, _| {
+    let lines = with_relay_of(&server, |relay| {
         client_until(&watch_of(relay), || server.lose.store(LOSS, Ordering::Relaxed), went_back_and_on())
     });
     assert_recovered(&lines);
@@ -374,20 +391,10 @@ fn frames_lost_on_the_way_to_a_relay_are_made_up_for_its_clients() {
 fn a_client_joining_a_relay_late_gets_a_full_update_asked_for_it() {
     let server = FakeServer::new();
     let late = 1000;
-    let (joined_late, lines) = with_relay_of(&server, |relay, _| {
-        let limit = Instant::now() + LIMIT;
-        while server.position.load(Ordering::Relaxed) < late && Instant::now() < limit {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let joined_late = server.position.load(Ordering::Relaxed) >= late;
-        (
-            joined_late,
-            client_until(&watch_of(relay), || {}, |l| matches!(l, Line::Snapshot(s) if !s.players.is_empty())),
-        )
-    });
+    let (joined_late, lines) =
+        with_relay_of(&server, |relay| (sent(&server, late), client_until(&watch_of(relay), || {}, with_players)));
     assert!(joined_late, "the relay never connected");
-    let players = |l: &Line| matches!(l, Line::Snapshot(s) if !s.players.is_empty());
-    assert!(lines.iter().any(players), "entities through a full update");
+    assert!(lines.iter().any(with_players), "entities through a full update");
     assert!(server.answered.load(Ordering::Relaxed) >= 1, "someone asked the server");
 }
 
@@ -396,25 +403,13 @@ fn a_client_joining_a_relay_late_gets_a_full_update_asked_for_it() {
 #[test]
 fn a_relay_reports_the_build_of_its_server() {
     let server = FakeServer::new();
-    let relay = Relay::bind(&RelayConfig { password: String::new(), ..RelayConfig::new("127.0.0.1:0") }).unwrap();
-    let addr = relay.local_addr().unwrap();
     let mut upstream = watch_of(server.addr());
     upstream.build = None;
-    upstream.snapshot_hz = 0.0;
-    let stop = AtomicBool::new(false);
-    let lines = std::thread::scope(|s| {
-        s.spawn(|| server.run());
-        s.spawn(|| relay.watch(&upstream, &stop, &mut |_| {}).unwrap());
-        let limit = Instant::now() + LIMIT;
-        while server.position.load(Ordering::Relaxed) == 0 && Instant::now() < limit {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let mut client = watch_of(addr);
+    let lines = with_relay_watching(&server, upstream, |relay| {
+        sent(&server, 1);
+        let mut client = watch_of(relay);
         client.build = None;
-        let lines = client_until(&client, || {}, |l| matches!(l, Line::Status(Status::Connecting { .. })));
-        stop.store(true, Ordering::Relaxed);
-        server.stop.store(true, Ordering::Relaxed);
-        lines
+        client_until(&client, || {}, |l| matches!(l, Line::Status(Status::Connecting { .. })))
     });
     let offered = lines.iter().find_map(|l| match l {
         Line::Status(Status::Connecting { build, .. }) => Some(build.as_str()),
