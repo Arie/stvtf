@@ -89,10 +89,8 @@ impl Tables {
                 }
                 Message::UpdateStringTable(u) => {
                     if self.by_id.get(usize::from(u.table_id)).is_some_and(|t| t.name == "modelprecache") {
-                        let models: Vec<(u16, Option<&str>)> =
-                            u.entries.iter().map(|(i, e)| (*i, e.text.as_deref())).collect();
-                        for (i, text) in models {
-                            self.note_model(i, text);
+                        for (i, e) in &u.entries {
+                            self.note_model(*i, e.text.as_deref());
                         }
                     }
                     let Some(table) = self.by_id.get_mut(usize::from(u.table_id)) else { continue };
