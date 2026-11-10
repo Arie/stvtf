@@ -150,13 +150,15 @@ fn a_client_follows_a_jump_back_and_a_pause() {
         let jumped = Instant::now();
         wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick < first + 10 * SECOND));
         wait_for("a second after the jump", || since(seen, jumped).len() > FRAMES_A_SECOND);
-        // Paused where it is: nothing new comes.
+        // Paused where it is: nothing new comes, but that moment's full update if it is late.
         let at = snapshots(seen).last().unwrap().1.tick;
         playback.set(want(at, true, false));
         std::thread::sleep(Duration::from_millis(300));
         let paused = Instant::now();
         std::thread::sleep(Duration::from_millis(700));
-        assert_eq!(since(seen, paused).len(), 0, "frames while paused");
+        let mut late: Vec<u32> = since(seen, paused).iter().map(|s| s.tick).collect();
+        late.dedup();
+        assert!(late.len() <= 1, "frames while paused: {late:?}");
         playback.set(want(at, false, false));
         let resumed = Instant::now();
         wait_for("frames after the pause", || since(seen, resumed).len() > 30);
