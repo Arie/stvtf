@@ -19,6 +19,13 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 pub const HEADER_LEN: usize = 1072;
 const MAGIC: &[u8; 8] = b"HL2DEMO\0";
 const DEMO_PROTOCOL: u32 = 3;
+/// Each of the header's names is this long, NUL padded (`MAX_OSPATH`).
+const NAME_LEN: usize = 260;
+/// Where the header's names start: after the magic and the demo and network protocols.
+const NAMES_AT: usize = 16;
+/// Where the header's counts start: after the server, client, map and game names.
+const COUNTS_AT: usize = NAMES_AT + 4 * NAME_LEN;
+const _: () = assert!(COUNTS_AT + 16 == HEADER_LEN, "seconds, ticks, frames and signon bytes end the header");
 /// View origins and angles, then the in and out sequence numbers.
 const META_LEN: usize = 84;
 /// Longer than any packet a demo has; a corrupt length is not read into memory.
@@ -59,24 +66,24 @@ pub struct Header {
 impl Header {
     /// Reads a header from the start of a demo.
     pub fn parse(b: &[u8]) -> Result<Header> {
-        if b.len() < HEADER_LEN || &b[..8] != MAGIC {
+        if b.len() < HEADER_LEN || &b[..MAGIC.len()] != MAGIC {
             bail!("not a demo");
         }
         let u = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap_or_default());
-        let s = |at: usize| {
-            let f = &b[at..at + 260];
-            String::from_utf8_lossy(&f[..f.iter().position(|&c| c == 0).unwrap_or(260)]).into_owned()
+        let s = |i: usize| {
+            let f = &b[NAMES_AT + i * NAME_LEN..][..NAME_LEN];
+            String::from_utf8_lossy(&f[..f.iter().position(|&c| c == 0).unwrap_or(NAME_LEN)]).into_owned()
         };
         Ok(Header {
-            protocol: u(12),
-            server: s(16),
-            client: s(276),
-            map: s(536),
-            game: s(796),
-            seconds: f32::from_bits(u(1056)),
-            ticks: u(1060),
-            frames: u(1064),
-            signon_bytes: u(1068),
+            protocol: u(NAMES_AT - 4),
+            server: s(0),
+            client: s(1),
+            map: s(2),
+            game: s(3),
+            seconds: f32::from_bits(u(COUNTS_AT)),
+            ticks: u(COUNTS_AT + 4),
+            frames: u(COUNTS_AT + 8),
+            signon_bytes: u(COUNTS_AT + 12),
         })
     }
 
@@ -87,8 +94,8 @@ impl Header {
         b.extend_from_slice(&DEMO_PROTOCOL.to_le_bytes());
         b.extend_from_slice(&self.protocol.to_le_bytes());
         for s in [&self.server, &self.client, &self.map, &self.game] {
-            let mut f = [0u8; 260];
-            let n = s.len().min(259);
+            let mut f = [0u8; NAME_LEN];
+            let n = s.len().min(NAME_LEN - 1);
             f[..n].copy_from_slice(&s.as_bytes()[..n]);
             b.extend_from_slice(&f);
         }
