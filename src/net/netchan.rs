@@ -14,8 +14,8 @@ pub const FLAG_CHALLENGE: u8 = 0x20;
 /// A datagram starts with an i32: the sequence of an in-band packet, or one of the markers below.
 pub const SEQUENCE_LEN: usize = 4;
 const MARKER_OOB: i32 = -1;
-const MARKER_SPLIT: i32 = -2;
-const MARKER_COMPRESSED: i32 = -3;
+pub(crate) const MARKER_SPLIT: i32 = -2;
+pub(crate) const MARKER_COMPRESSED: i32 = -3;
 /// Header offsets: flags after sequence and ack, then the checksum (u16).
 const FLAGS_AT: usize = 2 * SEQUENCE_LEN;
 const CHECKSUM_AT: usize = FLAGS_AT + 1;

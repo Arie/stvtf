@@ -3,6 +3,7 @@
 //! Header (12 bytes, LE): i32 -2 | i32 group id | u8 part count | u8 part number | u16 split size.
 //! The joined payload is a complete datagram again (usually `-3 SNAP`).
 
+use super::netchan::MARKER_SPLIT;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -91,7 +92,7 @@ pub fn split(datagram: &[u8], group: i32) -> Vec<Vec<u8>> {
         .enumerate()
         .map(|(n, chunk)| {
             let mut d = Vec::with_capacity(HEADER_LEN + chunk.len());
-            d.extend_from_slice(&(-2i32).to_le_bytes());
+            d.extend_from_slice(&MARKER_SPLIT.to_le_bytes());
             d.extend_from_slice(&group.to_le_bytes());
             d.push(count);
             d.push(n as u8);
@@ -107,7 +108,7 @@ mod tests {
     use super::*;
 
     fn part(gid: i32, count: u8, number: u8, size: u16, payload: &[u8]) -> Vec<u8> {
-        let mut d = (-2i32).to_le_bytes().to_vec();
+        let mut d = MARKER_SPLIT.to_le_bytes().to_vec();
         d.extend_from_slice(&gid.to_le_bytes());
         d.push(count);
         d.push(number);

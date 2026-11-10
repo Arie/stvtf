@@ -202,13 +202,13 @@ mod tests {
     fn snap_compressed_split_datagram() {
         let tick = messages::tick(42);
         let inner = packet(3, 1, None, Some(&tick));
-        let mut comp = (-3i32).to_le_bytes().to_vec();
+        let mut comp = netchan::MARKER_COMPRESSED.to_le_bytes().to_vec();
         comp.extend_from_slice(b"SNAP");
         comp.extend_from_slice(&snap::raw::Encoder::new().compress_vec(&inner).unwrap());
         let split = comp.len().div_ceil(2);
         let mut parts = Vec::new();
         for (n, chunk) in comp.chunks(split).enumerate() {
-            let mut d = (-2i32).to_le_bytes().to_vec();
+            let mut d = netchan::MARKER_SPLIT.to_le_bytes().to_vec();
             d.extend_from_slice(&11i32.to_le_bytes());
             d.push(2);
             d.push(n as u8);
@@ -228,7 +228,7 @@ mod tests {
     fn bad_compressed_packets_are_counted_and_dropped() {
         let mut rx = Receiver::new(Some(77));
         let now = Instant::now();
-        let marker = (-3i32).to_le_bytes();
+        let marker = netchan::MARKER_COMPRESSED.to_le_bytes();
         assert!(rx.feed(&[marker.as_slice(), b"NOPE"].concat(), now).is_none());
         let garbled = [marker.as_slice(), compress::SNAPPY_MAGIC, &[0xff; 8]].concat();
         assert!(rx.feed(&garbled, now).is_none());

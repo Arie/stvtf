@@ -1,6 +1,7 @@
 //! `-3 SNAP` datagrams are raw Snappy; compressed reliable transfers are
 //! Snappy or Valve LZSS depending on their magic.
 
+use super::netchan::MARKER_COMPRESSED;
 use anyhow::{Result, bail};
 
 const MAX_OUTPUT: usize = 1 << 22;
@@ -73,7 +74,7 @@ pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
 
 /// A `-3 SNAP` datagram holding `datagram`.
 pub fn compress_datagram(datagram: &[u8]) -> Vec<u8> {
-    let mut out = (-3i32).to_le_bytes().to_vec();
+    let mut out = MARKER_COMPRESSED.to_le_bytes().to_vec();
     out.extend_from_slice(&snappy_transfer(datagram));
     out
 }
