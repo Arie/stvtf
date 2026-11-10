@@ -331,8 +331,7 @@ impl Cursor {
             }
         }
         self.tables.extend(super::table_changes(&bits, &life).map(Arc::new));
-        let end = life.spans.last().map_or(0, |s| s.bits.end);
-        self.recent.push_back((self.dec.server_tick(), crate::net::bits::BitReader::slice(bits.bytes(), 0..end)));
+        self.recent.push_back((self.dec.server_tick(), super::cut(&bits, &life)));
         if self.recent.len() > RECENT {
             self.recent.pop_front();
         }

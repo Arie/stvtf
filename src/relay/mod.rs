@@ -526,13 +526,11 @@ impl Hub {
                 self.signon_open = false;
             }
             self.tail_full |= life.full_update;
-            // Cut off the padding after the last message: followed by more, it would be read as one.
-            let end = life.spans.last().map_or(0, |s| s.bits.end);
             let mut w = BitWriter::new();
             if let Some(earlier) = &self.tail {
                 w.write_buf(earlier);
             }
-            w.write_buf(&BitReader::slice(bits.bytes(), 0..end));
+            w.write_buf(&cut(bits, life));
             self.tail = Some(w.finish());
             // The server sends string table changes (new instance baselines among them) in the
             // unreliable part, again in each datagram until acked. A client that joins later
@@ -908,6 +906,13 @@ impl Hub {
     fn hold(&self) -> bool {
         !self.seen_client || self.clients.values().any(Client::signing_on)
     }
+}
+
+/// A stream up to the end of its last message: what follows is padding, and followed by more it
+/// would be read as messages.
+fn cut(bits: &BitBuf, life: &Lifecycle) -> BitBuf {
+    let end = life.spans.last().map_or(0, |s| s.bits.end);
+    BitReader::slice(bits.bytes(), 0..end)
 }
 
 fn is_table_change(id: u8) -> bool {
