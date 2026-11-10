@@ -85,7 +85,7 @@ static TABLES: LazyLock<Tables> = LazyLock::new(|| crate::watch::tables(crate::C
 
 /// Message streams into a new decoder, as they come out of a channel.
 pub fn decoder(data: &[u8]) {
-    let mut decoder = Decoder::new(&TABLES, 20.0).unwrap();
+    let mut decoder = Decoder::new(&TABLES, crate::DEFAULT_SNAPSHOT_HZ).unwrap();
     for piece in pieces(data) {
         let _ = decoder.feed(piece, piece.len() * 8);
     }

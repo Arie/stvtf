@@ -13,7 +13,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::Instant;
 
-const MAGIC: &[u8; 8] = b"STVMAPC1";
+pub(crate) const MAGIC: &[u8; 8] = b"STVMAPC1";
 /// A record's header: receive time (u64 microseconds), kind (u8), data length (u32).
 const KIND_AT: usize = 8;
 const LEN_AT: usize = 9;

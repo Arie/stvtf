@@ -138,7 +138,7 @@ fn captures_never_panic() {
         let mut data = real.to_vec();
         rng.mutate(&mut data);
         let _ = capture::read(&data);
-        let mut junk = b"STVMAPC1".to_vec();
+        let mut junk = capture::MAGIC.to_vec();
         junk.extend(rng.bytes(200));
         let _ = capture::read(&junk);
     }
@@ -149,7 +149,7 @@ fn garbage_for_the_decoder_never_panics_the_process() {
     let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
     let mut rng = Rng::seeded(5);
     for _ in 0..rounds(40) {
-        let mut dec = Decoder::new(&tables, 20.0).unwrap();
+        let mut dec = Decoder::new(&tables, crate::DEFAULT_SNAPSHOT_HZ).unwrap();
         for _ in 0..50 {
             let data = rng.bytes(300);
             let _ = dec.feed(&data, data.len() * 8);
