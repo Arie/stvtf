@@ -109,7 +109,7 @@ impl Header {
 
 /// One packet of a demo. Signon and message packets hold a message stream, byte padded.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(missing_docs)] // the fields are a packet's tick and data
+#[expect(missing_docs, reason = "the fields are a packet's tick and data")]
 pub enum Packet {
     /// Messages of the signon.
     Signon { tick: i32, data: Vec<u8> },
