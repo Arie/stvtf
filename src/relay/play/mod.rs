@@ -659,7 +659,10 @@ impl Player<'_> {
                     since.extend(c.dec.round_event());
                     // Its clock may have gone back: panels waiting for a time it passed redraw.
                     since.push(super::reset_hud());
-                    self.relay.hub().send_keyframe(&key, &since, c.paused);
+                    let mut hub = self.relay.hub();
+                    hub.send_keyframe(&key, &since, c.paused);
+                    hub.notes_again(Instant::now());
+                    drop(hub);
                     if std::mem::take(&mut self.rekeyed) {
                         self.clock = Some((f64::from(tick) * f64::from(interval), Instant::now()));
                     }
@@ -683,27 +686,7 @@ impl Player<'_> {
                     self.relay.hub().skim(&bits, &life);
                 }
             }
-            Some(next) if !want.paused && next <= target => {
-                let was_paused = c.paused;
-                if let Some((bits, life)) = c.decode() {
-                    // Ours, not the demo's director's.
-                    let (bits, life) =
-                        if want.camera.is_some() { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
-                    let mut hub = self.relay.hub();
-                    hub.upstream_stream(&bits, false, &life);
-                    hub.upstream_flush();
-                    self.clock = Some((c.tick() as f64 * f64::from(interval), Instant::now()));
-                    // The match paused or went on: the clients are told reliably too.
-                    if c.paused != was_paused {
-                        hub.set_paused(c.paused);
-                        // Going on after it, the HUD redraws its timer at once (as casters'
-                        // `hud_reloadscheme` has it do).
-                        if !c.paused {
-                            hub.tell_active(&super::reset_hud());
-                        }
-                    }
-                }
-            }
+            Some(next) if !want.paused && next <= target => self.play_frame(want.camera.is_some()),
             _ => std::thread::sleep(NAP),
         }
         Ok(())
@@ -711,6 +694,34 @@ impl Player<'_> {
 }
 
 impl Player<'_> {
+    /// Plays the next frame to the clients (without the demo's camera cues when the room has its
+    /// own `camera`).
+    fn play_frame(&mut self, camera: bool) {
+        let Some(c) = &mut self.cur else { return };
+        let was_paused = c.paused;
+        let Some((bits, life)) = c.decode() else { return };
+        // Ours, not the demo's director's.
+        let (bits, life) = if camera { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
+        let mut hub = self.relay.hub();
+        hub.upstream_stream(&bits, false, &life);
+        hub.upstream_flush();
+        self.clock = Some((c.tick() as f64 * f64::from(c.dec.tick_interval()), Instant::now()));
+        // The match's own HUD resets (a spawn, a new round) drop the notes too.
+        if life.spans.iter().any(|s| super::is_reset_hud(bits.bytes(), s)) {
+            hub.notes_again(Instant::now());
+        }
+        // The match paused or went on: the clients are told reliably too.
+        if c.paused != was_paused {
+            hub.set_paused(c.paused);
+            // Going on after it, the HUD redraws its timer at once (as casters'
+            // `hud_reloadscheme` has it do).
+            if !c.paused {
+                hub.tell_active(&super::reset_hud());
+                hub.notes_again(Instant::now());
+            }
+        }
+    }
+
     /// Every client gets a full update.
     fn rekey(&mut self) {
         self.relay.hub().all_want_keyframe(Instant::now());

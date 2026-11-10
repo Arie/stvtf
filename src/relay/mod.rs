@@ -24,7 +24,7 @@
 //! it is real by answering a challenge, so the relay cannot be used to reflect traffic.
 
 use crate::capture::{self, Record};
-use crate::decode::{Lifecycle, Tables};
+use crate::decode::{Lifecycle, Span, Tables};
 use crate::lock;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::handshake::{self, FromClient};
@@ -71,6 +71,9 @@ pub use play::{Beam, Camera, Note, Playback, Want};
 const TRACE_EVERY: Duration = Duration::from_secs(5);
 
 const USERMESSAGE_RESETHUD: u32 = 6;
+/// How long after a HUD reset, and after going into the game, a client gets the notes again.
+const NOTES_AFTER_RESET: Duration = Duration::from_millis(300);
+const NOTES_AFTER_ENTERING: Duration = Duration::from_secs(2);
 
 /// Clients a relay takes unless told otherwise.
 pub const DEFAULT_SLOTS: usize = 10;
@@ -131,6 +134,8 @@ struct Client {
     gate: Option<Signon>,
     /// Reliable messages not yet in a transfer.
     queue: Vec<BitBuf>,
+    /// When to give it the notes again (see [`Hub::notes`]).
+    notes_at: Option<Instant>,
     outgoing: Option<Outgoing>,
     last_heard: Instant,
     last_sent: Instant,
@@ -159,6 +164,7 @@ impl Client {
             // The client opens with net_SignonState(CONNECTED); then the log starts.
             gate: Some(Signon::Connected),
             queue: Vec::new(),
+            notes_at: None,
             outgoing: None,
             last_heard: now,
             last_sent: now,
@@ -192,6 +198,13 @@ impl Client {
     /// class whose baseline it lacks stop a game client.
     fn has_log(&self, log: &[Logged]) -> bool {
         self.cursor == log.len() && self.queue.is_empty() && self.outgoing.is_none()
+    }
+
+    /// The client goes into the game: it gets `notes`, and again once its HUD is up (sent with its
+    /// first entities they may come before it).
+    fn enter_notes(&mut self, notes: &[BitBuf], now: Instant) {
+        self.queue.extend(notes.iter().cloned());
+        self.notes_at = Some(now + NOTES_AFTER_ENTERING);
     }
 
     /// Whether the client waits for a full update and can take one.
@@ -454,7 +467,7 @@ impl Hub {
                 trace!("{addr} gets a keyframe of {} bits", key.nbits());
                 c.set_phase(Phase::Active, now);
                 c.queue.push(pause.clone());
-                c.queue.extend(self.notes.iter().cloned());
+                c.enter_notes(&self.notes, now);
                 self.out.send(*addr, c, Some(key), true, now);
                 for f in since {
                     self.out.send(*addr, c, Some(f), true, now);
@@ -466,6 +479,24 @@ impl Hub {
     /// What a client gets after every full update from now on, in place of what it got before.
     fn set_notes(&mut self, notes: Vec<BitBuf>) {
         self.notes = notes;
+    }
+
+    /// The clients in the game had their HUD reset, which drops the notes: they get them again in
+    /// a moment, past it (a reset in the same packet is read after its reliable part).
+    fn notes_again(&mut self, now: Instant) {
+        for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
+            c.notes_at = Some(now + NOTES_AFTER_RESET);
+        }
+    }
+
+    /// The notes, reliably, to the clients in the game due them again.
+    fn send_due_notes(&mut self, now: Instant) {
+        for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
+            if c.notes_at.is_some_and(|t| now >= t) {
+                c.notes_at = None;
+                c.queue.extend(self.notes.iter().cloned());
+            }
+        }
     }
 
     /// Tells the clients in the game that playback paused or went on, reliably.
@@ -533,7 +564,7 @@ impl Hub {
             if full && c.takes_full_update(&self.log) {
                 trace!("{addr} gets a full update of {} bits", tail.as_ref().map_or(0, BitBuf::nbits));
                 c.set_phase(Phase::Active, now);
-                c.queue.extend(self.notes.iter().cloned());
+                c.enter_notes(&self.notes, now);
             }
             if c.phase == Phase::Active {
                 // One packet per server datagram, as the server sends: a packet of our own
@@ -556,7 +587,7 @@ impl Hub {
             if let Mode::Play { paused } = self.mode {
                 c.queue.push(set_pause(paused));
             }
-            c.queue.extend(self.notes.iter().cloned());
+            c.enter_notes(&self.notes, now);
             for t in frames {
                 self.out.send(addr, c, Some(t), false, now);
             }
@@ -751,6 +782,12 @@ pub(crate) fn reset_hud() -> BitBuf {
     w.write_bits(8, 11); // the length of its data in bits
     w.write_bits(0, 8);
     w.finish()
+}
+
+/// Whether the message at `span` is a `ResetHUD`.
+pub(crate) fn is_reset_hud(data: &[u8], span: &Span) -> bool {
+    u32::from(span.id) == SVC_USERMESSAGE
+        && BitReader::at(data, span.bits.start + TYPE_BITS).read_bits(8).is_ok_and(|t| t == USERMESSAGE_RESETHUD)
 }
 
 /// `svc_SetPause`.
@@ -1143,6 +1180,28 @@ mod tests {
     }
 
     #[test]
+    fn notes_go_again_once_a_client_is_in_and_after_a_hud_reset() {
+        let (mut hub, active) = hub_with_one_in();
+        let mut w = BitWriter::new();
+        w.write_bits(2, 16);
+        let note = w.finish();
+        hub.set_notes(vec![note.clone()]);
+        let now = Instant::now();
+        hub.clients.get_mut(&active).unwrap().enter_notes(&hub.notes.clone(), now);
+        let queued = |hub: &mut Hub| std::mem::take(&mut hub.clients.get_mut(&active).unwrap().queue);
+        assert_eq!(queued(&mut hub), std::slice::from_ref(&note), "with its entities");
+        hub.send_due_notes(now);
+        assert_eq!(queued(&mut hub), [], "not yet");
+        hub.send_due_notes(now + NOTES_AFTER_ENTERING);
+        assert_eq!(queued(&mut hub), std::slice::from_ref(&note), "once its HUD is up");
+        hub.send_due_notes(now + NOTES_AFTER_ENTERING * 2);
+        assert_eq!(queued(&mut hub), [], "once");
+        hub.notes_again(now);
+        hub.send_due_notes(now + NOTES_AFTER_RESET);
+        assert_eq!(queued(&mut hub), [note], "past a HUD reset");
+    }
+
+    #[test]
     fn a_late_client_gets_the_table_changes_once_and_one_in_the_game_skips_them() {
         let (mut hub, active) = hub_with_one_in();
         let now = Instant::now();
@@ -1272,6 +1331,15 @@ mod tests {
         assert_eq!(b.hub.clients.len(), 1);
         b.hub.service(now + CLIENT_TIMEOUT);
         assert!(b.hub.clients.is_empty());
+    }
+
+    #[test]
+    fn a_hud_reset_is_told_from_other_messages() {
+        let span = |m: &BitBuf, id: u32| Span { id: u8::try_from(id).unwrap(), bits: 0..m.nbits() };
+        let reset = reset_hud();
+        assert!(is_reset_hud(reset.bytes(), &span(&reset, SVC_USERMESSAGE)));
+        let pause = set_pause(true);
+        assert!(!is_reset_hud(pause.bytes(), &span(&pause, SVC_SETPAUSE)));
     }
 
     #[test]

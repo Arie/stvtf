@@ -46,8 +46,10 @@ fn bubble(dec: &Decoder, note: &Note) -> Option<BitBuf> {
 
 impl Player<'_> {
     /// Gives the clients the room's notes when they changed (and those on players not in the match
-    /// yet, in a while): new ones shown, gone ones hidden, all of them again after full updates.
+    /// yet, in a while): new ones shown, gone ones hidden, all of them again after full updates
+    /// and HUD resets.
     pub(super) fn show_notes(&mut self, version: u64, notes: &[Note]) {
+        self.relay.hub().send_due_notes(Instant::now());
         let s = &mut self.shown_notes;
         let retry = s.missing && s.tried.is_none_or(|t| t.elapsed() >= RETRY);
         if s.version == Some(version) && !retry {
