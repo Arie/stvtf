@@ -220,7 +220,7 @@ mod tests {
                 }
             }
             let from = Cursor::restore(&path, mark).unwrap();
-            let (a, b) = (from.dec.world_dump(), whole.dec.world_dump());
+            let (a, b) = (from.dec.world_compared(), whole.dec.world_compared());
             for (i, e) in &b {
                 assert_eq!(a.get(i), Some(e), "entity {i} at tick {}", mark.tick);
             }
@@ -246,7 +246,12 @@ mod tests {
                 assert_eq!(from.dec.server_tick(), mark.tick, "{}", path.display());
                 let from = read_out(from);
                 assert_eq!(from.dec.server_tick(), whole.dec.server_tick());
-                assert!(from.dec.world_dump() == whole.dec.world_dump(), "{} from tick {}", path.display(), mark.tick);
+                assert!(
+                    from.dec.world_compared() == whole.dec.world_compared(),
+                    "{} from tick {}",
+                    path.display(),
+                    mark.tick
+                );
             }
         }
     }

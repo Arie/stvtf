@@ -253,11 +253,12 @@ impl World {
         let mut entities = Vec::new();
         for (index, e) in frame.iter() {
             let mut entering = enter(state, index, e)?;
-            if let Some(clock) = timer_props(state, e, hold.map(|interval| tick as f32 * interval)) {
-                entering.props.retain(|p| !clock.iter().any(|q| q.index == p.index));
-                entering.props.extend(clock);
-                entering.props.sort_by_key(|p| p.index);
+            let clock = timer_props(state, e, hold.map(|interval| tick as f32 * interval));
+            for set in clock.into_iter().chain(reset_parity(state, e)) {
+                entering.props.retain(|p| !set.iter().any(|q| q.index == p.index));
+                entering.props.extend(set);
             }
+            entering.props.sort_by_key(|p| p.index);
             entities.push(entering);
         }
         let msg = PacketEntitiesMessage {
@@ -351,6 +352,17 @@ fn timer_props(state: &ParserState, e: &Entity, hold: Option<f32>) -> Option<Vec
         SendProp { index: left_at, identifier: left_id, value: SendPropValue::Float(left) },
         SendProp { index: end_at, identifier: end_id, value: SendPropValue::Float(end) },
     ])
+}
+
+/// A TF weapon's `m_bResetParity` as a client creates the weapon with it, for a full update: one
+/// that differs from it, the client takes for a reset (`CTFWeaponBase::OnDataChanged`), and a
+/// medigun's charge goes to 0 until it changes. Its later flips, real resets, still differ. None
+/// for another entity.
+fn reset_parity(state: &ParserState, e: &Entity) -> Option<Vec<SendProp>> {
+    let table = state.send_tables.get(usize::from(e.class))?;
+    let id = SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
+    let index = super::props::prop_index(table, id)?;
+    Some(vec![SendProp { index, identifier: id, value: SendPropValue::Integer(0) }])
 }
 
 /// An entity entering with the props that differ from its class's static baseline.

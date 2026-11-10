@@ -134,6 +134,16 @@ pub(crate) struct Span {
 /// The type of a span that could not be decoded.
 pub(crate) const UNPARSED: u8 = u8::MAX;
 
+/// The index of prop `id` in class `class`'s table, if it has it.
+#[cfg(test)]
+pub(crate) fn props_index_for_tests(
+    state: &ParserState,
+    class: u16,
+    id: tf_demo_parser::demo::sendprop::SendPropIdentifier,
+) -> Option<u32> {
+    props::prop_index(state.send_tables.get(usize::from(class))?, id)
+}
+
 /// `svc_GameEvent`: its length's bits, then the event id's.
 const GAMEEVENT_LENGTH_BITS: usize = 11;
 const EVENT_ID_BITS: usize = 9;
@@ -270,10 +280,25 @@ impl Decoder {
         self.extractor().interval()
     }
 
-    /// Every entity as the world has it, to compare two decoders.
+    /// Every entity as the world has it.
     #[cfg(test)]
     pub(crate) fn world_dump(&self) -> std::collections::BTreeMap<u32, world::Dumped> {
         self.world.as_ref().map(world::World::dump).unwrap_or_default()
+    }
+
+    /// [`Decoder::world_dump`] to compare two decoders, one started from a full update: without
+    /// the weapons' `m_bResetParity`, which a full update gives as a client starts with it.
+    #[cfg(test)]
+    pub(crate) fn world_compared(&self) -> std::collections::BTreeMap<u32, world::Dumped> {
+        let state = self.handler.get_parser_state();
+        let parity = tf_demo_parser::demo::sendprop::SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
+        let mut dump = self.world_dump();
+        for (class, _, props) in dump.values_mut() {
+            if let Some(at) = props_index_for_tests(state, *class, parity) {
+                props.retain(|(i, _)| *i != at);
+            }
+        }
+        dump
     }
 
     /// The entities the keyframe would hold.
@@ -803,7 +828,7 @@ mod keyframe_tests {
     }
 
     fn assert_same_world(a: &Decoder, b: &Decoder, what: &str) {
-        let (a, b) = (a.world.as_ref().unwrap().dump(), b.world.as_ref().unwrap().dump());
+        let (a, b) = (a.world_compared(), b.world_compared());
         assert_eq!(a.len(), b.len(), "{what}: entities");
         for (k, x) in &a {
             assert_eq!(Some(x), b.get(k), "{what}: entity {k}");

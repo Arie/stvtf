@@ -940,6 +940,28 @@ mod tests {
     }
 
     #[test]
+    fn a_full_update_gives_every_weapon_the_reset_parity_a_client_starts_it_with() {
+        use tf_demo_parser::demo::sendprop::SendPropIdentifier;
+        let charged = |c: &Cursor| c.dec.extractor().snapshot().players.iter().any(|p| p.uber >= 40);
+        let (mut relay, mut client) = (upward_until(charged), upward_until(charged));
+        relay.peek();
+        let next = relay.next_frame();
+        let (_, key) = relay.dec.keyframe(next).expect("a full update");
+        client.dec.feed(key.bytes(), key.nbits());
+        let state = client.dec.parser_state_for_tests();
+        let parity = SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
+        let mut weapons = 0;
+        for (i, (class, _, props)) in client.dec.world_dump() {
+            let Some(at) = super::super::super::decode::props_index_for_tests(state, class, parity) else { continue };
+            weapons += 1;
+            // Created with it set, a client resets the weapon: a medigun's charge goes to 0.
+            let value = props.iter().find(|(j, _)| *j == at).map(|(_, v)| v.as_str());
+            assert_eq!(value, Some("Integer(0)"), "weapon {i}");
+        }
+        assert!(weapons > 10, "{weapons} weapons");
+    }
+
+    #[test]
     fn the_timers_are_told_to_redraw_with_the_demos_own_event() {
         let c = upward_until(|c| c.started);
         let msg = c.dec.update_timer().expect("the demo has the event");
