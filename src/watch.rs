@@ -5,11 +5,9 @@ use crate::decode::Tables;
 use crate::net::handshake::{self, GamePort, Rejected, Stopped, Wait};
 use crate::output::{Line, Status};
 use crate::relay::{Relay, RelayConfig};
-use crate::session::DEFAULT_SNAPSHOT_HZ;
-use crate::session::{self, End, Fatal, Options};
+use crate::session::{self, DEFAULT_SNAPSHOT_HZ, End, Fatal, Options};
 use anyhow::{Context, Result, anyhow, bail};
 use std::fmt;
-
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -199,7 +197,7 @@ pub(crate) fn watch_with(
     let mut backoff = w.retry_after;
     let mut tried_tv_port = false;
     loop {
-        if deadline.is_some_and(|d| Instant::now() >= d) || stop.load(Ordering::Relaxed) {
+        if wait.over() {
             return Ok(());
         }
         // The server refuses any build but its own, and may update while we watch, so ask each
@@ -229,7 +227,7 @@ pub(crate) fn watch_with(
         }
         emit(Line::Status(Status::Connecting { server: server.to_string(), build: build.clone() }));
         let streamed = match handshake::connect(server, &opt.name, &w.password, &build, CONNECT_TIMEOUT, wait) {
-            Ok(conn) => match session::run(&conn, class_tables, &opt, recorder.as_mut(), stop, deadline, tap, emit)? {
+            Ok(conn) => match session::run(&conn, class_tables, &opt, recorder.as_mut(), wait, tap, emit)? {
                 End::Stopped => return Ok(()),
                 End::Broken(b) => {
                     if let Some(kind) = b.fatal {
@@ -269,19 +267,16 @@ pub(crate) fn watch_with(
         // Only a session that streamed proves the server works; one that failed or was
         // dropped during signon backs off further, so a server that accepts and drops
         // us at once is not retried every 2 s forever.
-        let wait = if streamed {
+        let pause = if streamed {
             backoff = w.retry_after;
             w.retry_after
         } else {
-            let wait = backoff;
+            let pause = backoff;
             backoff = (backoff * 2).min(BACKOFF_MAX);
-            wait
+            pause
         };
-        let mut until = Instant::now() + jitter(wait);
-        if let Some(d) = deadline {
-            until = until.min(d);
-        }
-        while Instant::now() < until && !stop.load(Ordering::Relaxed) {
+        let retry = Wait { stop, until: Some(Instant::now() + jitter(pause)) };
+        while !retry.over() && !wait.over() {
             std::thread::sleep(STOP_POLL);
         }
     }

@@ -14,7 +14,7 @@
 use crate::capture::Recorder;
 use crate::decode::{Decoder, Lifecycle, Tables};
 use crate::net::bits::BitBuf;
-use crate::net::handshake::Connection;
+use crate::net::handshake::{Connection, Wait};
 use crate::net::messages::{self, Signon};
 use crate::net::netchan::{self, OutHeader};
 use crate::net::receiver::{MsgStream, Receiver};
@@ -527,14 +527,12 @@ fn finish(s: &Session<'_>, outcome: &Outcome, emit: &mut dyn FnMut(Line)) {
     }));
 }
 
-#[allow(clippy::too_many_arguments, reason = "internal plumbing")]
 pub fn run(
     conn: &Connection,
     tables: &Tables,
     opt: &Options,
     mut recorder: Option<&mut Recorder>,
-    stop: &AtomicBool,
-    deadline: Option<Instant>,
+    wait: Wait<'_>,
     tap: Option<&dyn Tap>,
     emit: &mut dyn FnMut(Line),
 ) -> Result<End> {
@@ -549,7 +547,7 @@ pub fn run(
     conn.sock.set_read_timeout(Some(READ_POLL))?;
     s.send_reliable(&messages::connected_reply(&opt.name), Some(0));
     let mut next = |buf: &mut [u8]| -> Result<Next> {
-        if stop.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d) {
+        if wait.over() {
             return Ok(Next::Stop);
         }
         match conn.sock.recv(buf) {
