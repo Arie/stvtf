@@ -51,20 +51,13 @@ impl Rng {
         if data.is_empty() {
             return;
         }
-        match self.below(4) {
-            0 => {
-                let at = self.below(data.len());
-                data[at] ^= 1 << self.below(8);
-            }
-            1 => {
-                let at = self.below(data.len());
-                data[at] = self.next() as u8;
-            }
-            2 => {
-                let at = self.below(data.len());
-                data[at] = 0xff;
-            }
-            _ => data.truncate(self.below(data.len())),
+        let how = self.below(4);
+        let at = self.below(data.len());
+        match how {
+            0 => data[at] ^= 1 << self.below(8),
+            1 => data[at] = self.next() as u8,
+            2 => data[at] = 0xff,
+            _ => data.truncate(at),
         }
     }
 }
