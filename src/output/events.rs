@@ -789,9 +789,9 @@ pub struct VoteFailed {
 pub struct Voice {
     /// Server tick.
     pub tick: u32,
-    /// The speaker: the player with their `SteamID`, or else the one in the packet's slot.
+    /// The speaker: the player in the packet's slot, or else the one with its `SteamID`.
     pub player: Option<PlayerId>,
-    /// The speaker's `SteamID` (`[U:1:…]`).
+    /// The speaker's `SteamID` (`[U:1:…]`): the player's own, or else the one the packet says.
     pub steamid: String,
     /// Samples a second the frames were encoded at.
     pub rate: u16,

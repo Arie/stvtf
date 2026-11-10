@@ -336,23 +336,26 @@ impl Extractor {
         self.events.borrow_mut().push(line);
     }
 
-    /// A voice packet as a line: its speaker, by user id (the player with its `SteamID`, or else the
-    /// one in its slot, as the game shows them talking), and its Opus frames in base64. One of
-    /// another codec is passed over.
+    /// A voice packet as a line: its speaker, the player in its slot (as the game shows them
+    /// talking: the `SteamID` in the packet comes from the speaker's own client), else the one
+    /// with that `SteamID`, and their own `SteamID`; and its Opus frames in base64. One without a
+    /// sample rate or of another codec is passed over.
     fn voice(&self, v: &tf_demo_parser::demo::message::voice::VoiceDataMessage<'_>) {
         use base64::Engine;
         let mut s = v.data.clone();
         let bytes: Vec<u8> = (0..usize::from(v.length) / 8).map_while(|_| s.read_int::<u8>(8).ok()).collect();
-        let Some(voice) = voice::steam_voice(&bytes) else { return };
-        let steamid = format!("[U:1:{}]", voice.steamid & 0xFFFF_FFFF);
-        let player = self.state().players.iter().filter_map(|p| p.info.as_ref()).find(|i| i.steam_id == steamid);
-        let player =
-            player.map(|i| PlayerId(u16::from(i.user_id))).or_else(|| self.user_of_entity(u32::from(v.client) + 1));
+        let Some(voice) = voice::steam_voice(&bytes).filter(|v| v.rate > 0) else { return };
+        let claimed = format!("[U:1:{}]", voice.steamid & 0xFFFF_FFFF);
+        let here = |i: &&tf_demo_parser::demo::parser::analyser::UserInfo| !self.left.contains(&u16::from(i.user_id));
+        let info =
+            self.player_by_entity(u32::from(v.client) + 1).and_then(|p| p.info.as_ref()).filter(here).or_else(|| {
+                self.state().players.iter().filter_map(|p| p.info.as_ref()).filter(here).find(|i| i.steam_id == claimed)
+            });
         let b64 = base64::engine::general_purpose::STANDARD;
         self.push(Line::Voice(out::Voice {
             tick: self.server_tick,
-            player,
-            steamid,
+            player: info.map(|i| PlayerId(u16::from(i.user_id))),
+            steamid: info.map_or(claimed, |i| i.steam_id.clone()),
             rate: voice.rate,
             frames: voice.frames.iter().map(|f| b64.encode(f)).collect(),
         }));
