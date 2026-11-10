@@ -348,15 +348,15 @@ impl Cursor {
 /// any other ("Received wrong spawn count"), and an STV demo's differ from its `ServerInfo`'s.
 fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Lifecycle) {
     use crate::net::bits::{BitReader, BitWriter};
-    use crate::net::messages::{self, NET_SIGNONSTATE, Signon, TYPE_BITS};
+    use crate::net::messages;
     let mut w = BitWriter::new();
     let mut spans = Vec::with_capacity(life.spans.len());
     for span in &life.spans {
         let msg = BitReader::slice(bits.bytes(), span.bits.clone());
-        let state = (u32::from(span.id) == NET_SIGNONSTATE)
-            .then(|| BitReader::at(msg.bytes(), TYPE_BITS).read_u8().ok().and_then(Signon::from_u8))
-            .flatten();
-        let msg = state.map_or(msg, |s| messages::signonstate(s, count));
+        let msg = match super::signon_state(span.id, &msg) {
+            Some(s) => messages::signonstate(s, count),
+            None => msg,
+        };
         let start = w.nbits();
         w.write_buf(&msg);
         spans.push(crate::decode::Span { id: span.id, bits: start..w.nbits() });

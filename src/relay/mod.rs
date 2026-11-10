@@ -547,10 +547,8 @@ impl Hub {
                 self.restart_signon(now);
             }
             if self.signon_open || is_table_change(span.id) {
-                let gate = (u32::from(span.id) == NET_SIGNONSTATE)
-                    .then(|| BitReader::at(msg.bytes(), TYPE_BITS).read_u8().ok().and_then(Signon::from_u8))
-                    .flatten()
-                    .filter(|s| matches!(s, Signon::New | Signon::PreSpawn | Signon::Spawn));
+                let gate =
+                    signon_state(span.id, &msg).filter(|s| matches!(s, Signon::New | Signon::PreSpawn | Signon::Spawn));
                 self.log.push(Logged { bits: msg, gate });
                 for c in self.clients.values_mut() {
                     c.pump(&self.log);
@@ -913,6 +911,14 @@ impl Hub {
 fn cut(bits: &BitBuf, life: &Lifecycle) -> BitBuf {
     let end = life.spans.last().map_or(0, |s| s.bits.end);
     BitReader::slice(bits.bytes(), 0..end)
+}
+
+/// The state `msg`, of type `id`, says if it is a `net_SignonState`.
+fn signon_state(id: u8, msg: &BitBuf) -> Option<Signon> {
+    if u32::from(id) != NET_SIGNONSTATE {
+        return None;
+    }
+    BitReader::at(msg.bytes(), TYPE_BITS).read_u8().ok().and_then(Signon::from_u8)
 }
 
 fn is_table_change(id: u8) -> bool {
