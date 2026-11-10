@@ -1,8 +1,8 @@
 use super::*;
 use serde_json::{Value, json};
 
-fn value(line: &Line) -> Value {
-    serde_json::to_value(line).unwrap()
+fn s(v: impl Serialize) -> Value {
+    serde_json::to_value(v).unwrap()
 }
 
 fn back(v: &Value) -> Line {
@@ -34,7 +34,7 @@ fn a_kill_is_written_as_documented() {
         "suicide": false, "dominated": false, "revenge": false, "feign": false, "airborne": true,
         "victim_pos": [1.5, 2.0, -3.0], "attacker_pos": null,
     });
-    assert_eq!(value(&kill), expected);
+    assert_eq!(s(&kill), expected);
     assert_eq!(back(&expected), kill);
 }
 
@@ -42,13 +42,13 @@ fn a_kill_is_written_as_documented() {
 fn statuses_are_tagged_by_state() {
     let connecting = Line::Status(Status::Connecting { server: "1.2.3.4:27020".into(), build: "11138802".into() });
     let expected = json!({"type": "status", "state": "connecting", "server": "1.2.3.4:27020", "build": "11138802"});
-    assert_eq!(value(&connecting), expected);
+    assert_eq!(s(&connecting), expected);
     assert_eq!(back(&expected), connecting);
-    assert_eq!(value(&Line::Status(Status::MapChange)), json!({"type": "status", "state": "map_change"}));
-    assert_eq!(value(&Line::Status(Status::Prespawn)), json!({"type": "status", "state": "prespawn"}));
+    assert_eq!(s(Line::Status(Status::MapChange)), json!({"type": "status", "state": "map_change"}));
+    assert_eq!(s(Line::Status(Status::Prespawn)), json!({"type": "status", "state": "prespawn"}));
     assert_eq!(Line::Status(Status::New).tick(), None);
     let relay = Line::Status(Status::Relay { listen: "0.0.0.0:27121".into() });
-    assert_eq!(value(&relay), json!({"type": "status", "state": "relay", "listen": "0.0.0.0:27121"}));
+    assert_eq!(s(&relay), json!({"type": "status", "state": "relay", "listen": "0.0.0.0:27121"}));
 }
 
 #[expect(clippy::option_option, reason = "the field's own type")]
@@ -75,16 +75,16 @@ fn sentry(target: Option<Option<PlayerId>>) -> Building {
 
 #[test]
 fn a_sentry_without_a_target_differs_from_one_not_seen_aiming() {
-    let idle = serde_json::to_value(sentry(Some(None))).unwrap();
+    let idle = s(sentry(Some(None)));
     assert_eq!(idle["target"], Value::Null);
     assert!(idle.as_object().unwrap().contains_key("target"));
     assert_eq!(serde_json::from_value::<Building>(idle).unwrap().target, Some(None));
 
-    let unseen = serde_json::to_value(sentry(None)).unwrap();
+    let unseen = s(sentry(None));
     assert!(!unseen.as_object().unwrap().contains_key("target"));
     assert_eq!(serde_json::from_value::<Building>(unseen).unwrap().target, None);
 
-    let aiming = serde_json::to_value(sentry(Some(Some(PlayerId(9))))).unwrap();
+    let aiming = s(sentry(Some(Some(PlayerId(9)))));
     assert_eq!(serde_json::from_value::<Building>(aiming).unwrap().target, Some(Some(PlayerId(9))));
 }
 
@@ -96,7 +96,7 @@ fn conditions_go_by_name() {
     let c = Condition::from_number(130).unwrap();
     assert_eq!(c.number(), 130);
     assert_eq!(c.to_string(), "ImmuneToPushback");
-    assert_eq!(serde_json::to_value(c).unwrap(), json!("ImmuneToPushback"));
+    assert_eq!(s(c), json!("ImmuneToPushback"));
     assert_eq!(serde_json::from_value::<Condition>(json!("ImmuneToPushback")).unwrap(), c);
     assert!(serde_json::from_value::<Condition>(json!("Hovering")).is_err());
 }
@@ -106,12 +106,12 @@ fn stamped_lines_carry_the_receive_time_when_live() {
     let airblast = Line::Airblast(Airblast { tick: 9, player: PlayerId(2) });
     let live = Stamped { line: airblast.clone(), time: Some(1_700_000_000_000) };
     let expected = json!({"type": "airblast", "tick": 9, "player": 2, "time": 1_700_000_000_000u64});
-    assert_eq!(serde_json::to_value(&live).unwrap(), expected);
+    assert_eq!(s(&live), expected);
     assert_eq!(serde_json::from_value::<Stamped>(expected).unwrap(), live);
 
     let offline = Stamped { line: airblast, time: None };
     let expected = json!({"type": "airblast", "tick": 9, "player": 2});
-    assert_eq!(serde_json::to_value(&offline).unwrap(), expected);
+    assert_eq!(s(&offline), expected);
     assert_eq!(serde_json::from_value::<Stamped>(expected).unwrap(), offline);
 }
 
@@ -316,7 +316,7 @@ fn game_mode_lines_are_written_as_documented() {
         ),
     ];
     for (line, expected) in cases {
-        assert_eq!(value(&line), expected);
+        assert_eq!(s(&line), expected);
         assert_eq!(back(&expected), line);
         assert_eq!(line.tick(), Some(1));
     }
@@ -395,10 +395,6 @@ fn game_mode_lines_name_their_players() {
         cappers: vec![Some(PlayerId(7)), Some(PlayerId(8))],
     });
     assert_eq!(started.players().collect::<Vec<_>>(), [PlayerId(7), PlayerId(8)]);
-}
-
-fn s(v: impl Serialize) -> Value {
-    serde_json::to_value(v).unwrap()
 }
 
 #[test]
