@@ -328,7 +328,7 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    fn fixture(name: &str) -> Vec<u8> {
+    pub(super) fn fixture(name: &str) -> Vec<u8> {
         std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
     }
 

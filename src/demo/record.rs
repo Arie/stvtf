@@ -208,7 +208,7 @@ pub(crate) mod tests {
     /// demo's file.
     pub(crate) fn record_capture(name: &str, opt: &Options) -> (Vec<Line>, PathBuf) {
         static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let bytes = std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let bytes = crate::demo::tests::fixture(name);
         let records = capture::read(&bytes).unwrap();
         let tables = Tables::from_demo_bytes(crate::builtin(crate::CURRENT_BUILD).unwrap().tables).unwrap();
         let mut want = Vec::new();
