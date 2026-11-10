@@ -11,7 +11,7 @@
 
 use super::{Cursor, NOT_A_FRAME, RECENT};
 use crate::net::bits::BitBuf;
-use crate::relay::{Hub, lock};
+use crate::relay::lock;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -175,11 +175,6 @@ impl Cursor {
         c.recent = mark.since.iter().rev().take(RECENT).rev().cloned().collect();
         Ok(c)
     }
-}
-
-/// Logs the string table changes up to `mark` (passed over by a jump ahead to it) with `hub`.
-pub(super) fn log_tables(hub: &Mutex<Hub>, mark: &Checkpoint) {
-    lock(hub).log_tables(&mark.tables());
 }
 
 #[cfg(test)]

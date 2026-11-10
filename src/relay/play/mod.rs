@@ -581,7 +581,7 @@ impl Player<'_> {
             // table changes passed over with it.
             let mark = self.index.as_ref().and_then(|i| i.before(target)).filter(|m| i64::from(m.tick) > from + jump);
             if let Some(m) = &mark {
-                index::log_tables(&self.relay.hub, m);
+                self.relay.hub().log_tables(&m.tables());
                 *c = Cursor::restore(&want.demo, m)?;
             }
             let (decoded, dry) = skim(c, &self.relay.hub, target);
