@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::has_players;
+use common::{has_players, stvtf};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -243,20 +243,14 @@ struct Proc {
     err: Arc<Mutex<Vec<(Instant, String)>>>,
 }
 
-fn stvtf(args: &[&str]) -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_stvtf"));
-    c.args(args).env_remove("STVTF_PASSWORD").env_remove("STVTF_RELAY_PASSWORD").env_remove("STVTF_DEBUG");
-    c
-}
-
 fn line(text: &str) -> Line {
     serde_json::from_str::<Stamped>(text).unwrap_or_else(|e| panic!("{e}: {text}")).line
 }
 
 impl Proc {
     fn start(args: &[&str], env: &[(&str, &str)]) -> Self {
-        let mut command = stvtf(args);
-        command.envs(env.iter().copied()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut command = stvtf();
+        command.args(args).envs(env.iter().copied()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn().unwrap();
         let (lines, err): (Arc<Mutex<Vec<_>>>, Arc<Mutex<Vec<_>>>) = Default::default();
         let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
@@ -333,7 +327,7 @@ struct Ran {
 /// Runs stvtf to its end, or kills it after `timeout`. Its output is read as it comes: a full
 /// pipe would stop it.
 fn run(args: &[&str], timeout: Duration) -> Ran {
-    let mut child = stvtf(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut child = stvtf().args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let read = |mut from: Box<dyn Read + Send>| {
         std::thread::spawn(move || {
             let mut all = Vec::new();

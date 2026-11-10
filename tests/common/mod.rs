@@ -3,6 +3,7 @@
 #![allow(dead_code, reason = "each test uses part of this")]
 
 use std::collections::HashSet;
+use std::process::Command;
 use stvtf::decode::Tables;
 use stvtf::output::{PlayerId, Position};
 use stvtf::{Line, Options, capture};
@@ -24,6 +25,13 @@ pub(crate) use of;
 
 pub fn fixture(name: &str) -> String {
     format!("{FIXTURES}/{name}")
+}
+
+/// The stvtf program, without the passwords and debug settings of whoever runs the tests.
+pub fn stvtf() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_stvtf"));
+    c.env_remove("STVTF_PASSWORD").env_remove("STVTF_RELAY_PASSWORD").env_remove("STVTF_DEBUG");
+    c
 }
 
 /// The current build's built-in tables.

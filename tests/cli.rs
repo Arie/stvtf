@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::fixture;
+use common::{fixture, stvtf};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -13,12 +13,6 @@ use std::time::Duration;
 
 /// A bound on what should take moments.
 const LIMIT: Duration = Duration::from_secs(30);
-
-fn stvtf() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_stvtf"));
-    c.env_remove("STVTF_PASSWORD").env_remove("STVTF_RELAY_PASSWORD").env_remove("STVTF_DEBUG");
-    c
-}
 
 fn run(args: &[&str]) -> Output {
     stvtf().args(args).output().unwrap()
