@@ -135,6 +135,9 @@ pub fn goodbye() -> BitBuf {
     disconnect(GOODBYE)
 }
 
+/// The tick a client acks to ask for a full update.
+pub const FULL_UPDATE_TICK: i32 = -1;
+
 /// Acking the server tick is what moves the server's delta reference forward.
 pub fn tick(tick: i32) -> BitBuf {
     let mut w = BitWriter::new();

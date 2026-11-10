@@ -7,6 +7,7 @@ use crate::capture;
 use crate::decode::Decoder;
 use crate::net::compress;
 use crate::net::handshake::{self, FromClient};
+use crate::net::messages;
 use crate::net::netchan::{self, Kind};
 use crate::net::receiver::Receiver;
 use crate::net::split::SplitReassembler;
@@ -143,7 +144,10 @@ impl FakeServer {
                     };
                     self.sock.send_to(&reply, from).unwrap();
                 } else if let Some(got) = rx.feed(data, Instant::now()) {
-                    let asked = got.streams.iter().any(|s| client_messages(&s.bits).contains(&ClientMsg::Tick(-1)));
+                    let asked = got
+                        .streams
+                        .iter()
+                        .any(|s| client_messages(&s.bits).contains(&ClientMsg::Tick(messages::FULL_UPDATE_TICK)));
                     if asked
                         && self.position.load(Ordering::Relaxed) > rec.full_update
                         && last_answer.is_none_or(|t| t.elapsed() > ANSWER_ONCE_PER)

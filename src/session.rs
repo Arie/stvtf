@@ -207,11 +207,11 @@ impl<'o> Session<'o> {
         }
     }
 
-    /// The tick to ack: the latest seen, so the server deltas from it; -1 asks for a full update,
-    /// as a game client does when its entities missed a frame.
+    /// The tick to ack: the latest seen, so the server deltas from it, or `FULL_UPDATE_TICK` for a
+    /// full update, as a game client does when its entities missed a frame.
     fn ack_tick(&self) -> i32 {
         let tap_wants = self.tap.is_some_and(Tap::want_full_update);
-        if self.want_full_update || tap_wants { -1 } else { self.server_tick }
+        if self.want_full_update || tap_wants { messages::FULL_UPDATE_TICK } else { self.server_tick }
     }
 
     /// Records why the session ends; the first reason wins.
@@ -657,9 +657,9 @@ mod tests {
         s.lifecycle(Lifecycle { tick: Some(500), ..Lifecycle::default() }, &mut emit);
         assert_eq!(s.ack_tick(), 500);
         s.lifecycle(Lifecycle { tick: Some(501), lost_frame: true, ..Lifecycle::default() }, &mut emit);
-        assert_eq!(s.ack_tick(), -1);
+        assert_eq!(s.ack_tick(), messages::FULL_UPDATE_TICK);
         s.lifecycle(Lifecycle { tick: Some(502), ..Lifecycle::default() }, &mut emit);
-        assert_eq!(s.ack_tick(), -1, "a delta does not put the entities right");
+        assert_eq!(s.ack_tick(), messages::FULL_UPDATE_TICK, "a delta does not put the entities right");
         s.lifecycle(Lifecycle { tick: Some(503), full_update: true, ..Lifecycle::default() }, &mut emit);
         assert_eq!(s.ack_tick(), 503);
     }

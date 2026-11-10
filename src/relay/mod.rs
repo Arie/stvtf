@@ -568,7 +568,7 @@ impl Hub {
                         }
                         ready |= s >= Signon::Spawn && c.phase == Phase::Signon && c.gate.is_none();
                     }
-                    ClientMsg::Tick(-1) => {
+                    ClientMsg::Tick(messages::FULL_UPDATE_TICK) => {
                         ready |= c.phase == Phase::Active && now.duration_since(c.since) > FULL_UPDATE_GRACE;
                     }
                     ClientMsg::Tick(_) => {}
@@ -1269,10 +1269,10 @@ mod tests {
         b.connect();
         let now = Instant::now();
         b.client_state().set_phase(Phase::Active, now);
-        b.client_sends(1, &messages::tick(-1));
+        b.client_sends(1, &messages::tick(messages::FULL_UPDATE_TICK));
         assert_eq!(b.client_state().phase, Phase::Active);
         b.client_state().since = now.checked_sub(FULL_UPDATE_GRACE * 2).unwrap();
-        b.client_sends(2, &messages::tick(-1));
+        b.client_sends(2, &messages::tick(messages::FULL_UPDATE_TICK));
         assert_eq!(b.client_state().phase, Phase::WaitingFull);
     }
 
