@@ -10,6 +10,8 @@ pub const CLC_CLIENTINFO: u32 = 8;
 /// Bits of a net message's type.
 pub const TYPE_BITS: usize = 6;
 const FRAME_TIME_BITS: usize = 16;
+/// The custom files (sprays) a client can say it has (`MAX_CUSTOM_FILES`).
+const MAX_CUSTOM_FILES: usize = 4;
 /// The reason a client gives when it disconnects on its own.
 const GOODBYE: &str = "Disconnect by user.";
 
@@ -87,8 +89,8 @@ pub fn client_info(spawncount: i32, sendtable_crc: u32, replay_bit: bool) -> Bit
     w.write_bit(true); // is HLTV
     w.write_i32(0); // friends id
     w.write_string("");
-    for _ in 0..4 {
-        w.write_bit(false); // no custom files
+    for _ in 0..MAX_CUSTOM_FILES {
+        w.write_bit(false); // none in this slot
     }
     if replay_bit {
         w.write_bit(false);
@@ -130,12 +132,12 @@ pub fn tick(tick: i32) -> BitBuf {
 pub fn reliable_region(body: &BitBuf, subchannel: u8) -> BitBuf {
     let mut w = BitWriter::new();
     w.write_bits(u32::from(subchannel), super::reliable::SUBCHANNEL_BITS);
-    w.write_bit(true);
-    w.write_bit(false);
-    w.write_bit(false);
+    w.write_bit(true); // messages follow
+    w.write_bit(false); // in one block
+    w.write_bit(false); // uncompressed
     w.write_varint32(u32::try_from(body.bytes().len()).expect("client messages are small"));
     w.write_bytes(body.bytes());
-    w.write_bit(false);
+    w.write_bit(false); // no files
     w.finish()
 }
 
