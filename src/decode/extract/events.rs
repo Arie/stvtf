@@ -9,7 +9,7 @@ use crate::decode::detail;
 use crate::decode::props::{origin_parts, prop_f, prop_i, prop_id, prop_vec};
 use crate::output::{self as out, BannerKind, ChatKind, Line, PlayerId, round1};
 use tf_demo_parser::ParserState;
-use tf_demo_parser::demo::gameevent_gen::GameEvent;
+use tf_demo_parser::demo::gameevent_gen::{GameEvent, PlayerDeathEvent};
 use tf_demo_parser::demo::message::TempEntitiesMessage;
 use tf_demo_parser::demo::message::usermessage::UserMessage;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier};
@@ -42,6 +42,10 @@ const PROP_BULLETS_WEAPON: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_i
 const PROP_BULLETS_CRIT: SendPropIdentifier = prop_id("DT_TEFireBullets", "m_bCritical");
 const PROP_EXPLOSION_ORIGIN: [SendPropIdentifier; 3] = origin_parts("DT_TETFExplosion");
 const PROP_EXPLOSION_WEAPON: SendPropIdentifier = prop_id("DT_TETFExplosion", "m_iWeaponID");
+
+fn assister(d: &PlayerDeathEvent) -> Option<PlayerId> {
+    if d.assister == NO_ASSISTER { None } else { opt_user(d.assister) }
+}
 
 /// A round starting, going live, ending and the match ending.
 pub(super) fn round_event(event: &GameEvent, tick: u32) -> Option<Line> {
@@ -110,7 +114,7 @@ impl Extractor {
                     tick,
                     victim: user(d.user_id),
                     attacker: opt_user(attacker),
-                    assister: if d.assister == NO_ASSISTER { None } else { opt_user(d.assister) },
+                    assister: assister(d),
                     weapon: d.weapon.to_string(),
                     crit: d.damage_bits & DMG_CRIT != 0,
                     headshot: d.custom_kill == CUSTOM_KILL_HEADSHOT,
@@ -305,25 +309,21 @@ impl Extractor {
     /// The scoreboard's counted columns, like logs.tf: damage dealt to others, healing given and
     /// assists, from the events since the match started (or since connecting).
     fn count_score(&mut self, event: &GameEvent) {
-        let (user, add): (u16, fn(&mut Stats, i64)) = match event {
+        let (user, amount, column): (PlayerId, i64, fn(&mut Stats) -> &mut i64) = match event {
             GameEvent::PlayerHurt(h) if h.attacker != 0 && h.attacker != h.user_id => {
-                (h.attacker, |s, n| s.damage += n)
+                (PlayerId(h.attacker), i64::from(h.damage_amount), |s| &mut s.damage)
             }
-            GameEvent::PlayerHealed(h) if h.healer != 0 && h.healer != h.patient => (h.healer, |s, n| s.healing += n),
-            GameEvent::PlayerDeath(d)
-                if d.death_flags & DEATH_FEIGN == 0 && d.assister != NO_ASSISTER && d.assister != 0 =>
-            {
-                (d.assister, |s, _| s.assists += 1)
+            GameEvent::PlayerHealed(h) if h.healer != 0 && h.healer != h.patient => {
+                (PlayerId(h.healer), i64::from(h.amount), |s| &mut s.healing)
             }
+            GameEvent::PlayerDeath(d) if d.death_flags & DEATH_FEIGN == 0 => match assister(d) {
+                Some(a) => (a, 1, |s| &mut s.assists),
+                None => return,
+            },
             _ => return,
         };
-        let amount = match event {
-            GameEvent::PlayerHurt(h) => i64::from(h.damage_amount),
-            GameEvent::PlayerHealed(h) => i64::from(h.amount),
-            _ => 1,
-        };
-        if let Some(ent) = self.entity_of_user(user) {
-            add(self.stats.entry(ent).or_default(), amount);
+        if let Some(ent) = self.entity_of_user(user.0) {
+            *column(self.stats.entry(ent).or_default()) += amount;
         }
     }
 
