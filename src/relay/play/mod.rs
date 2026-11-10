@@ -785,20 +785,27 @@ mod tests {
     use tf_demo_parser::demo::gameevent_gen::GameEvent;
     use tf_demo_parser::demo::message::Message;
 
+    /// `pl_upward.dem` decoded until `done`.
+    fn upward_until(done: impl Fn(&Cursor) -> bool) -> Cursor {
+        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
+        let mut c = Cursor::open_with(&path, None).unwrap();
+        while !done(&c) {
+            match c.next_tick() {
+                None => panic!("the demo ended"),
+                Some(NOT_A_FRAME) => c.next = None,
+                Some(_) => drop(c.decode()),
+            }
+        }
+        c
+    }
+
     #[test]
     fn a_full_update_holds_the_round_timer_and_the_next_runs_it_again() {
-        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
         // Twenty seconds in, with the round's timer on the HUD: the relay's, and a client's.
         let twenty = || {
-            let mut c = Cursor::open_with(&path, None).unwrap();
-            while !c.started || c.dec.server_tick() < c.first.unwrap_or(i64::MAX).saturating_add(20 * 66) as u32 {
-                match c.next_tick() {
-                    None => panic!("the demo ended"),
-                    Some(NOT_A_FRAME) => c.next = None,
-                    Some(_) => drop(c.decode()),
-                }
-            }
-            c
+            upward_until(|c| {
+                c.started && c.dec.server_tick() >= c.first.unwrap_or(i64::MAX).saturating_add(20 * 66) as u32
+            })
         };
         let (mut relay, mut client) = (twenty(), twenty());
         let running = client.dec.extractor().snapshot().timers;
@@ -825,15 +832,7 @@ mod tests {
         use crate::decode::beams::{BASE, POINTS, SVC_TEMPENTITIES};
         use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
         use tf_demo_parser::demo::vector::Vector;
-        let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
-        let mut c = Cursor::open_with(&path, None).unwrap();
-        while !c.started {
-            match c.next_tick() {
-                None => panic!("the demo ended"),
-                Some(NOT_A_FRAME) => c.next = None,
-                Some(_) => drop(c.decode()),
-            }
-        }
+        let c = upward_until(|c| c.started);
         let beam = Beam {
             from: [1.0, 2.0, 3.0],
             to: [100.0, -200.0, 300.0],
