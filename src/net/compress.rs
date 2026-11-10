@@ -1,7 +1,7 @@
 //! `-3 SNAP` datagrams are raw Snappy; compressed reliable transfers are
 //! Snappy or Valve LZSS depending on their magic.
 
-use super::netchan::MARKER_COMPRESSED;
+use super::netchan::{MARKER_COMPRESSED, SEQUENCE_LEN};
 use anyhow::{Result, bail};
 
 const MAX_OUTPUT: usize = 1 << 22;
@@ -79,6 +79,15 @@ pub fn compress_datagram(datagram: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The datagram a `-3 SNAP` datagram holds.
+pub fn inflate_datagram(datagram: &[u8]) -> Result<Vec<u8>> {
+    let block = SEQUENCE_LEN + SNAPPY_MAGIC.len();
+    if datagram.get(SEQUENCE_LEN..block) != Some(SNAPPY_MAGIC) {
+        bail!("compressed datagram without Snappy's magic");
+    }
+    snappy(&datagram[block..])
+}
+
 /// A compressed reliable transfer: Snappy's magic and the block.
 pub fn snappy_transfer(data: &[u8]) -> Vec<u8> {
     let mut out = SNAPPY_MAGIC.to_vec();
@@ -146,6 +155,13 @@ mod tests {
     fn lzss_back_reference_past_declared_size_is_an_error() {
         // One literal, then a back-reference of 16 bytes into a 4-byte output.
         assert!(lzss(&lzss_block(4, &[0b10, b'a', 0x00, 0x0f])).is_err());
+    }
+
+    #[test]
+    fn datagram_roundtrip() {
+        let datagram = b"in-band packet".repeat(10);
+        assert_eq!(inflate_datagram(&compress_datagram(&datagram)).unwrap(), datagram);
+        assert!(inflate_datagram(&[0xfd, 0xff, 0xff, 0xff, b'L', b'Z', b'S', b'S']).is_err());
     }
 
     #[test]

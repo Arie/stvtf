@@ -67,19 +67,12 @@ impl Receiver {
         match netchan::classify(data) {
             Kind::InBand => {}
             Kind::Compressed => {
-                // After the compressed marker: Snappy's magic and the block.
-                let block = netchan::SEQUENCE_LEN + compress::SNAPPY_MAGIC.len();
-                if data.get(netchan::SEQUENCE_LEN..block) != Some(compress::SNAPPY_MAGIC) {
+                let Ok(v) = compress::inflate_datagram(data) else {
                     self.counters.compressed_bad += 1;
                     return None;
-                }
-                if let Ok(v) = compress::snappy(&data[block..]) {
-                    inflated = v;
-                    data = &inflated;
-                } else {
-                    self.counters.compressed_bad += 1;
-                    return None;
-                }
+                };
+                inflated = v;
+                data = &inflated;
             }
             _ => return None,
         }
