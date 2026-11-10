@@ -21,7 +21,7 @@ use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue
 
 /// `Weapon::clip` of a weapon without a clip.
 const NO_CLIP: i64 = -1;
-/// The condition words of a player: `m_nPlayerCond`, _`condition_bits`, `m_nPlayerCondEx..Ex4`.
+/// The props of a player's condition words, in `COND_WORDS` order.
 const PROP_CONDS: [SendPropIdentifier; COND_WORDS] = [
     prop_id("DT_TFPlayerShared", "m_nPlayerCond"),
     prop_id("DT_TFPlayerConditionListExclusive", "_condition_bits"),

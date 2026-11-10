@@ -95,8 +95,7 @@ macro_rules! per_entity {
 }
 
 per_entity! {
-    /// Condition words per player entity: `m_nPlayerCond`, _`condition_bits`, `m_nPlayerCondEx..Ex4`.
-    /// (tf-demo-parser 0.6.4's own `conditions()` decodes these wrongly.)
+    /// Condition words per player entity (tf-demo-parser's own `conditions()` decodes them wrongly).
     conds: HashMap<u32, [u32; COND_WORDS]>,
     mediguns: HashMap<u32, Medigun>,
     flamethrowers: HashMap<u32, Flamethrower>,
