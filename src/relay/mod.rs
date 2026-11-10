@@ -463,10 +463,7 @@ impl Hub {
     /// Tells the clients in the game that playback paused or went on, reliably.
     fn set_paused(&mut self, paused: bool) {
         self.mode = Mode::Play { paused };
-        let msg = set_pause(paused);
-        for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
-            c.queue.push(msg.clone());
-        }
+        self.tell_active(&set_pause(paused));
     }
 
     /// A message for the clients in the game now, unreliably: what is sent again at a pace, which
