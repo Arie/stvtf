@@ -123,6 +123,11 @@ pub(crate) struct Span {
 pub(crate) const UNPARSED: u8 = u8::MAX;
 
 const SVC_GAMEEVENT: u32 = 25;
+/// `svc_GameEvent`: its length's bits, then the event id's.
+const GAMEEVENT_LENGTH_BITS: usize = 11;
+const EVENT_ID_BITS: usize = 9;
+/// `svc_PacketEntities`: its entry count's bits (`MAX_EDICT_BITS`).
+const ENTRY_COUNT_BITS: usize = 11;
 
 pub(crate) struct Decoder {
     handler: DemoHandler<Extractor>,
@@ -463,8 +468,8 @@ impl Decoder {
         if u32::from(span.id) != SVC_GAMEEVENT {
             return false;
         }
-        let at = span.bits.start + TYPE_BITS + 11;
-        let Ok(id) = crate::net::bits::BitReader::at(data, at).read_bits(9) else { return false };
+        let at = span.bits.start + TYPE_BITS + GAMEEVENT_LENGTH_BITS;
+        let Ok(id) = crate::net::bits::BitReader::at(data, at).read_bits(EVENT_ID_BITS) else { return false };
         let defs = &self.handler.get_parser_state().event_definitions;
         defs.get(id as usize).is_some_and(|d| {
             matches!(
@@ -539,11 +544,11 @@ fn entity_frames(
         .collect()
 }
 
-/// Whether the `svc_PacketEntities` at `stream`, just past its type, is a delta: after its 11-bit
-/// entry count comes whether a base tick follows.
+/// Whether the `svc_PacketEntities` at `stream`, just past its type, is a delta: after its entry
+/// count comes whether a base tick follows.
 fn is_delta(stream: &BitReadStream<'_, LittleEndian>) -> bool {
     let mut peek = stream.clone();
-    peek.skip_bits(11).is_ok() && peek.read_bool().unwrap_or(false)
+    peek.skip_bits(ENTRY_COUNT_BITS).is_ok() && peek.read_bool().unwrap_or(false)
 }
 
 fn signon(s: &SignOnState) -> Signon {
