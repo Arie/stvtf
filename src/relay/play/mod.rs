@@ -31,9 +31,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-const SVC_CREATESTRINGTABLE: u8 = 12;
-const SVC_UPDATESTRINGTABLE: u8 = 13;
-
 /// Off from the wanted moment by more than this, playback jumps instead of catching up.
 const JUMP: Duration = Duration::from_secs(1);
 /// How long the player waits for a frame that is not due, or not written yet.
@@ -333,9 +330,7 @@ impl Cursor {
                 self.paused = p;
             }
         }
-        for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)) {
-            self.tables.push(Arc::new(crate::net::bits::BitReader::slice(bits.bytes(), span.bits.clone())));
-        }
+        self.tables.extend(super::table_changes(&bits, &life).map(Arc::new));
         let end = life.spans.last().map_or(0, |s| s.bits.end);
         self.recent.push_back((self.dec.server_tick(), crate::net::bits::BitReader::slice(bits.bytes(), 0..end)));
         if self.recent.len() > RECENT {

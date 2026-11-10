@@ -538,8 +538,8 @@ impl Hub {
             // unreliable part, again in each datagram until acked. A client that joins later
             // needs them: without an entity class's baseline, a game client stops with
             // "GetDynamicBaseline: FindStringIndex failed".
-            for span in life.spans.iter().filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)) {
-                self.log_unreliable(&BitReader::slice(bits.bytes(), span.bits.clone()));
+            for msg in table_changes(bits, life) {
+                self.log_unreliable(&msg);
             }
             return;
         }
@@ -548,7 +548,7 @@ impl Hub {
             if span.id == SVC_SERVERINFO {
                 self.restart_signon(now);
             }
-            if self.signon_open || matches!(span.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE) {
+            if self.signon_open || is_table_change(span.id) {
                 let gate = (u32::from(span.id) == NET_SIGNONSTATE)
                     .then(|| BitReader::at(msg.bytes(), TYPE_BITS).read_u8().ok().and_then(Signon::from_u8))
                     .flatten()
@@ -590,12 +590,7 @@ impl Hub {
     /// A stream passed over on a jump: only its string table changes count, which every client
     /// needs, so they go into the log and reliably to the clients already in.
     fn skim(&mut self, bits: &BitBuf, life: &Lifecycle) {
-        let tables: Vec<BitBuf> = life
-            .spans
-            .iter()
-            .filter(|s| matches!(s.id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE))
-            .map(|span| BitReader::slice(bits.bytes(), span.bits.clone()))
-            .collect();
+        let tables: Vec<BitBuf> = table_changes(bits, life).collect();
         self.log_tables(&tables);
     }
 
@@ -913,6 +908,15 @@ impl Hub {
     fn hold(&self) -> bool {
         !self.seen_client || self.clients.values().any(Client::signing_on)
     }
+}
+
+fn is_table_change(id: u8) -> bool {
+    matches!(id, SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE)
+}
+
+/// The string table changes of a stream.
+fn table_changes<'a>(bits: &'a BitBuf, life: &'a Lifecycle) -> impl Iterator<Item = BitBuf> + 'a {
+    life.spans.iter().filter(|s| is_table_change(s.id)).map(|s| BitReader::slice(bits.bytes(), s.bits.clone()))
 }
 
 /// The user message `ResetHUD` (no. 6, a byte): a game client resets every panel of its HUD.
