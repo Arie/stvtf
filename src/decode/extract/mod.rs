@@ -218,7 +218,7 @@ impl Extractor {
         let mut events = Vec::new();
         for p in &self.gs.state.players {
             let ent = u32::from(p.entity);
-            let Some(info) = p.info.as_ref() else { continue };
+            let Some(medic) = player_id(p) else { continue };
             if p.class != Class::Medic || p.state != PlayerState::Alive {
                 self.ents.medic_charge.remove(&ent);
                 continue;
@@ -226,11 +226,8 @@ impl Extractor {
             let gun = self.medigun_owned_by(ent);
             let now = Charge { charge: uber_charge(p), releasing: gun.is_some_and(|m| m.releasing) };
             if let Some(&before) = self.ents.medic_charge.get(&ent) {
-                let charge = out::MedicCharge {
-                    tick: self.server_tick,
-                    medic: PlayerId(u16::from(info.user_id)),
-                    medigun: gun.map(|m| medigun_kind(m.item)),
-                };
+                let charge =
+                    out::MedicCharge { tick: self.server_tick, medic, medigun: gun.map(|m| medigun_kind(m.item)) };
                 if before.charge < FULL_CHARGE && now.charge >= FULL_CHARGE && !now.releasing {
                     events.push(Line::UberReady(charge.clone()));
                 }
