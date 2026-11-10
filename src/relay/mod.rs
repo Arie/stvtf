@@ -196,6 +196,11 @@ impl Client {
         self.cursor == log.len() && self.queue.is_empty() && self.outgoing.is_none()
     }
 
+    /// Whether the client waits for a full update and can take one.
+    fn takes_full_update(&self, log: &[Logged]) -> bool {
+        self.phase == Phase::WaitingFull && self.has_log(log)
+    }
+
     /// The region to send in the packet of sequence `seq`, if a transfer block can go.
     fn next_region(&mut self, seq: i32) -> Option<BitBuf> {
         if self.outgoing.is_none() && !self.queue.is_empty() {
@@ -422,7 +427,7 @@ impl Hub {
 
     /// Whether a client is ready for entities and waits for a full update.
     fn wants_keyframe(&self) -> bool {
-        self.clients.values().any(|c| c.phase == Phase::WaitingFull && c.has_log(&self.log))
+        self.clients.values().any(|c| c.takes_full_update(&self.log))
     }
 
     /// Every client in the game needs a full update: playback jumped ahead.
@@ -443,7 +448,7 @@ impl Hub {
         // Always: one shown "paused" before a jump may not be any more.
         let pause = set_pause(paused);
         for (addr, c) in &mut self.clients {
-            if c.phase == Phase::WaitingFull && c.has_log(&self.log) {
+            if c.takes_full_update(&self.log) {
                 trace!("{addr} gets a keyframe of {} bits", key.nbits());
                 c.set_phase(Phase::Active, now);
                 c.queue.push(pause.clone());
@@ -508,7 +513,7 @@ impl Hub {
             }
         }
         for (addr, c) in &mut self.clients {
-            if full && c.phase == Phase::WaitingFull && c.has_log(&self.log) {
+            if full && c.takes_full_update(&self.log) {
                 trace!("{addr} gets a full update of {} bits", tail.as_ref().map_or(0, BitBuf::nbits));
                 c.set_phase(Phase::Active, now);
             }
