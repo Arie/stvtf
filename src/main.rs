@@ -7,7 +7,7 @@ use std::time::Duration;
 use stvtf::capture;
 use stvtf::decode::{self, Tables};
 use stvtf::output::Stamped;
-use stvtf::relay::{Playback, Relay, RelayConfig, Want};
+use stvtf::relay::{MAX_SLOTS, Playback, Relay, RelayConfig, Want};
 use stvtf::watch::{self, Watch};
 use stvtf::{Line, Options};
 
@@ -36,8 +36,6 @@ Tables of the build reported by the server are built in for known builds; pass -
 
 /// Where `relay` listens unless told: `SourceTV`'s default port.
 const DEFAULT_LISTEN: &str = "0.0.0.0:27020";
-/// A server's max players is a byte.
-const MAX_RELAY_SLOTS: usize = 255;
 /// The exit status for a command line that is not understood.
 const EXIT_USAGE: i32 = 2;
 
@@ -259,8 +257,8 @@ fn relay_config(args: &Args, listen: &str) -> Result<RelayConfig> {
     }
     if let Some(n) = args.get("relay-slots") {
         config.slots = n.parse().with_context(|| format!("--relay-slots {n}: not a number"))?;
-        if !(1..=MAX_RELAY_SLOTS).contains(&config.slots) {
-            bail!("--relay-slots must be 1 to {MAX_RELAY_SLOTS}");
+        if !(1..=MAX_SLOTS).contains(&config.slots) {
+            bail!("--relay-slots must be 1 to {MAX_SLOTS}");
         }
     }
     Ok(config)

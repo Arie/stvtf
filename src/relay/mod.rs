@@ -74,8 +74,8 @@ const USERMESSAGE_RESETHUD: u32 = 6;
 
 /// Clients a relay takes unless told otherwise.
 pub const DEFAULT_SLOTS: usize = 10;
-/// A slot count fits the `A2S_INFO` reply's byte.
-const MAX_SLOTS: usize = 255;
+/// The most clients a relay takes: a slot count fits the `A2S_INFO` reply's byte.
+pub const MAX_SLOTS: usize = 255;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
 /// A client hears from us at least this often, so its connection does not time out.
 const KEEPALIVE: Duration = Duration::from_millis(100);
