@@ -51,6 +51,13 @@ const CHALLENGE_LEN: usize = 21;
 /// Offset of our nonce echoed in a '9' refusal; the reason string follows it.
 const REJECT_NONCE: usize = 5;
 const REJECT_REASON: usize = 9;
+/// Offsets in a 'q' getchallenge (the nonce) and a 'k' connect: protocol, auth protocol, the
+/// server's challenge, the nonce, then name and password.
+const GETCHALLENGE_NONCE: usize = 5;
+const CONNECT_PROTOCOL: usize = 5;
+const CONNECT_CHALLENGE: usize = 13;
+const CONNECT_NONCE: usize = 17;
+const CONNECT_NAME: usize = 21;
 
 /// The server refused the connection ('9' reply); the reason is the server's text,
 /// often a `#GameUI_ServerReject…` localization token.
@@ -117,6 +124,10 @@ pub fn build_connect(nonce: u32, challenge: u32, name: &str, password: &str, bui
     v
 }
 
+fn le_u32(data: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?))
+}
+
 fn reject_reason(data: &[u8]) -> String {
     let tail = data.get(REJECT_REASON..).unwrap_or_default();
     let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
@@ -135,9 +146,8 @@ pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
     if data.len() <= OOB_KIND || data[..OOB_KIND] != OOB_PREFIX {
         bail!("not a connectionless reply");
     }
-    let word = |o: usize| data.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     match data[OOB_KIND] {
-        S2C_CONNREJECT if word(REJECT_NONCE) == Some(nonce) => return Err(Rejected(reject_reason(data)).into()),
+        S2C_CONNREJECT if le_u32(data, REJECT_NONCE) == Some(nonce) => return Err(Rejected(reject_reason(data)).into()),
         S2C_CONNREJECT => return Ok(None),
         S2C_CHALLENGE => {}
         c => bail!("unexpected reply {:?}", char::from(c)),
@@ -145,7 +155,7 @@ pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
     if data.len() < CHALLENGE_LEN {
         bail!("truncated challenge");
     }
-    let word = |o: usize| word(o).unwrap_or_default();
+    let word = |o: usize| le_u32(data, o).unwrap_or_default();
     if word(CHALLENGE_MAGIC) != MAGIC_VERSION {
         bail!("bad challenge magic {:#x}", word(CHALLENGE_MAGIC));
     }
@@ -373,16 +383,14 @@ pub fn parse_from_client(data: &[u8]) -> Option<FromClient> {
     if data.len() <= OOB_KIND || data[..OOB_KIND] != OOB_PREFIX {
         return None;
     }
-    let word = |o: usize| data.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     match data[OOB_KIND] {
-        C2S_GETCHALLENGE => Some(FromClient::GetChallenge { nonce: word(OOB_KIND + 1)? }),
+        C2S_GETCHALLENGE => Some(FromClient::GetChallenge { nonce: le_u32(data, GETCHALLENGE_NONCE)? }),
         C2S_CONNECT => {
-            // Protocol, auth protocol, our challenge, the client's nonce, then name and password.
-            let mut pos = OOB_KIND + 17;
+            let mut pos = CONNECT_NAME;
             Some(FromClient::Connect {
-                protocol: word(OOB_KIND + 1)? as i32,
-                challenge: word(OOB_KIND + 9)?,
-                nonce: word(OOB_KIND + 13)?,
+                protocol: le_u32(data, CONNECT_PROTOCOL)? as i32,
+                challenge: le_u32(data, CONNECT_CHALLENGE)?,
+                nonce: le_u32(data, CONNECT_NONCE)?,
                 name: read_cstr(data, &mut pos)?,
                 password: read_cstr(data, &mut pos)?,
             })
@@ -390,7 +398,7 @@ pub fn parse_from_client(data: &[u8]) -> Option<FromClient> {
         A2S_INFO => {
             let query = data.get(OOB_KIND + 1..)?;
             let rest = query.strip_prefix(A2S_QUERY.as_slice())?;
-            Some(FromClient::Info { challenge: rest.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) })
+            Some(FromClient::Info { challenge: le_u32(rest, 0) })
         }
         _ => None,
     }
@@ -569,7 +577,7 @@ mod tests {
         let fake = std::thread::spawn(move || {
             let mut buf = [0u8; 64];
             let (_, client) = server.recv_from(&mut buf).unwrap();
-            let nonce = &buf[OOB_KIND + 1..OOB_KIND + 5];
+            let nonce = &buf[GETCHALLENGE_NONCE..GETCHALLENGE_NONCE + 4];
             server.send_to(b"\xff\xff\xff\xffZjunk", client).unwrap();
             let mut reply = vec![0xff, 0xff, 0xff, 0xff, b'A'];
             reply.extend_from_slice(&MAGIC_VERSION.to_le_bytes());
@@ -638,7 +646,7 @@ mod tests {
         let thread = std::thread::spawn(move || {
             let mut buf = [0u8; 2048];
             let (_, client) = server.recv_from(&mut buf).unwrap();
-            let nonce = u32::from_le_bytes(buf[OOB_KIND + 1..OOB_KIND + 5].try_into().unwrap());
+            let nonce = le_u32(&buf, GETCHALLENGE_NONCE).unwrap();
             server.send_to(&reply(nonce), client).unwrap();
             after(&server, client);
         });
