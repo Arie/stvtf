@@ -319,9 +319,7 @@ impl Decoder {
                 // builds on, still coming reliably: a game client ignores one until it has entities
                 // in full, and so does this.
                 let early_delta = t == MessageType::PacketEntities && !self.seen_full_update && is_delta(&stream);
-                if early_delta {
-                    Message::skip_type(t, &mut stream, state).map(|()| None)
-                } else if state.should_parse_message(t) && t != MessageType::Empty {
+                if !early_delta && state.should_parse_message(t) && t != MessageType::Empty {
                     Message::from_type(t, &mut stream, state).map(Some)
                 } else {
                     Message::skip_type(t, &mut stream, state).map(|()| None)
