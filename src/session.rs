@@ -738,7 +738,7 @@ mod tests {
     fn a_packet_read_while_connecting_is_decoded_first() {
         let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bots_cp_badlands.cap")).unwrap();
         let records = crate::capture::read(&bytes).unwrap();
-        let challenge = u32::from_le_bytes(records[0].data.try_into().unwrap());
+        let challenge = records[0].challenge().unwrap();
         let datagrams: Vec<&[u8]> = records[1..].iter().map(|r| r.data).take(200).collect();
         let tables = tables();
         let opt = Options::default();

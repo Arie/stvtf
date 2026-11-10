@@ -73,6 +73,13 @@ pub struct Record<'a> {
     pub data: &'a [u8],
 }
 
+impl Record<'_> {
+    /// A session record's challenge; None when the data is not 4 bytes.
+    pub(crate) fn challenge(&self) -> Option<u32> {
+        self.data.try_into().ok().map(u32::from_le_bytes)
+    }
+}
+
 /// Splits a capture into its records.
 pub fn read(bytes: &[u8]) -> Result<Vec<Record<'_>>> {
     let Some(mut r) = bytes.strip_prefix(MAGIC) else { bail!("not an stvtf capture") };
@@ -95,8 +102,8 @@ pub fn replay(records: &[Record<'_>], tables: &Tables, opt: &Options, emit: &mut
     let mut sessions: Vec<(u32, Vec<&[u8]>)> = Vec::new();
     for rec in records {
         if rec.kind == Kind::Session as u8 {
-            let challenge: [u8; 4] = rec.data.try_into().context("session record is not a 4-byte challenge")?;
-            sessions.push((u32::from_le_bytes(challenge), Vec::new()));
+            let challenge = rec.challenge().context("session record is not a 4-byte challenge")?;
+            sessions.push((challenge, Vec::new()));
         } else if rec.kind == Kind::Datagram as u8
             && let Some(last) = sessions.last_mut()
         {

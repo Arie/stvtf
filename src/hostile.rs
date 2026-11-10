@@ -169,7 +169,7 @@ fn corrupted_sessions_never_panic_the_process() {
     let bytes = std::fs::read(format!("{FIXTURES}/bots_cp_badlands.cap")).unwrap();
     let records = capture::read(&bytes).unwrap();
     let mut sessions = records.iter().filter(|r| r.kind == capture::Kind::Session as u8);
-    let challenge = u32::from_le_bytes(sessions.next().unwrap().data.try_into().unwrap());
+    let challenge = sessions.next().unwrap().challenge().unwrap();
     let datagrams: Vec<&[u8]> =
         records.iter().filter(|r| r.kind == capture::Kind::Datagram as u8).map(|r| r.data).take(500).collect();
     let opt = Options { snapshot_hz: 5.0, ..Options::default() };

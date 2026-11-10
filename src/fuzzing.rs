@@ -90,7 +90,7 @@ pub fn decoder(data: &[u8]) {
 /// gets far, not from nothing. Each is `(channel, decoder)`.
 pub fn seeds(capture_bytes: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let records = capture::read(capture_bytes).unwrap();
-    let challenge = u32::from_le_bytes(records[0].data.try_into().unwrap());
+    let challenge = records[0].challenge().unwrap();
     let mut rx = Receiver::new(Some(challenge));
     let now = Instant::now();
     let prefixed = |p: &[u8]| {

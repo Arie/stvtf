@@ -46,7 +46,7 @@ impl Recording {
     fn read() -> Self {
         let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bots_cp_badlands.cap")).unwrap();
         let records = capture::read(&bytes).unwrap();
-        let challenge = u32::from_le_bytes(records[0].data.try_into().unwrap());
+        let challenge = records[0].challenge().unwrap();
         let now = Instant::now();
         let mut splits = SplitReassembler::default();
         let mut packets = Vec::new();
