@@ -9,7 +9,7 @@ use crate::net::messages::{NET_TICK, SVC_PACKETENTITIES};
 use crate::session::Tap;
 use std::fs::File;
 use std::io::BufWriter;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The header's counts are written again this often; every frame reaches the file at once, so a
@@ -53,7 +53,7 @@ impl Recorder {
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        crate::lock(&self.state)
     }
 }
 

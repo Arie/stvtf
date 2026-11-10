@@ -25,6 +25,7 @@
 
 use crate::capture::{self, Record};
 use crate::decode::{Lifecycle, Tables};
+use crate::lock;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::handshake::{self, FromClient};
 use crate::net::messages::{
@@ -45,7 +46,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use transfer::Outgoing;
 
@@ -790,11 +791,6 @@ impl Out {
             always = false;
         }
     }
-}
-
-/// Locks `m`, whatever a thread that panicked with it left.
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Where a relay listens and whom it lets in. `Debug` keeps the password out of logs.

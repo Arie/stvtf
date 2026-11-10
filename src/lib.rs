@@ -43,6 +43,11 @@ const BUILDS: &[(&str, &[u8])] = &[
 // add_build: tables
 const TABLES_11138802: &[u8] = include_bytes!("../assets/tables_11138802.dem");
 
+/// Locks `m`, whatever a thread that panicked with it left.
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// A file in `tests/fixtures`.
 #[cfg(test)]
 fn fixture(name: &str) -> std::path::PathBuf {

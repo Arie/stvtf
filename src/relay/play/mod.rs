@@ -15,10 +15,11 @@
 
 mod index;
 
-use super::{Hub, Relay, lock};
+use super::{Hub, Relay};
 pub use crate::decode::beams::Beam;
 use crate::decode::{Decoder, Lifecycle, Span, Tables};
 use crate::demo::{self, Next, Packet};
+use crate::lock;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::messages::{self, TYPE_BITS};
 use crate::output::Line;

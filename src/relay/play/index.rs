@@ -10,8 +10,8 @@
 //! opens it, and following it as it grows (a live match). Relays playing the same demo share them.
 
 use super::{Cursor, NOT_A_FRAME, RECENT};
+use crate::lock;
 use crate::net::bits::BitBuf;
-use crate::relay::lock;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
