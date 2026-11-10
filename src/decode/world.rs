@@ -309,20 +309,7 @@ impl World {
                         .cloned()
                         .collect();
                     if !props.is_empty() {
-                        entities.insert(
-                            index,
-                            PacketEntity {
-                                server_class: e.class,
-                                entity_index: index.into(),
-                                props,
-                                in_pvs: true,
-                                update_type: UpdateType::Delta,
-                                serial_number: e.serial,
-                                delay: None,
-                                delta: Some(from.into()),
-                                baseline_index: BaselineIndex::First,
-                            },
-                        );
+                        entities.insert(index, packet_entity(index, e, UpdateType::Delta, props, Some(from)));
                     }
                 }
                 _ => {
@@ -331,20 +318,7 @@ impl World {
             }
         }
         for (index, o) in old.iter().filter(|(i, _)| new.get(*i).is_none()) {
-            entities.insert(
-                index,
-                PacketEntity {
-                    server_class: o.class,
-                    entity_index: index.into(),
-                    props: Vec::new(),
-                    in_pvs: false,
-                    update_type: UpdateType::Delete,
-                    serial_number: o.serial,
-                    delay: None,
-                    delta: Some(from.into()),
-                    baseline_index: BaselineIndex::First,
-                },
-            );
+            entities.insert(index, packet_entity(index, o, UpdateType::Delete, Vec::new(), Some(from)));
         }
         Some(entities)
     }
@@ -388,17 +362,28 @@ fn enter(state: &ParserState, index: u32, e: &Entity) -> Option<PacketEntity> {
         state.get_static_baseline(e.class, table).unwrap_or_default().into_iter().map(|p| (p.index, p)).collect();
     let props =
         e.props.values().filter(|p| !base.get(&p.index).is_some_and(|b| same(&b.value, &p.value))).cloned().collect();
-    Some(PacketEntity {
+    Some(packet_entity(index, e, UpdateType::Enter, props, None))
+}
+
+/// Entity `e` at `index` as a message lists it, `delta` the tick of the frame it builds on.
+fn packet_entity(
+    index: u32,
+    e: &Entity,
+    update_type: UpdateType,
+    props: Vec<SendProp>,
+    delta: Option<u32>,
+) -> PacketEntity {
+    PacketEntity {
         server_class: e.class,
         entity_index: index.into(),
         props,
-        in_pvs: true,
-        update_type: UpdateType::Enter,
+        in_pvs: update_type != UpdateType::Delete,
+        update_type,
         serial_number: e.serial,
         delay: None,
-        delta: None,
+        delta: delta.map(Into::into),
         baseline_index: BaselineIndex::First,
-    })
+    }
 }
 
 /// `net_Tick(tick)` and `msg`, as one message stream.
