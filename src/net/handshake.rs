@@ -39,6 +39,9 @@ const A2S_FIXED: usize = 9;
 /// An `A2S_INFO` that needs a challenge gets an 'A' with it (4 bytes) first; resend with it.
 const A2S_CHALLENGE: std::ops::Range<usize> = OOB_KIND + 1..OOB_KIND + 5;
 const A2S_TRIES: usize = 3;
+/// The engine's padding after a getchallenge or an accept, and after a challenge.
+const PADDING: &str = "0000000000";
+const CHALLENGE_PADDING: &str = "000000";
 /// Bind to any local address and port.
 const ANY_ADDR: &str = "0.0.0.0:0";
 
@@ -107,7 +110,7 @@ fn cstr(v: &mut Vec<u8>, s: &str) {
 pub fn build_getchallenge(nonce: u32) -> Vec<u8> {
     let mut v = oob(C2S_GETCHALLENGE);
     v.extend_from_slice(&nonce.to_le_bytes());
-    cstr(&mut v, "0000000000");
+    cstr(&mut v, PADDING);
     v
 }
 
@@ -411,7 +414,7 @@ pub fn build_challenge(challenge: u32, nonce: u32) -> Vec<u8> {
     v.extend_from_slice(&challenge.to_le_bytes());
     v.extend_from_slice(&nonce.to_le_bytes());
     v.extend_from_slice(&AUTH_HASHEDCDKEY.to_le_bytes());
-    cstr(&mut v, "000000");
+    cstr(&mut v, CHALLENGE_PADDING);
     v
 }
 
@@ -419,7 +422,7 @@ pub fn build_challenge(challenge: u32, nonce: u32) -> Vec<u8> {
 pub fn build_accept(nonce: u32) -> Vec<u8> {
     let mut v = oob(S2C_CONNECTION);
     v.extend_from_slice(&nonce.to_le_bytes());
-    cstr(&mut v, "0000000000");
+    cstr(&mut v, PADDING);
     v
 }
 
@@ -459,6 +462,7 @@ pub fn build_info(info: &Info<'_>) -> Vec<u8> {
         cstr(&mut v, s);
     }
     v.extend_from_slice(&TF2_APP_ID.to_le_bytes());
+    // No bots, a proxy on Linux, public, no VAC.
     v.extend_from_slice(&[info.players, info.max_players, 0, b'p', b'l', 0, 0]);
     cstr(&mut v, info.build);
     v
