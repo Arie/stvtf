@@ -783,3 +783,18 @@ pub struct VoteFailed {
     /// TF2's reason (`vote_create_failed_t`).
     pub reason: u8,
 }
+
+/// A player's voice: Opus frames as their client sent them, for a browser to decode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Voice {
+    /// Server tick.
+    pub tick: u32,
+    /// The speaker: the player with their `SteamID`, or else the one in the packet's slot.
+    pub player: Option<PlayerId>,
+    /// The speaker's `SteamID` (`[U:1:…]`).
+    pub steamid: String,
+    /// Samples a second the frames were encoded at.
+    pub rate: u16,
+    /// The Opus packets, in base64, in order: 20 ms each.
+    pub frames: Vec<String>,
+}

@@ -245,6 +245,7 @@ outside the playable area, so fit an overview image to per-map coordinates inste
 | `announcer` | `sound` (raw name of a broadcast sound, e.g. `Announcer.RoundEnds5minutes`; not all are announcer lines), `team` |
 | `time_remaining` | `seconds`: the map time limit's remaining time |
 | `voice_command` | `player`, `menu`, `item`: a voice menu command (`menu` 0 is `Z`, `item` 0 is `Medic!`) |
+| `voice` | `player` (the one with the `SteamID`, else the one in the packet's slot; null for neither), `steamid`, `rate` (samples a second), `frames` (Opus packets in base64, 20 ms each): a player talking, Steam's voice framing taken off; other codecs are left out |
 | `server_text` | `text` (colour codes stripped): a server message, such as a hint or a vote result |
 | `game_over` | `reason` |
 | `chat` | `player` (null for console), `name`, `text` (colour codes stripped), `kind`, `parts` (null, or the coloured spans of a line with TF2 colour codes: `{"c": "RRGGBB"/"team"/null, "t": text}`; `team` is the sender's team colour, null the default) |

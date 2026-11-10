@@ -33,6 +33,7 @@ mod state;
 mod stopwatch;
 #[cfg(test)]
 mod tests;
+mod voice;
 
 pub(super) use convert::{building_kind, opt_user, strip_colors, team_num, xyz};
 use convert::{medigun_kind, player_id, projectile_kind, resist, uber_charge};
@@ -335,6 +336,28 @@ impl Extractor {
         self.events.borrow_mut().push(line);
     }
 
+    /// A voice packet as a line: its speaker, by user id (the player with its `SteamID`, or else the
+    /// one in its slot, as the game shows them talking), and its Opus frames in base64. One of
+    /// another codec is passed over.
+    fn voice(&self, v: &tf_demo_parser::demo::message::voice::VoiceDataMessage<'_>) {
+        use base64::Engine;
+        let mut s = v.data.clone();
+        let bytes: Vec<u8> = (0..usize::from(v.length) / 8).map_while(|_| s.read_int::<u8>(8).ok()).collect();
+        let Some(voice) = voice::steam_voice(&bytes) else { return };
+        let steamid = format!("[U:1:{}]", voice.steamid & 0xFFFF_FFFF);
+        let player = self.state().players.iter().filter_map(|p| p.info.as_ref()).find(|i| i.steam_id == steamid);
+        let player =
+            player.map(|i| PlayerId(u16::from(i.user_id))).or_else(|| self.user_of_entity(u32::from(v.client) + 1));
+        let b64 = base64::engine::general_purpose::STANDARD;
+        self.push(Line::Voice(out::Voice {
+            tick: self.server_tick,
+            player,
+            steamid,
+            rate: voice.rate,
+            frames: voice.frames.iter().map(|f| b64.encode(f)).collect(),
+        }));
+    }
+
     /// Takes the queued events.
     pub(crate) fn drain(&self) -> Vec<Line> {
         self.events.take()
@@ -398,6 +421,7 @@ impl MessageHandler for Extractor {
                     | MessageType::ServerInfo
                     | MessageType::SetConVar
                     | MessageType::GameEventList
+                    | MessageType::VoiceData
             )
     }
 
@@ -422,6 +446,7 @@ impl MessageHandler for Extractor {
             }
             Message::TempEntities(te) => self.temp_entities(te, state),
             Message::UserMessage(m) => self.user_message(m),
+            Message::VoiceData(v) => self.voice(v),
             Message::GameEventList(list) => {
                 self.raw_names = list
                     .event_list

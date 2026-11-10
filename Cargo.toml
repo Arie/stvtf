@@ -9,6 +9,7 @@ license = "MIT"
 tf-demo-parser = { version = "0.7.2", git = "https://codeberg.org/Kanarie/parser.git", rev = "579f9f6bb32a93d019f760928535383f2e541c52", features = ["write"] }
 bitbuffer = "0.11"
 serde_json = "1"
+base64 = "0.22"
 snap = "1"
 crc32fast = "1"
 md5 = "0.7"

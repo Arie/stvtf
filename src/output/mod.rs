@@ -138,6 +138,7 @@ lines! {
     VoteStarted(VoteStarted),
     VotePassed(VotePassed),
     VoteFailed(VoteFailed),
+    Voice(Voice),
     Upgrade(Upgrade),
 }
 
@@ -175,6 +176,7 @@ impl Line {
             | Line::Hint(_)
             | Line::VotePassed(_)
             | Line::VoteFailed(_) => ([None; 3], &[]),
+            Line::Voice(v) => ([v.player, None, None], &[]),
             Line::PassFree(f) => ([Some(f.player), f.attacker, None], &[]),
             Line::PassCaught(c) => ([Some(c.passer), Some(c.catcher), None], &[]),
             Line::PassScore(sc) => ([Some(sc.scorer), sc.assister, None], &[]),

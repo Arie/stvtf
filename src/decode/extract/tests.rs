@@ -650,3 +650,25 @@ mod cap_tests {
         }
     }
 }
+
+#[test]
+fn a_voice_packet_is_a_voice_line_of_its_speakers_opus_frames() {
+    use tf_demo_parser::demo::message::voice::VoiceDataMessage;
+    // A speaker's SteamID64, 24 kHz, one Opus frame of three bytes, a CRC.
+    let mut p =
+        vec![0xca, 0x3e, 0xaf, 0x08, 0x01, 0x00, 0x10, 0x01, 0x0b, 0xc0, 0x5d, 0x06, 7, 0, 3, 0, 0, 0, 0x68, 1, 2];
+    p.extend([0; 4]);
+    let buffer = bitbuffer::BitReadBuffer::new_owned(p.clone(), bitbuffer::LittleEndian);
+    let msg = VoiceDataMessage {
+        client: 3,
+        proximity: 0,
+        length: u16::try_from(p.len() * 8).unwrap(),
+        data: bitbuffer::BitReadStream::new(buffer),
+    };
+    let x = Extractor::default();
+    x.voice(&msg);
+    let lines = x.drain();
+    let [Line::Voice(v)] = &lines[..] else { panic!("{lines:?}") };
+    assert_eq!((v.steamid.as_str(), v.rate, v.player), ("[U:1:145702602]", 24000, None), "no player has it");
+    assert_eq!(v.frames, ["aAEC"], "the frame in base64");
+}
