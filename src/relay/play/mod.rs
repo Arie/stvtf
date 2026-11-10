@@ -145,7 +145,7 @@ impl Playback {
     }
 
     /// Beams the clients in the game keep seeing (a room's marker), in place of those kept before:
-    /// shown again every [`KEPT_EVERY`], each for as long, so the old go within that and nothing
+    /// shown again every `KEPT_EVERY`, each for as long, so the old go within that and nothing
     /// shows twice over.
     pub fn keep(&self, beams: Vec<Beam>) {
         let mut kept = lock(&self.kept);
