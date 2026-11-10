@@ -362,12 +362,7 @@ impl<'o> Session<'o> {
                 rest.push(stream);
             }
         }
-        if let Some(tap) = self.tap {
-            tap.flush();
-        }
-        for line in dec.take_output() {
-            emit(line);
-        }
+        self.flush(dec, emit);
         if let Some(p) = &self.pending {
             let want = (self.out_reliable_state >> p.subchannel) & 1;
             if (pkt.header.reliable_state >> p.subchannel) & 1 == want {
@@ -397,12 +392,23 @@ impl<'o> Session<'o> {
             self.send(None, Some(&body));
         }
     }
+
     fn feed(&mut self, stream: &MsgStream, dec: &mut Decoder, emit: &mut dyn FnMut(Line)) {
         let life = dec.feed(stream.bits.bytes(), stream.bits.nbits());
         if let Some(tap) = self.tap {
             tap.stream(&stream.bits, stream.reliable, &life);
         }
         self.lifecycle(life, emit);
+    }
+
+    /// Ends a datagram's worth of streams: the tap's and the decoder's output go out.
+    fn flush(&self, dec: &mut Decoder, emit: &mut dyn FnMut(Line)) {
+        if let Some(tap) = self.tap {
+            tap.flush();
+        }
+        for line in dec.take_output() {
+            emit(line);
+        }
     }
 
     /// Feeds the streams held since signon restarted into the new map's decoder. False when
@@ -416,12 +422,7 @@ impl<'o> Session<'o> {
                 break;
             }
         }
-        if let Some(tap) = self.tap {
-            tap.flush();
-        }
-        for line in dec.take_output() {
-            emit(line);
-        }
+        self.flush(dec, emit);
         match &mut self.remap {
             Some(next_map) => {
                 next_map.extend(rest);
