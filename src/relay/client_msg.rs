@@ -7,6 +7,21 @@ use anyhow::{Result, bail};
 /// Longest string read from a client message.
 const MAX_STRING: usize = 4096;
 
+// Client message types the relay reads past (`net_*` and `clc_*` in the engine).
+const NET_NOP: u32 = 0;
+const NET_FILE: u32 = 2;
+const NET_STRINGCMD: u32 = 4;
+const CLC_MOVE: u32 = 9;
+const CLC_VOICEDATA: u32 = 10;
+const CLC_BASELINEACK: u32 = 11;
+const CLC_LISTENEVENTS: u32 = 12;
+const CLC_RESPONDCVARVALUE: u32 = 13;
+const CLC_CMDKEYVALUES: u32 = 16;
+/// The engine's `MAX_CUSTOM_FILES`: a CRC for each in `clc_ClientInfo`.
+const CUSTOM_FILES: usize = 4;
+/// `clc_ListenEvents` has a bit per game event, of the engine's `MAX_EVENT_NUMBER`.
+const EVENT_BITS: usize = 512;
+
 /// A client's messages the relay acts on.
 #[derive(Debug, PartialEq)]
 pub(crate) enum ClientMsg {
@@ -26,10 +41,10 @@ pub(crate) fn client_messages(bits: &BitBuf) -> Vec<ClientMsg> {
 fn read_client_messages(r: &mut BitReader<'_>, nbits: usize, out: &mut Vec<ClientMsg>) -> Result<()> {
     while nbits.saturating_sub(r.pos()) >= TYPE_BITS {
         match r.read_bits(TYPE_BITS)? {
-            0 => {} // net_NOP
+            NET_NOP => {}
             NET_DISCONNECT => out.push(ClientMsg::Disconnect(r.read_string(MAX_STRING)?)),
-            2 => {
-                // net_File: transfer id, file name, requested.
+            NET_FILE => {
+                // Transfer id, file name, requested.
                 r.skip(32)?;
                 r.read_string(MAX_STRING)?;
                 r.skip(1)?;
@@ -38,8 +53,8 @@ fn read_client_messages(r: &mut BitReader<'_>, nbits: usize, out: &mut Vec<Clien
                 out.push(ClientMsg::Tick(r.read_i32()?));
                 r.skip(32)?; // frame time and its deviation
             }
-            4 => {
-                r.read_string(MAX_STRING)?; // net_StringCmd
+            NET_STRINGCMD => {
+                r.read_string(MAX_STRING)?;
             }
             messages::NET_SETCONVAR => {
                 for _ in 0..2 * usize::from(r.read_u8()?) {
@@ -56,33 +71,33 @@ fn read_client_messages(r: &mut BitReader<'_>, nbits: usize, out: &mut Vec<Clien
             messages::CLC_CLIENTINFO => {
                 r.skip(32 + 32 + 1 + 32)?; // spawncount, CRC, is HLTV, friends id
                 r.read_string(MAX_STRING)?;
-                for _ in 0..4 {
+                for _ in 0..CUSTOM_FILES {
                     if r.read_bit()? {
                         r.skip(32)?; // custom file CRC
                     }
                 }
                 r.skip(1)?; // is replay
             }
-            9 => {
-                // clc_Move: new and backup command counts, then the commands.
+            CLC_MOVE => {
+                // New and backup command counts, then the commands.
                 r.skip(4 + 3)?;
                 let len = r.read_bits(16)? as usize;
                 r.skip(len)?;
             }
-            10 => {
-                let len = r.read_bits(16)? as usize; // clc_VoiceData
+            CLC_VOICEDATA => {
+                let len = r.read_bits(16)? as usize;
                 r.skip(len)?;
             }
-            11 => r.skip(32 + 1)?, // clc_BaselineAck
-            12 => r.skip(512)?,    // clc_ListenEvents: a bit per game event
-            13 => {
-                // clc_RespondCvarValue: cookie, status, name, value.
+            CLC_BASELINEACK => r.skip(32 + 1)?,
+            CLC_LISTENEVENTS => r.skip(EVENT_BITS)?,
+            CLC_RESPONDCVARVALUE => {
+                // Cookie, status, name, value.
                 r.skip(32 + 4)?;
                 r.read_string(MAX_STRING)?;
                 r.read_string(MAX_STRING)?;
             }
-            16 => {
-                let len = r.read_bits(32)? as usize; // clc_CmdKeyValues
+            CLC_CMDKEYVALUES => {
+                let len = r.read_bits(32)? as usize;
                 r.skip(len.saturating_mul(8))?;
             }
             id => bail!("client message {id} not understood"),
@@ -119,12 +134,12 @@ mod tests {
             w.write_bytes(s.as_bytes());
             w.write_bits(0, 8);
         };
-        msg(&mut w, 0); // net_NOP
-        msg(&mut w, 2); // net_File
+        msg(&mut w, NET_NOP);
+        msg(&mut w, NET_FILE);
         w.write_bits(1, 32);
         string(&mut w, "maps/x.bsp");
         w.write_bit(true);
-        msg(&mut w, 4); // net_StringCmd
+        msg(&mut w, NET_STRINGCMD);
         string(&mut w, "status");
         msg(&mut w, messages::NET_SETCONVAR);
         w.write_bits(1, 8);
@@ -143,26 +158,26 @@ mod tests {
             }
         }
         w.write_bit(false);
-        msg(&mut w, 9); // clc_Move
+        msg(&mut w, CLC_MOVE);
         w.write_bits(0, 7);
         w.write_bits(12, 16);
         w.write_bits(0, 12);
-        msg(&mut w, 10); // clc_VoiceData
+        msg(&mut w, CLC_VOICEDATA);
         w.write_bits(8, 16);
         w.write_bits(0, 8);
-        msg(&mut w, 11); // clc_BaselineAck
+        msg(&mut w, CLC_BASELINEACK);
         w.write_bits(0, 32);
         w.write_bit(false);
-        msg(&mut w, 12); // clc_ListenEvents
-        for _ in 0..16 {
+        msg(&mut w, CLC_LISTENEVENTS);
+        for _ in 0..EVENT_BITS / 32 {
             w.write_bits(0, 32);
         }
-        msg(&mut w, 13); // clc_RespondCvarValue
+        msg(&mut w, CLC_RESPONDCVARVALUE);
         w.write_bits(0, 32);
         w.write_bits(0, 4);
         string(&mut w, "cvar");
         string(&mut w, "1");
-        msg(&mut w, 16); // clc_CmdKeyValues
+        msg(&mut w, CLC_CMDKEYVALUES);
         w.write_bits(1, 32);
         w.write_bits(0, 8);
         w.write_buf(&messages::tick(55));
@@ -181,11 +196,11 @@ mod tests {
     /// A client can claim any length: nothing it says makes the relay read past the packet.
     #[test]
     fn client_messages_with_lengths_past_the_end_stop_there() {
-        for id in [9, 10, 16] {
+        for id in [CLC_MOVE, CLC_VOICEDATA, CLC_CMDKEYVALUES] {
             let mut w = BitWriter::new();
             w.write_buf(&messages::tick(1));
             w.write_bits(id, TYPE_BITS);
-            if id == 9 {
+            if id == CLC_MOVE {
                 w.write_bits(0, 7);
             }
             w.write_bits(u32::MAX, 16);
