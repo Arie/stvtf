@@ -341,7 +341,7 @@ impl Cursor {
             }
         }
         self.tables.extend(super::table_changes(&bits, &life).map(Arc::new));
-        self.recent.push_back((self.dec.server_tick(), super::cut(&bits, &life)));
+        self.recent.push_back((self.dec.server_tick(), life.cut(&bits)));
         if self.recent.len() > RECENT {
             self.recent.pop_front();
         }

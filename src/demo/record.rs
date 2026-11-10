@@ -4,7 +4,7 @@
 
 use super::{Header, Writer};
 use crate::decode::{Lifecycle, Tables};
-use crate::net::bits::{BitBuf, BitReader, BitWriter};
+use crate::net::bits::{BitBuf, BitWriter};
 use crate::net::messages::{NET_TICK, SVC_PACKETENTITIES};
 use crate::session::Tap;
 use std::fs::File;
@@ -57,13 +57,6 @@ impl Recorder {
     }
 }
 
-/// A stream up to the end of its last message: what follows is padding, and followed by more it
-/// would be read as messages.
-fn cut(bits: &BitBuf, life: &Lifecycle) -> BitBuf {
-    let end = life.spans.last().map_or(0, |s| s.bits.end);
-    BitReader::slice(bits.bytes(), 0..end)
-}
-
 impl Tap for Recorder {
     fn stream(&self, bits: &BitBuf, _reliable: bool, life: &Lifecycle) {
         let mut st = self.state();
@@ -79,7 +72,7 @@ impl Tap for Recorder {
         }
         let tick = life.tick.map(|t| t.max(0) as u32);
         let entities = life.spans.iter().any(|s| u32::from(s.id) == SVC_PACKETENTITIES);
-        let msgs = cut(bits, life);
+        let msgs = life.cut(bits);
         if st.in_signon && !entities {
             st.tick = tick.or(st.tick);
             if msgs.nbits() > 0 {

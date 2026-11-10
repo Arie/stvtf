@@ -325,7 +325,7 @@ impl Hub {
             if let Some(earlier) = &self.tail {
                 w.write_buf(earlier);
             }
-            w.write_buf(&cut(bits, life));
+            w.write_buf(&life.cut(bits));
             self.tail = Some(w.finish());
             // The server sends string table changes (new instance baselines among them) in the
             // unreliable part, again in each datagram until acked. A client that joins later
@@ -696,13 +696,6 @@ impl Hub {
     fn hold(&self) -> bool {
         !self.seen_client || self.clients.values().any(Client::signing_on)
     }
-}
-
-/// A stream up to the end of its last message: what follows is padding, and followed by more it
-/// would be read as messages.
-fn cut(bits: &BitBuf, life: &Lifecycle) -> BitBuf {
-    let end = life.spans.last().map_or(0, |s| s.bits.end);
-    BitReader::slice(bits.bytes(), 0..end)
 }
 
 /// The state `msg`, of type `id`, says if it is a `net_SignonState`.

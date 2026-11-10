@@ -114,6 +114,15 @@ pub(crate) struct Lifecycle {
     pub spans: Vec<Span>,
 }
 
+impl Lifecycle {
+    /// `bits`, the stream this came from, up to the end of its last message: what follows is
+    /// padding, and followed by more it would be read as messages.
+    pub fn cut(&self, bits: &BitBuf) -> BitBuf {
+        let end = self.spans.last().map_or(0, |s| s.bits.end);
+        BitReader::slice(bits.bytes(), 0..end)
+    }
+}
+
 /// One message in a stream: its type id and its bits.
 #[derive(Debug, Clone)]
 pub(crate) struct Span {
