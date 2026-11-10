@@ -117,8 +117,7 @@ fn a_client_of_the_relay_decodes_what_the_capture_holds() {
     let bytes = std::fs::read(fixture("bots_cp_badlands.cap")).unwrap();
     let records = capture::read(&bytes).unwrap();
     let opt = Options { snapshot_hz: 10.0, ..Options::default() };
-    let mut want = Vec::new();
-    capture::replay(&records, &tables(), &opt, &mut |l| want.push(l)).unwrap();
+    let want = common::replay("bots_cp_badlands.cap", &opt);
     let want = data(&want);
 
     let mut tried = Vec::new();

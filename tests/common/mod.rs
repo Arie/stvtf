@@ -2,9 +2,9 @@
 
 #![allow(dead_code, reason = "each test uses part of this")]
 
-use stvtf::Line;
 use stvtf::decode::Tables;
 use stvtf::output::Position;
+use stvtf::{Line, Options, capture};
 
 pub const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
@@ -35,6 +35,14 @@ pub fn demo(name: &str, snapshot_hz: f32) -> Vec<Line> {
     let bytes = std::fs::read(fixture(name)).unwrap();
     let mut out = Vec::new();
     stvtf::decode::demo_file(&bytes, snapshot_hz, &mut |l| out.push(l)).unwrap();
+    out
+}
+
+/// A capture's output.
+pub fn replay(name: &str, opt: &Options) -> Vec<Line> {
+    let bytes = std::fs::read(fixture(name)).unwrap();
+    let mut out = Vec::new();
+    capture::replay(&capture::read(&bytes).unwrap(), &tables(), opt, &mut |l| out.push(l)).unwrap();
     out
 }
 

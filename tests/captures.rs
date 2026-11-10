@@ -9,7 +9,6 @@ mod common;
 use common::{dist, fixture, of, tables};
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
-use stvtf::capture;
 use stvtf::decode::Tables;
 use stvtf::output::{BuildingKind, Class, Condition, Objective, PlayerId, Position, Round, Score, Status, Team, Timer};
 use stvtf::{Line, Options};
@@ -20,15 +19,7 @@ fn replay(name: &str) -> &'static [Line] {
     let mut cache = CACHE.lock().unwrap();
     cache
         .entry(name.to_string())
-        .or_insert_with(|| replay_with(name, &Options { snapshot_hz: 10.0, ..Options::default() }).leak())
-}
-
-fn replay_with(name: &str, opt: &Options) -> Vec<Line> {
-    let bytes = std::fs::read(fixture(name)).unwrap();
-    let records = capture::read(&bytes).unwrap();
-    let mut out = Vec::new();
-    capture::replay(&records, &tables(), opt, &mut |l| out.push(l)).unwrap();
-    out
+        .or_insert_with(|| common::replay(name, &Options { snapshot_hz: 10.0, ..Options::default() }).leak())
 }
 
 fn statuses(events: &[Line]) -> Vec<&Status> {
