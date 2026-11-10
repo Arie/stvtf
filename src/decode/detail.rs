@@ -37,6 +37,13 @@ pub(crate) struct Lookup<'a> {
     pub raw_names: &'a RawNames,
 }
 
+impl Lookup<'_> {
+    /// The user at entity index `ent`.
+    fn user(&self, ent: impl Into<u32>) -> Option<PlayerId> {
+        (self.user_of_entity)(ent.into())
+    }
+}
+
 /// User message types (TF2's `usermessages` order) read here by hand.
 const USER_MESSAGE_HINT_TEXT: u8 = 19;
 const USER_MESSAGE_HUD_MSG: u8 = 21;
@@ -145,7 +152,6 @@ pub(crate) fn game_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
 /// Heals: medigun, dispenser, crossbow and on-hit.
 fn heal_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
     let tick = look.tick;
-    let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
     match event {
         GameEvent::PlayerHealed(h) => {
             // The event doesn't say what healed: infer it from the healer's class. A player healing
@@ -160,9 +166,11 @@ fn heal_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
         }
         // `healer` and `target` are entity indexes.
         GameEvent::CrossbowHeal(c) => {
-            heal(tick, user(c.target), user(c.healer), i64::from(c.amount), HealSource::Crossbow)
+            heal(tick, look.user(c.target), look.user(c.healer), i64::from(c.amount), HealSource::Crossbow)
         }
-        GameEvent::PlayerHealOnHit(h) => heal(tick, user(h.ent_index), None, i64::from(h.amount), HealSource::OnHit),
+        GameEvent::PlayerHealOnHit(h) => {
+            heal(tick, look.user(h.ent_index), None, i64::from(h.amount), HealSource::OnHit)
+        }
         _ => None,
     }
 }
@@ -201,7 +209,6 @@ fn movement_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
 /// Control points: captures started, broken and locked, and their defenders.
 fn objective_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
     let tick = look.tick;
-    let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
     match event {
         GameEvent::TeamPlayCaptureBroken(b) => {
             Some(Line::CaptureBroken(CaptureBroken { tick, point: b.cp, name: b.cp_name.to_string() }))
@@ -210,9 +217,9 @@ fn objective_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
         GameEvent::KilledCappingPlayer(k) => Some(Line::KilledCapper(KilledCapper {
             tick,
             point: k.cp,
-            killer: user(k.killer)?,
-            victim: user(k.victim)?,
-            assister: (k.assister != 0).then(|| user(k.assister)).flatten(),
+            killer: look.user(k.killer)?,
+            victim: look.user(k.victim)?,
+            assister: (k.assister != 0).then(|| look.user(k.assister)).flatten(),
         })),
         GameEvent::MedicDefended(m) => {
             Some(Line::MedicDefended(MedicDefended { tick, player: PlayerId(m.user_id), medic: PlayerId(m.medic) }))
@@ -224,7 +231,7 @@ fn objective_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
             name: c.cp_name.to_string(),
             team: team_num(c.cap_team),
             owner: team_num(c.team),
-            cappers: c.cappers.as_bytes().iter().map(|&e| user(e)).collect(),
+            cappers: c.cappers.as_bytes().iter().map(|&e| look.user(e)).collect(),
         })),
         GameEvent::TeamPlayPointLocked(l) => {
             Some(Line::PointLocked(PointLocked { tick, point: l.cp, name: l.cp_name.to_string(), locked: true }))
@@ -247,7 +254,7 @@ fn match_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
         }
         GameEvent::VoteCast(v) => Some(Line::VoteCast(VoteCast {
             tick,
-            player: (look.user_of_entity)(v.entity_id),
+            player: look.user(v.entity_id),
             option: v.vote_option,
             team: team_num(v.team),
         })),
@@ -302,7 +309,7 @@ fn building_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
 fn pass_time_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
     let tick = look.tick;
     // Pass time names players by entity index.
-    let ent = |ent: u16| (ent != NO_ENTITY).then(|| (look.user_of_entity)(u32::from(ent))).flatten();
+    let ent = |ent: u16| (ent != NO_ENTITY).then(|| look.user(ent)).flatten();
     match event {
         GameEvent::PassGet(g) => Some(Line::PassGet(PassGet { tick, player: ent(g.owner)? })),
         GameEvent::PassFree(f) => {
@@ -335,7 +342,6 @@ fn pass_time_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
 /// Robot and player destruction, Doomsday and Mann vs. Machine.
 fn destruction_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
     let tick = look.tick;
-    let user = |ent: u8| (look.user_of_entity)(u32::from(ent));
     match event {
         GameEvent::RdRobotKilled(r) => {
             Some(Line::RobotKilled(RobotKilled { tick, attacker: opt_user(r.attacker), weapon: r.weapon.to_string() }))
@@ -347,10 +353,12 @@ fn destruction_event(event: &GameEvent, look: &Lookup<'_>) -> Option<Line> {
             amount: p.amount.cast_signed(),
         })),
         // Player destruction names players by entity index.
-        GameEvent::SpecialScore(sc) => Some(Line::SpecialScore(PlayerMoment { tick, player: user(sc.player)? })),
-        GameEvent::TeamLeaderKilled(k) => {
-            Some(Line::TeamLeaderKilled(TeamLeaderKilled { tick, killer: user(k.killer), victim: user(k.victim)? }))
-        }
+        GameEvent::SpecialScore(sc) => Some(Line::SpecialScore(PlayerMoment { tick, player: look.user(sc.player)? })),
+        GameEvent::TeamLeaderKilled(k) => Some(Line::TeamLeaderKilled(TeamLeaderKilled {
+            tick,
+            killer: look.user(k.killer),
+            victim: look.user(k.victim)?,
+        })),
         GameEvent::DoomsdayRocketOpen(r) => Some(Line::RocketOpen(RocketOpen { tick, team: team_num(r.team) })),
         GameEvent::NpcHurt(n) => Some(Line::NpcDamage(NpcDamage {
             tick,
@@ -396,12 +404,9 @@ fn jump(tick: u32, user: u16, kind: JumpKind, phase: JumpPhase) -> Line {
 pub(crate) fn user_message(message: &UserMessage<'_>, look: &Lookup<'_>) -> Option<Line> {
     let tick = look.tick;
     match message {
-        UserMessage::VoiceSubtitle(v) => Some(Line::VoiceCommand(VoiceCommand {
-            tick,
-            player: (look.user_of_entity)(u32::from(v.client))?,
-            menu: v.menu,
-            item: v.item,
-        })),
+        UserMessage::VoiceSubtitle(v) => {
+            Some(Line::VoiceCommand(VoiceCommand { tick, player: look.user(v.client)?, menu: v.menu, item: v.item }))
+        }
         UserMessage::Text(t) => Some(Line::ServerText(ServerText { tick, text: strip_colors(t.text.as_ref()) })),
         UserMessage::Unknown(u) => raw_user_message(u.raw_type, &mut u.data.clone(), look),
         _ => None,
@@ -453,10 +458,10 @@ fn raw_user_message(kind: u8, data: &mut Stream<'_>, look: &Lookup<'_>) -> Optio
         USER_MESSAGE_VOTE_START => {
             let team = team_num(read::<u8>(data)?);
             let _vote = read::<u32>(data)?;
-            let caller = (look.user_of_entity)(u32::from(read::<u8>(data)?));
+            let caller = look.user(read::<u8>(data)?);
             let (issue, details) = (string(data)?, string(data)?);
             let yes_no = read::<bool>(data)?;
-            let target = read::<u8>(data).and_then(|e| (look.user_of_entity)(u32::from(e)));
+            let target = read::<u8>(data).and_then(|e| look.user(e));
             Some(Line::VoteStarted(VoteStarted { tick, team, caller, issue, details, yes_no, target }))
         }
         // team, vote index, issue, details.
@@ -469,7 +474,7 @@ fn raw_user_message(kind: u8, data: &mut Stream<'_>, look: &Lookup<'_>) -> Optio
         // The player's entity, a byte, the item definition, the attribute, a byte, the cost: checked
         // against the money the upgraded item then holds as refundable (`m_nRefundableCurrency`).
         USER_MESSAGE_MVM_UPGRADED => {
-            let player = (look.user_of_entity)(u32::from(read::<u8>(data)?))?;
+            let player = look.user(read::<u8>(data)?)?;
             let _unknown = read::<u8>(data)?;
             let (item, attribute) = (read::<u16>(data)?, read::<u16>(data)?);
             let _unknown = read::<u8>(data)?;
