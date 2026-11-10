@@ -8,10 +8,17 @@ use crate::net::handshake;
 use crate::net::netchan::{self, FLAG_CHALLENGE, FLAG_RELIABLE, Kind};
 use crate::net::receiver::Receiver;
 use crate::relay;
+use std::borrow::Cow;
 use std::sync::LazyLock;
 use std::time::Instant;
 
 const CHALLENGE: u32 = 7;
+/// In a piece's first byte: the piece goes as it is, not sealed around the rest.
+const RAW: u8 = 1;
+/// In a piece's first byte: the sealed packet is reliable.
+const RELIABLE: u8 = 2;
+/// The header [`sealed`] puts before the body: up to `reliable_state`, then the challenge.
+const SEALED_HEADER: usize = netchan::HEADER_MIN + size_of::<u32>();
 
 /// Splits an input into pieces, each led by its length, so that one input can be many packets.
 fn pieces(mut data: &[u8]) -> impl Iterator<Item = &[u8]> {
@@ -36,6 +43,14 @@ fn sealed(challenge: u32, sequence: i32, reliable: bool, body: &[u8]) -> Vec<u8>
     p
 }
 
+/// The packet a piece stands for: itself, or the rest of it sealed as packet `sequence`.
+fn packet(challenge: u32, sequence: i32, piece: &[u8]) -> Cow<'_, [u8]> {
+    match piece.split_first() {
+        Some((&kind, body)) if kind & RAW == 0 => Cow::Owned(sealed(challenge, sequence, kind & RELIABLE != 0, body)),
+        _ => Cow::Borrowed(piece),
+    }
+}
+
 /// The packets a server's reply to a client can be: what a watch reads while connecting.
 pub fn out_of_band(data: &[u8]) {
     let _ = handshake::parse_from_client(data);
@@ -48,11 +63,7 @@ pub fn channel(data: &[u8]) {
     let mut rx = Receiver::new(Some(CHALLENGE));
     let now = Instant::now();
     for (n, piece) in pieces(data).enumerate() {
-        let n = n as i32 + 1;
-        match piece.split_first() {
-            Some((&kind, body)) if kind & 1 == 0 => drop(rx.feed(&sealed(CHALLENGE, n, kind & 2 != 0, body), now)),
-            _ => drop(rx.feed(piece, now)),
-        }
+        let _ = rx.feed(&packet(CHALLENGE, n as i32 + 1, piece), now);
     }
 }
 
@@ -65,12 +76,7 @@ pub fn client_messages(data: &[u8]) {
 pub fn relay_hub(data: &[u8]) {
     let mut bench = relay::FuzzBench::new();
     for (n, piece) in pieces(data).enumerate() {
-        match piece.split_first() {
-            Some((&kind, body)) if kind & 1 == 0 => {
-                bench.datagram(&sealed(bench.challenge(), n as i32 + 1, kind & 2 != 0, body));
-            }
-            _ => bench.datagram(piece),
-        }
+        bench.datagram(&packet(bench.challenge(), n as i32 + 1, piece));
     }
     bench.service();
 }
@@ -102,9 +108,9 @@ pub fn seeds(capture_bytes: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
             continue;
         }
         // Without the checksum and challenge, which `channel` makes up.
-        let body = netchan::decode_header(r.data).map_or(16, |h| h.body_offset).min(r.data.len());
+        let body = netchan::decode_header(r.data).map_or(SEALED_HEADER, |h| h.body_offset).min(r.data.len());
         let reliable = netchan::decode_header(r.data).is_ok_and(|h| h.reliable());
-        channel.push(prefixed(&[&[if reliable { 2 } else { 0 }], &r.data[body..]].concat()));
+        channel.push(prefixed(&[&[if reliable { RELIABLE } else { 0 }], &r.data[body..]].concat()));
         if let Some(got) = rx.feed(r.data, now) {
             for s in got.streams.iter().filter(|s| s.bits.nbits() >= 16) {
                 streams.push(s.bits.bytes().to_vec());
