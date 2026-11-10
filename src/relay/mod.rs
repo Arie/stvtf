@@ -473,7 +473,7 @@ impl Hub {
         }
     }
 
-    /// A message for the clients waiting for a full update, ahead of it, unreliably.
+    /// A message for the clients waiting for a full update, unreliably.
     fn tell_waiting_now(&mut self, msg: &BitBuf) {
         let now = Instant::now();
         for (addr, c) in &mut self.clients {

@@ -9,8 +9,7 @@
 //! - Paused, no frames go out. The clients are not told, so their clock runs on and what is drawn
 //!   for them (beams) shows and fades; the round timers are held instead, and going on they get a
 //!   full update of where it is. The match's own pauses in the demo they are told (`svc_SetPause`).
-//! - A full update that sets the clients' clock back (going on after a pause, a jump back) would
-//!   leave the beams they see showing that much longer: a `net_Tick` past their end goes first.
+//! - Before a full update sets the clients' clock back, a `net_Tick` ahead runs their beams out.
 //! - With nobody in, nothing is decoded; after a while what was decoded is dropped.
 //! - Why it cannot play (not written yet, another build's demo, a read error) is told through
 //!   [`Playback::problem`], and it tries again.
@@ -60,10 +59,9 @@ const KEPT_EVERY: Duration = Duration::from_secs(2);
 /// frames (a burst of hundreds of datagrams loses some, frames among them).
 const KEPT_RATE: f64 = 800.0;
 const KEPT_BURST: f64 = 48.0;
-/// The clients' clock going back by more than this (seconds) leaves the beams they see showing
-/// that much longer: it is first put past their end.
+/// A clock set back by more than this (seconds) is first put past the beams.
 const SET_BACK: f64 = 0.5;
-/// How long the clients get to draw a frame with their clock put ahead, before it goes back.
+/// How long the clients get to draw a frame with their clock ahead.
 const FLUSH: Duration = Duration::from_millis(150);
 
 /// The kept beams shown: which of them were last handed over, when each was last sent, and
@@ -82,8 +80,7 @@ fn beam_key(b: &Beam) -> BeamKey {
     (b.from.map(f32::to_bits), b.to.map(f32::to_bits), b.rgb, b.width.to_bits(), b.speed)
 }
 
-/// The tick that puts the clients' clock past the beams they see, if it is at `now`, about to go
-/// back to `key`, with beams showing until `until` (seconds of their clock).
+/// The tick past the beams, if the clock at `now` goes back to `key` with beams until `until`.
 fn past_beams(now: f64, key: f64, until: f64, interval: f32) -> Option<i32> {
     (now < until && now - key > SET_BACK && interval > 0.0).then(|| ((until + 1.0) / f64::from(interval)).ceil() as i32)
 }
@@ -459,13 +456,13 @@ struct Player<'r> {
     kept: Kept,
     /// Where the clients were given the laser beams are drawn with, if they were.
     laser: Option<u16>,
-    /// The clients' clock (seconds) at an instant, from the last frame they got: it runs on.
+    /// The clients' clock (seconds) at an instant.
     clock: Option<(f64, Instant)>,
-    /// Their clock when the last beam they were shown runs out.
+    /// Their clock when their last beam runs out.
     beams_until: f64,
-    /// Every client waits for a full update, not only those just in.
+    /// Every client waits for a full update.
     rekeyed: bool,
-    /// Their clock was put past the beams they see: the full update waits until then.
+    /// The full update waits until then, their clock put ahead.
     flushing: Option<Instant>,
 }
 
@@ -695,15 +692,14 @@ impl Player<'_> {
 }
 
 impl Player<'_> {
-    /// Every client in the game gets a full update of where playback is.
+    /// Every client gets a full update.
     fn rekey(&mut self) {
         self.relay.hub().all_want_keyframe(Instant::now());
         self.rekeyed = true;
     }
 
-    /// Before a full update at tick `key` that sets every client's clock back under beams they
-    /// see: their clock is put past those first (a beam cannot be taken back, and lasts by their
-    /// clock), and they get [`FLUSH`] to draw a frame so. Whether the full update is to wait.
+    /// Puts the clients' clock past their beams before a full update at `key` sets it back.
+    /// Whether the full update is to wait.
     fn flush(&mut self, key: i64, interval: f32) -> bool {
         if let Some(until) = self.flushing {
             if Instant::now() < until {
@@ -726,7 +722,7 @@ impl Player<'_> {
         true
     }
 
-    /// The clients see beams for `life` seconds of their clock from now.
+    /// Beams shown now last `life` seconds.
     fn shown_for(&mut self, life: f32) {
         if let Some((at, since)) = self.clock {
             self.beams_until = self.beams_until.max(at + since.elapsed().as_secs_f64() + f64::from(life));
