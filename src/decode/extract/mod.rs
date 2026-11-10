@@ -66,6 +66,7 @@ fn debug_entity() -> Option<u32> {
     DEBUG.as_deref()?.strip_prefix("ent:")?.parse().ok()
 }
 
+/// `m_hMyWeapons` has `MAX_WEAPONS` slots.
 const MY_WEAPON_SLOTS: usize = 48;
 static PROP_MY_WEAPONS: LazyLock<[SendPropIdentifier; MY_WEAPON_SLOTS]> =
     LazyLock::new(|| std::array::from_fn(|i| SendPropIdentifier::new("m_hMyWeapons", &format!("{i:03}"))));
