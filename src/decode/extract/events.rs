@@ -119,7 +119,7 @@ impl Extractor {
                     crit: d.damage_bits & DMG_CRIT != 0,
                     headshot: d.custom_kill == CUSTOM_KILL_HEADSHOT,
                     backstab: d.custom_kill == CUSTOM_KILL_BACKSTAB,
-                    suicide: d.attacker == 0 || d.attacker == d.user_id,
+                    suicide: attacker == 0,
                     dominated: d.death_flags & DEATH_DOMINATION != 0,
                     revenge: d.death_flags & DEATH_REVENGE != 0,
                     // A spy's Dead Ringer: the victim is not actually dead.
