@@ -205,6 +205,29 @@ mod tests {
     }
 
     #[test]
+    fn a_cursor_from_a_checkpoint_is_as_one_from_the_start_there() {
+        let path = crate::fixture("pl_upward.dem");
+        let index = Arc::new(Index { path: path.clone(), marks: Mutex::new(Vec::new()), stop: AtomicBool::new(false) });
+        index_demo(&path, &Arc::downgrade(&index), 300).unwrap();
+        let marks = index.marks.lock().unwrap().clone();
+        let mut whole = Cursor::open_with(&path, None).unwrap();
+        for mark in marks.iter().skip(1).step_by(3) {
+            while whole.dec.server_tick() < mark.tick {
+                match whole.next_tick() {
+                    None => panic!("the demo ended"),
+                    Some(NOT_A_FRAME) => whole.next = None,
+                    Some(_) => drop(whole.decode()),
+                }
+            }
+            let from = Cursor::restore(&path, mark).unwrap();
+            let (a, b) = (from.dec.world_dump(), whole.dec.world_dump());
+            for (i, e) in &b {
+                assert_eq!(a.get(i), Some(e), "entity {i} at tick {}", mark.tick);
+            }
+        }
+    }
+
+    #[test]
     fn a_cursor_from_a_checkpoint_reads_on_as_one_from_the_start() {
         let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
         let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
