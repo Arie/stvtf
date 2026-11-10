@@ -132,15 +132,20 @@ fn config(password: &str, slots: usize) -> RelayConfig {
     RelayConfig { password: password.into(), slots, ..RelayConfig::new("127.0.0.1:0") }
 }
 
-/// Runs a relay of a capture while `client` runs against its address.
+/// Runs a relay of `bots_cp_badlands.cap` while `client` runs against its address.
 fn with_relay<T>(config: &RelayConfig, client: impl FnOnce(String) -> T) -> T {
-    let bytes = std::fs::read(fixture("bots_cp_badlands.cap")).unwrap();
+    with_replay("bots_cp_badlands.cap", 8.0, config, client)
+}
+
+/// Runs a relay of capture `name` at `speed` while `client` runs against its address.
+fn with_replay<T>(name: &str, speed: f64, config: &RelayConfig, client: impl FnOnce(String) -> T) -> T {
+    let bytes = std::fs::read(fixture(name)).unwrap();
     let records = capture::read(&bytes).unwrap();
     let relay = Relay::bind(config).unwrap();
     let addr = relay.local_addr().unwrap().to_string();
     let stop = AtomicBool::new(false);
     std::thread::scope(|s| {
-        s.spawn(|| relay.replay(&records, &tables(), 8.0, &stop, &mut |_| {}).unwrap());
+        s.spawn(|| relay.replay(&records, &tables(), speed, &stop, &mut |_| {}).unwrap());
         let out = client(addr);
         stop.store(true, Ordering::Relaxed);
         out
@@ -153,6 +158,18 @@ fn bounded_watch(addr: &str, password: &str) -> Watch {
     w.build = Some(stvtf::CURRENT_BUILD.to_string());
     w.duration = Some(LIMIT);
     w
+}
+
+/// Runs until `done` says so, or `LIMIT`, and gives the lines seen.
+fn watch_until(w: &Watch, mut done: impl FnMut(&Line) -> bool) -> Vec<Line> {
+    let stop = AtomicBool::new(false);
+    let mut lines = Vec::new();
+    watch::watch(w, &stop, &mut |l| {
+        stop.fetch_or(done(&l), Ordering::Relaxed);
+        lines.push(l);
+    })
+    .unwrap();
+    lines
 }
 
 fn watch_once(addr: &str, password: &str) -> Result<Vec<Line>, WatchError> {
@@ -179,13 +196,8 @@ fn a_full_relay_refuses_more_clients() {
                 .unwrap();
             });
             wait_for("the first client getting in", || in_game.load(Ordering::Relaxed));
-            let mut lines = Vec::new();
-            let stop = AtomicBool::new(false);
-            watch::watch(&bounded_watch(&addr, ""), &stop, &mut |l| {
-                stop.fetch_or(matches!(l, Line::Status(Status::ConnectFailed { .. })), Ordering::Relaxed);
-                lines.push(l);
-            })
-            .unwrap();
+            let lines =
+                watch_until(&bounded_watch(&addr, ""), |l| matches!(l, Line::Status(Status::ConnectFailed { .. })));
             refused.store(true, Ordering::Relaxed);
             lines
         })
@@ -221,18 +233,6 @@ fn connectionless_replies_are_no_larger_than_their_queries_until_a_challenge_com
     });
 }
 
-/// Runs until `done` says so, or `LIMIT`, and gives the lines seen.
-fn watch_until(w: &Watch, mut done: impl FnMut(&Line) -> bool) -> Vec<Line> {
-    let stop = AtomicBool::new(false);
-    let mut lines = Vec::new();
-    watch::watch(w, &stop, &mut |l| {
-        stop.fetch_or(done(&l), Ordering::Relaxed);
-        lines.push(l);
-    })
-    .unwrap();
-    lines
-}
-
 /// `connect --relay`: a watch passing its server on. Its upstream here is another relay, so
 /// the second-hand client must get what a client of the first would.
 #[test]
@@ -256,21 +256,13 @@ fn a_relay_can_relay_a_relay() {
 /// A map change restarts signon on the upstream connection, and so on every client's.
 #[test]
 fn a_client_of_the_relay_follows_a_map_change() {
-    let bytes = std::fs::read(fixture("bots_map_change.cap")).unwrap();
-    let records = capture::read(&bytes).unwrap();
-    let relay = Relay::bind(&config("", 10)).unwrap();
-    let addr = relay.local_addr().unwrap().to_string();
-    let stop = AtomicBool::new(false);
-    let lines = std::thread::scope(|s| {
-        s.spawn(|| relay.replay(&records, &tables(), 32.0, &stop, &mut |_| {}).unwrap());
+    let lines = with_replay("bots_map_change.cap", 32.0, &config("", 10), |addr| {
         let (mut changed, mut full_again) = (false, false);
-        let lines = watch_until(&bounded_watch(&addr, ""), |l| {
+        watch_until(&bounded_watch(&addr, ""), |l| {
             changed |= matches!(l, Line::Status(Status::MapChange));
             full_again |= changed && matches!(l, Line::Status(Status::Full { .. }));
             full_again && has_players(l)
-        });
-        stop.store(true, Ordering::Relaxed);
-        lines
+        })
     });
     let change = lines.iter().position(|l| matches!(l, Line::Status(Status::MapChange))).expect("a map change");
     let after = &lines[change..];
