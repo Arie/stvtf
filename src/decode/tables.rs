@@ -7,16 +7,13 @@
 //! A client that has the tables of a later moment is set back with `svc_UpdateStringTable`s of the
 //! entries that differ ([`Tables::set_back`]).
 
-use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::TYPE_BITS;
-use bitbuffer::{BitWriteStream, LittleEndian};
+use crate::net::bits::BitBuf;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::Message;
 use tf_demo_parser::demo::message::stringtable::UpdateStringTableMessage;
 use tf_demo_parser::demo::packet::stringtable::{ExtraData, StringTableEntry};
-use tf_demo_parser::demo::parser::Encode;
 
 const SVC_UPDATESTRINGTABLE: u32 = 13;
 
@@ -153,16 +150,7 @@ impl Tables {
         }
         let entry = StringTableEntry { text: Some(Cow::Borrowed(BEAM_SPRITES[0])), extra_data: None };
         let msg = UpdateStringTableMessage { entries: vec![(slot, entry)], table_id: u8::try_from(id).ok()? };
-        let mut bytes = Vec::new();
-        let nbits = {
-            let mut s = BitWriteStream::new(&mut bytes, LittleEndian);
-            msg.encode(&mut s, state).ok()?;
-            s.bit_len()
-        };
-        let mut w = BitWriter::new();
-        w.write_bits(SVC_UPDATESTRINGTABLE, TYPE_BITS);
-        w.write_buf(&BitReader::slice(&bytes, 0..nbits));
-        Some((slot, Some(w.finish())))
+        Some((slot, Some(super::encode_message(SVC_UPDATESTRINGTABLE, &msg, state)?)))
     }
 
     /// How many entries of `userinfo` and `instancebaseline` were rewritten so far: a client with
@@ -196,16 +184,7 @@ impl Tables {
                 continue;
             }
             let msg = UpdateStringTableMessage { entries, table_id: u8::try_from(id).ok()? };
-            let mut bytes = Vec::new();
-            let nbits = {
-                let mut s = BitWriteStream::new(&mut bytes, LittleEndian);
-                msg.encode(&mut s, state).ok()?;
-                s.bit_len()
-            };
-            let mut w = BitWriter::new();
-            w.write_bits(SVC_UPDATESTRINGTABLE, TYPE_BITS);
-            w.write_buf(&BitReader::slice(&bytes, 0..nbits));
-            out.push(w.finish());
+            out.push(super::encode_message(SVC_UPDATESTRINGTABLE, &msg, state)?);
         }
         Some(out)
     }
@@ -221,7 +200,7 @@ fn value(e: &StringTableEntry<'_>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitbuffer::{BitRead, BitReadBuffer, BitReadStream};
+    use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
     use tf_demo_parser::demo::message::MessageType;
     use tf_demo_parser::demo::message::stringtable::{CreateStringTableMessage, StringTableMeta};
     use tf_demo_parser::demo::packet::stringtable::StringTable;

@@ -2,11 +2,8 @@
 //! temp entities: a room's strokes, seen in TF2.
 
 use super::Decoder;
-use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::TYPE_BITS;
-use bitbuffer::{BitWriteStream, LittleEndian};
+use crate::net::bits::BitBuf;
 use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage};
-use tf_demo_parser::demo::parser::Encode;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
 
@@ -96,16 +93,7 @@ impl Decoder {
             .chunks(PER_MESSAGE)
             .map(|chunk| {
                 let msg = TempEntitiesMessage { events: chunk.iter().map(event).collect::<Option<_>>()? };
-                let mut bytes = Vec::new();
-                let nbits = {
-                    let mut s = BitWriteStream::new(&mut bytes, LittleEndian);
-                    msg.encode(&mut s, state).ok()?;
-                    s.bit_len()
-                };
-                let mut w = BitWriter::new();
-                w.write_bits(SVC_TEMPENTITIES, TYPE_BITS);
-                w.write_buf(&BitReader::slice(&bytes, 0..nbits));
-                Some(w.finish())
+                super::encode_message(SVC_TEMPENTITIES, &msg, state)
             })
             .collect()
     }

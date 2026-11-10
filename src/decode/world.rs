@@ -12,15 +12,13 @@
 //! to a viewer that acks them, which stvtf never does, so they stay unused, but if one is used no
 //! full update is written.
 
-use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::{self, TYPE_BITS};
-use bitbuffer::{BitWriteStream, LittleEndian};
+use crate::net::bits::{BitBuf, BitWriter};
+use crate::net::messages;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::packetentities::{BaselineIndex, PacketEntitiesMessage, PacketEntity, UpdateType};
 use tf_demo_parser::demo::packet::datatable::ClassId;
-use tf_demo_parser::demo::parser::Encode;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
 const SVC_PACKETENTITIES: u32 = 26;
@@ -405,16 +403,9 @@ fn enter(state: &ParserState, index: u32, e: &Entity) -> Option<PacketEntity> {
 
 /// `net_Tick(tick)` and `msg`, as one message stream.
 fn encode(state: &ParserState, msg: &PacketEntitiesMessage, tick: u32) -> Option<BitBuf> {
-    let mut bytes = Vec::new();
-    let nbits = {
-        let mut s = BitWriteStream::new(&mut bytes, LittleEndian);
-        msg.encode(&mut s, state).ok()?;
-        s.bit_len()
-    };
     let mut w = BitWriter::new();
     w.write_buf(&messages::tick(tick as i32));
-    w.write_bits(SVC_PACKETENTITIES, TYPE_BITS);
-    w.write_buf(&BitReader::slice(&bytes, 0..nbits));
+    w.write_buf(&super::encode_message(SVC_PACKETENTITIES, msg, state)?);
     Some(w.finish())
 }
 

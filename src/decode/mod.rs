@@ -452,21 +452,10 @@ impl Decoder {
     /// `event` as an `svc_GameEvent`, if the demo's event list has its kind.
     fn game_event(&self, event: tf_demo_parser::demo::gameevent_gen::GameEvent) -> Option<crate::net::bits::BitBuf> {
         use tf_demo_parser::demo::message::gameevent::GameEventMessage;
-        use tf_demo_parser::demo::parser::Encode;
         let state = self.handler.get_parser_state();
         let event_type = event.event_type();
         let def = state.event_definitions.iter().find(|d| d.event_type == event_type)?;
-        let msg = GameEventMessage { event_type_id: def.id, event_type, event };
-        let mut bytes = Vec::new();
-        let nbits = {
-            let mut s = bitbuffer::BitWriteStream::new(&mut bytes, LittleEndian);
-            msg.encode(&mut s, state).ok()?;
-            s.bit_len()
-        };
-        let mut w = crate::net::bits::BitWriter::new();
-        w.write_bits(SVC_GAMEEVENT, TYPE_BITS);
-        w.write_buf(&crate::net::bits::BitReader::slice(&bytes, 0..nbits));
-        Some(w.finish())
+        encode_message(SVC_GAMEEVENT, &GameEventMessage { event_type_id: def.id, event_type, event }, state)
     }
 
     /// Whether the message at `span` is a director camera cue (`hltv_chase`, `hltv_fixed`, …).
@@ -518,6 +507,24 @@ impl Decoder {
     pub(crate) fn panicked(&self) -> bool {
         self.panicked
     }
+}
+
+/// `msg` as a message stream of it alone, its type `svc` first.
+fn encode_message(
+    svc: u32,
+    msg: &impl tf_demo_parser::demo::parser::Encode,
+    state: &tf_demo_parser::ParserState,
+) -> Option<crate::net::bits::BitBuf> {
+    let mut bytes = Vec::new();
+    let nbits = {
+        let mut s = bitbuffer::BitWriteStream::new(&mut bytes, LittleEndian);
+        msg.encode(&mut s, state).ok()?;
+        s.bit_len()
+    };
+    let mut w = crate::net::bits::BitWriter::new();
+    w.write_bits(svc, TYPE_BITS);
+    w.write_buf(&crate::net::bits::BitReader::slice(&bytes, 0..nbits));
+    Some(w.finish())
 }
 
 /// The entities messages among `messages`.
