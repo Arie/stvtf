@@ -3,18 +3,15 @@
 
 mod common;
 
-use common::{A2S_INFO, OOB, fixture, has_players, tables};
+use common::{A2S_INFO, LIMIT, OOB, fixture, has_players, tables, wait_for};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use stvtf::capture;
 use stvtf::output::Status;
 use stvtf::relay::{Relay, RelayConfig};
 use stvtf::watch::{self, Watch, WatchError};
 use stvtf::{Fatal, Line, Options};
-
-/// A bound on what should take moments, for a broken relay.
-const LIMIT: Duration = Duration::from_secs(30);
 
 /// Everything but the connection statuses, which differ (connecting, the reason for leaving).
 fn data(lines: &[Line]) -> Vec<&Line> {
@@ -181,11 +178,7 @@ fn a_full_relay_refuses_more_clients() {
                 })
                 .unwrap();
             });
-            let limit = Instant::now() + LIMIT;
-            while !in_game.load(Ordering::Relaxed) {
-                assert!(Instant::now() < limit, "the first client never got in");
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            wait_for("the first client getting in", || in_game.load(Ordering::Relaxed));
             let mut lines = Vec::new();
             let stop = AtomicBool::new(false);
             watch::watch(&bounded_watch(&addr, ""), &stop, &mut |l| {

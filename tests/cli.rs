@@ -3,16 +3,13 @@
 
 mod common;
 
-use common::{OOB, challenge, fixture, stvtf};
+use common::{LIMIT, OOB, challenge, fixture, stvtf};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
-
-/// A bound on what should take moments.
-const LIMIT: Duration = Duration::from_secs(30);
 
 fn run(args: &[&str]) -> Output {
     stvtf().args(args).output().unwrap()

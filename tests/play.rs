@@ -1,6 +1,9 @@
 //! A relay playing a demo, end to end: stvtf connects to it over UDP as any client would, joins
 //! while it plays, follows a jump back and a pause. What the client sees must be the demo's.
 
+mod common;
+
+use common::{LIMIT, wait_for};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,8 +15,6 @@ use stvtf::relay::{Playback, Relay, RelayConfig, Want};
 use stvtf::watch::{self, Watch};
 
 const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem");
-/// A bound on what should take moments, for a broken relay.
-const LIMIT: Duration = Duration::from_secs(30);
 
 /// The demo's snapshots, one per frame, by tick.
 fn demo_snapshots() -> BTreeMap<u32, Snapshot> {
@@ -94,14 +95,6 @@ fn snapshots(seen: &Seen) -> Vec<(Instant, Snapshot)> {
             _ => None,
         })
         .collect()
-}
-
-fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
-    let until = Instant::now() + LIMIT;
-    while !done() {
-        assert!(Instant::now() < until, "{what} did not happen");
-        std::thread::sleep(Duration::from_millis(10));
-    }
 }
 
 /// Every snapshot the client got is the demo's at that tick.

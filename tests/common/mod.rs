@@ -4,11 +4,14 @@
 
 use std::collections::HashSet;
 use std::process::Command;
+use std::time::{Duration, Instant};
 use stvtf::decode::Tables;
 use stvtf::output::{PlayerId, Position};
 use stvtf::{Line, Options, capture};
 
 pub const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+/// A bound on what should take moments.
+pub const LIMIT: Duration = Duration::from_secs(30);
 
 /// What starts a connectionless packet.
 pub const OOB: [u8; 4] = [0xff; 4];
@@ -67,6 +70,16 @@ pub fn players_seen(lines: &[Line]) -> HashSet<PlayerId> {
 
 pub fn has_players(l: &Line) -> bool {
     matches!(l, Line::Snapshot(s) if !s.players.is_empty())
+}
+
+/// Waits until `done` says so, failing after `LIMIT`.
+#[track_caller]
+pub fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let until = Instant::now() + LIMIT;
+    while !done() {
+        assert!(Instant::now() < until, "{what} did not happen");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// A `SourceTV`'s answer to a challenge request with `nonce`.
