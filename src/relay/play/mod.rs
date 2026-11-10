@@ -9,6 +9,8 @@
 //! - Paused, no frames go out. The clients are not told, so their clock runs on and what is drawn
 //!   for them (beams) shows and fades; the round timers are held instead, and going on they get a
 //!   full update of where it is. The match's own pauses in the demo they are told (`svc_SetPause`).
+//! - A full update that sets the clients' clock back (going on after a pause, a jump back) would
+//!   leave the beams they see showing that much longer: a `net_Tick` past their end goes first.
 //! - With nobody in, nothing is decoded; after a while what was decoded is dropped.
 //! - Why it cannot play (not written yet, another build's demo, a read error) is told through
 //!   [`Playback::problem`], and it tries again.
@@ -58,6 +60,11 @@ const KEPT_EVERY: Duration = Duration::from_secs(2);
 /// frames (a burst of hundreds of datagrams loses some, frames among them).
 const KEPT_RATE: f64 = 800.0;
 const KEPT_BURST: f64 = 48.0;
+/// The clients' clock going back by more than this (seconds) leaves the beams they see showing
+/// that much longer: it is first put past their end.
+const SET_BACK: f64 = 0.5;
+/// How long the clients get to draw a frame with their clock put ahead, before it goes back.
+const FLUSH: Duration = Duration::from_millis(150);
 
 /// The kept beams shown: which of them were last handed over, when each was last sent, and
 /// how many may be sent now (refilled at [`KEPT_RATE`]).
@@ -73,6 +80,12 @@ type BeamKey = ([u32; 3], [u32; 3], [u8; 3], u32, u8);
 
 fn beam_key(b: &Beam) -> BeamKey {
     (b.from.map(f32::to_bits), b.to.map(f32::to_bits), b.rgb, b.width.to_bits(), b.speed)
+}
+
+/// The tick that puts the clients' clock past the beams they see, if it is at `now`, about to go
+/// back to `key`, with beams showing until `until` (seconds of their clock).
+fn past_beams(now: f64, key: f64, until: f64, interval: f32) -> Option<i32> {
+    (now < until && now - key > SET_BACK && interval > 0.0).then(|| ((until + 1.0) / f64::from(interval)).ceil() as i32)
 }
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
@@ -411,6 +424,10 @@ impl Relay {
                 cued: None,
                 kept: Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: Instant::now() },
                 laser: None,
+                clock: None,
+                beams_until: 0.0,
+                rekeyed: false,
+                flushing: None,
             }
             .run(playback, stop);
         });
@@ -442,6 +459,14 @@ struct Player<'r> {
     kept: Kept,
     /// Where the clients were given the laser beams are drawn with, if they were.
     laser: Option<u16>,
+    /// The clients' clock (seconds) at an instant, from the last frame they got: it runs on.
+    clock: Option<(f64, Instant)>,
+    /// Their clock when the last beam they were shown runs out.
+    beams_until: f64,
+    /// Every client waits for a full update, not only those just in.
+    rekeyed: bool,
+    /// Their clock was put past the beams they see: the full update waits until then.
+    flushing: Option<Instant>,
 }
 
 impl Player<'_> {
@@ -462,6 +487,8 @@ impl Player<'_> {
                         self.cur = Some(c);
                         // Its own tables: the clients sign on to them, the laser not among them.
                         self.laser = None;
+                        self.clock = None;
+                        self.beams_until = 0.0;
                         playback.set_problem(None);
                         if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
                             self.index = Some(Index::shared(&want.demo));
@@ -476,8 +503,10 @@ impl Player<'_> {
                     }
                 }
             }
-            self.draw(&playback.take_beams());
-            self.show_kept(playback);
+            if self.flushing.is_none() {
+                self.draw(&playback.take_beams());
+                self.show_kept(playback);
+            }
             match self.step(&want) {
                 Ok(()) => playback.set_problem(self.problem.clone()),
                 Err(e) => {
@@ -540,7 +569,7 @@ impl Player<'_> {
             }
         }
         self.cur = Some(again);
-        self.relay.hub().all_want_keyframe(Instant::now());
+        self.rekey();
         Ok(())
     }
 
@@ -574,6 +603,8 @@ impl Player<'_> {
             // A full update with the round timers held, or as they are going on: one that needs no
             // frame a client may lack (one just in has only its own full update).
             hub.all_want_keyframe(Instant::now());
+            drop(hub);
+            self.rekeyed = true;
         }
         let Some(c) = &mut self.cur else { return Ok(()) };
         if c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target) {
@@ -591,9 +622,15 @@ impl Player<'_> {
             self.dry = dry;
             if decoded > 0 {
                 self.relay.hub().all_want_keyframe(Instant::now());
+                self.rekeyed = true;
             }
         }
         if self.relay.hub().wants_keyframe() {
+            let at = c.tick();
+            if self.flush(at, interval) {
+                return Ok(());
+            }
+            let Some(c) = &mut self.cur else { return Ok(()) };
             // Of the frame the next one builds on, which from a live server is often a few ticks
             // back: at the end of what is written so far, it waits for that frame.
             c.peek();
@@ -607,6 +644,9 @@ impl Player<'_> {
                     // Its clock may have gone back: panels waiting for a time it passed redraw.
                     since.push(super::reset_hud());
                     self.relay.hub().send_keyframe(&key, &since, c.paused);
+                    if std::mem::take(&mut self.rekeyed) {
+                        self.clock = Some((f64::from(tick) * f64::from(interval), Instant::now()));
+                    }
                     self.problem = None;
                     // Those just in are told where the camera is.
                     self.cued = None;
@@ -636,6 +676,7 @@ impl Player<'_> {
                     let mut hub = self.relay.hub();
                     hub.upstream_stream(&bits, false, &life);
                     hub.upstream_flush();
+                    self.clock = Some((c.tick() as f64 * f64::from(interval), Instant::now()));
                     // The match paused or went on: the clients are told reliably too.
                     if c.paused != was_paused {
                         hub.set_paused(c.paused);
@@ -654,6 +695,44 @@ impl Player<'_> {
 }
 
 impl Player<'_> {
+    /// Every client in the game gets a full update of where playback is.
+    fn rekey(&mut self) {
+        self.relay.hub().all_want_keyframe(Instant::now());
+        self.rekeyed = true;
+    }
+
+    /// Before a full update at tick `key` that sets every client's clock back under beams they
+    /// see: their clock is put past those first (a beam cannot be taken back, and lasts by their
+    /// clock), and they get [`FLUSH`] to draw a frame so. Whether the full update is to wait.
+    fn flush(&mut self, key: i64, interval: f32) -> bool {
+        if let Some(until) = self.flushing {
+            if Instant::now() < until {
+                std::thread::sleep(NAP);
+                return true;
+            }
+            self.flushing = None;
+            return false;
+        }
+        let Some((at, since)) = self.clock.filter(|_| self.rekeyed) else { return false };
+        let now = at + since.elapsed().as_secs_f64();
+        let Some(ahead) = past_beams(now, key as f64 * f64::from(interval), self.beams_until, interval) else {
+            return false;
+        };
+        trace!("the clients' clock put ahead to {ahead}, past the beams they see");
+        self.relay.hub().tell_waiting_now(&messages::tick(ahead));
+        self.flushing = Some(Instant::now() + FLUSH);
+        self.beams_until = 0.0;
+        self.kept.sent.clear();
+        true
+    }
+
+    /// The clients see beams for `life` seconds of their clock from now.
+    fn shown_for(&mut self, life: f32) {
+        if let Some((at, since)) = self.clock {
+            self.beams_until = self.beams_until.max(at + since.elapsed().as_secs_f64() + f64::from(life));
+        }
+    }
+
     /// `beams` as messages, drawn with the laser: the clients are given it first if they have not
     /// been (and those to come too), where they will have it.
     fn beam_messages(&mut self, beams: &[Beam]) -> Option<Vec<BitBuf>> {
@@ -707,6 +786,8 @@ impl Player<'_> {
             for m in &msgs {
                 hub.tell_active_now(m);
             }
+            drop(hub);
+            self.shown_for(life);
         }
     }
 
@@ -722,6 +803,8 @@ impl Player<'_> {
                 for m in &msgs {
                     hub.tell_active(m);
                 }
+                drop(hub);
+                self.shown_for(beams.iter().map(|b| b.life).fold(0.0, f32::max));
             }
             None => trace!("{} beams not drawn: no beam class or sprite in the demo", beams.len()),
         }
@@ -827,6 +910,16 @@ mod tests {
         client.dec.feed(plain.bytes(), plain.nbits());
         let timers = client.dec.extractor().snapshot().timers;
         assert!(timers.iter().all(|t| !t.paused), "{timers:?}");
+    }
+
+    #[test]
+    fn the_clock_is_put_past_beams_it_would_go_back_under() {
+        let interval = 0.5;
+        // Paused a minute, a line drawn 59 s in, playback going on at 100 s: gone by 162 s.
+        assert_eq!(past_beams(160.0, 100.0, 161.0, interval), Some(324));
+        assert_eq!(past_beams(160.0, 100.0, 159.0, interval), None, "nothing showing");
+        assert_eq!(past_beams(100.2, 100.0, 102.0, interval), None, "a client just in, playback going");
+        assert_eq!(past_beams(100.0, 400.0, 102.0, interval), None, "ahead: they run out at once");
     }
 
     #[test]

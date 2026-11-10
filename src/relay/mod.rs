@@ -473,6 +473,16 @@ impl Hub {
         }
     }
 
+    /// A message for the clients waiting for a full update, ahead of it, unreliably.
+    fn tell_waiting_now(&mut self, msg: &BitBuf) {
+        let now = Instant::now();
+        for (addr, c) in &mut self.clients {
+            if c.takes_full_update(&self.log) {
+                self.out.send(*addr, c, Some(msg), false, now);
+            }
+        }
+    }
+
     /// A message for the clients in the game, reliably.
     fn tell_active(&mut self, msg: &BitBuf) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
