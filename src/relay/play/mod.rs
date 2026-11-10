@@ -302,6 +302,14 @@ impl Cursor {
         self.next.as_ref()
     }
 
+    /// The data of the packet read ahead, if it is a frame.
+    fn next_frame(&self) -> Option<&[u8]> {
+        match &self.next {
+            Some(Packet::Message { data, .. }) => Some(data),
+            _ => None,
+        }
+    }
+
     /// The server tick the next frame has: its own `net_Tick`, or as far as the frames so far tell
     /// (a demo's tick less the server's, which a pause changes: an STV demo has no frames while the
     /// server is paused); None when there is none yet, [`NOT_A_FRAME`] for another packet.
@@ -587,16 +595,12 @@ impl Player<'_> {
         if self.relay.hub().wants_keyframe() {
             // Of the frame the next one builds on, which from a live server is often a few ticks
             // back: at the end of what is written so far, it waits for that frame.
-            let next = match c.peek() {
-                Some(Packet::Message { data, .. }) => Some(data.clone()),
-                _ => None,
-            };
+            c.peek();
+            let next = c.next_frame();
             if next.is_some() || c.ended {
-                let key =
-                    if self.paused { c.dec.keyframe_held(next.as_deref()) } else { c.dec.keyframe(next.as_deref()) };
+                let key = if self.paused { c.dec.keyframe_held(next) } else { c.dec.keyframe(next) };
                 if let Some((tick, key)) = key {
-                    let recent: Vec<(u32, BitBuf)> = c.recent.iter().cloned().collect();
-                    let mut since = c.dec.catch_up(tick, &recent);
+                    let mut since = c.dec.catch_up(tick, c.recent.make_contiguous());
                     // The round's end shown, or hidden, as at this moment.
                     since.extend(c.dec.round_event());
                     // Its clock may have gone back: panels waiting for a time it passed redraw.
@@ -799,11 +803,9 @@ mod tests {
         let (mut relay, mut client) = (twenty(), twenty());
         let running = client.dec.extractor().snapshot().timers;
         assert!(!running.is_empty() && running.iter().all(|t| !t.paused), "{running:?}");
-        let next = match relay.peek() {
-            Some(Packet::Message { data, .. }) => Some(data.clone()),
-            _ => None,
-        };
-        let (_, held) = relay.dec.keyframe_held(next.as_deref()).expect("a full update");
+        relay.peek();
+        let next = relay.next_frame();
+        let (_, held) = relay.dec.keyframe_held(next).expect("a full update");
         client.dec.feed(held.bytes(), held.nbits());
         let timers = client.dec.extractor().snapshot().timers;
         assert_eq!(timers.len(), running.len());
@@ -812,7 +814,7 @@ mod tests {
             assert!((h.remaining - r.remaining).abs() < 0.5, "held at {} where it was {}", h.remaining, r.remaining);
         }
         // Going on: a full update as it is runs them again, though running is their baseline.
-        let (_, plain) = relay.dec.keyframe(next.as_deref()).expect("a full update");
+        let (_, plain) = relay.dec.keyframe(next).expect("a full update");
         client.dec.feed(plain.bytes(), plain.nbits());
         let timers = client.dec.extractor().snapshot().timers;
         assert!(timers.iter().all(|t| !t.paused), "{timers:?}");

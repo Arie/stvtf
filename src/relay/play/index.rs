@@ -134,14 +134,11 @@ impl Cursor {
     /// A checkpoint at the last frame decoded, once the next one is there to say which frame it
     /// builds on.
     fn checkpoint(&mut self) -> Option<Checkpoint> {
-        let next = match self.peek()? {
-            super::Packet::Message { data, .. } => data.clone(),
-            _ => return None,
-        };
-        let (key_tick, key) = self.dec.keyframe(Some(&next))?;
-        let recent: Vec<(u32, BitBuf)> = self.recent.iter().cloned().collect();
+        self.peek();
+        let (key_tick, key) = self.dec.keyframe(Some(self.next_frame()?))?;
+        let recent: &[(u32, BitBuf)] = self.recent.make_contiguous();
         let ticks = recent.iter().map(|(t, _)| *t).filter(|t| *t > key_tick);
-        let since = ticks.zip(self.dec.catch_up(key_tick, &recent)).collect();
+        let since = ticks.zip(self.dec.catch_up(key_tick, recent)).collect();
         Some(Checkpoint {
             tick: self.dec.server_tick(),
             pos: self.next_pos,
