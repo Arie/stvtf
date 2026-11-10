@@ -805,6 +805,11 @@ impl Out {
     }
 }
 
+/// Locks `m`, whatever a thread that panicked with it left.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Where a relay listens and whom it lets in. `Debug` keeps the password out of logs.
 #[derive(Clone)]
 pub struct RelayConfig {
@@ -866,7 +871,7 @@ impl Relay {
     }
 
     fn hub(&self) -> MutexGuard<'_, Hub> {
-        self.hub.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.hub)
     }
 
     /// Relays a `SourceTV` server, reconnecting as [`crate::watch::watch`] does, until `stop`.

@@ -15,7 +15,7 @@
 
 mod index;
 
-use super::{Hub, Relay};
+use super::{Hub, Relay, lock};
 pub use crate::decode::beams::Beam;
 use crate::decode::{Decoder, Lifecycle, Tables};
 use crate::demo::{self, Next, Packet};
@@ -28,7 +28,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Off from the wanted moment by more than this, playback jumps instead of catching up.
@@ -142,44 +142,44 @@ impl Playback {
     /// shown again every [`KEPT_EVERY`], each for as long, so the old go within that and nothing
     /// shows twice over.
     pub fn keep(&self, beams: Vec<Beam>) {
-        let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut kept = lock(&self.kept);
         kept.0 += 1;
         kept.1 = Arc::new(beams);
     }
 
     fn kept(&self) -> (u64, Arc<Vec<Beam>>) {
-        self.kept.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        lock(&self.kept).clone()
     }
 
     /// Shows `beams` to the clients in the game now; those that are not miss them.
     pub fn draw(&self, beams: &[Beam]) {
-        let mut queued = self.beams.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queued = lock(&self.beams);
         if queued.len() + beams.len() <= MAX_BEAMS_QUEUED {
             queued.extend_from_slice(beams);
         }
     }
 
     fn take_beams(&self) -> Vec<Beam> {
-        std::mem::take(&mut *self.beams.lock().unwrap_or_else(PoisonError::into_inner))
+        std::mem::take(&mut *lock(&self.beams))
     }
 
     /// Where playback should be from now on.
     pub fn set(&self, want: Want) {
-        *self.want.lock().unwrap_or_else(PoisonError::into_inner) = want;
+        *lock(&self.want) = want;
     }
 
     /// Why the demo wanted cannot be played (not written yet, or of another TF2 build), as of the
     /// last client that tried.
     pub fn problem(&self) -> Option<String> {
-        self.problem.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        lock(&self.problem).clone()
     }
 
     fn get(&self) -> Want {
-        self.want.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        lock(&self.want).clone()
     }
 
     fn set_problem(&self, problem: Option<String>) {
-        *self.problem.lock().unwrap_or_else(PoisonError::into_inner) = problem;
+        *lock(&self.problem) = problem;
     }
 }
 
@@ -376,10 +376,6 @@ fn tables_of(path: &Path, reader: &demo::Reader<File>) -> Result<Tables> {
     let mut prefix = vec![0u8; reader.position() as usize];
     File::open(path)?.read_exact(&mut prefix)?;
     Tables::from_demo_bytes(&prefix)
-}
-
-fn lock(hub: &Mutex<Hub>) -> std::sync::MutexGuard<'_, Hub> {
-    hub.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Relay {

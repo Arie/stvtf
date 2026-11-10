@@ -11,11 +11,11 @@
 
 use super::{Cursor, RECENT};
 use crate::net::bits::BitBuf;
-use crate::relay::Hub;
+use crate::relay::{Hub, lock};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Server ticks between checkpoints: 30 s on a 66-tick server.
@@ -62,7 +62,7 @@ impl Index {
     /// The index of the demo at `path`: the one a relay already has, or a new one. Indexing stops
     /// when the last holder lets go.
     pub(super) fn shared(path: &Path) -> Arc<Index> {
-        let mut all = INDEXES.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut all = lock(&INDEXES);
         all.retain(|_, w| w.strong_count() > 0);
         if let Some(index) = all.get(path).and_then(std::sync::Weak::upgrade) {
             return index;
@@ -88,12 +88,12 @@ impl Index {
 
     /// The last checkpoint at or before server tick `tick`.
     pub(super) fn before(&self, tick: i64) -> Option<Arc<Checkpoint>> {
-        let marks = self.marks.lock().unwrap_or_else(PoisonError::into_inner);
+        let marks = lock(&self.marks);
         marks.iter().rev().find(|c| i64::from(c.tick) <= tick).cloned()
     }
 
     fn add(&self, c: Checkpoint) {
-        self.marks.lock().unwrap_or_else(PoisonError::into_inner).push(Arc::new(c));
+        lock(&self.marks).push(Arc::new(c));
     }
 }
 
@@ -182,7 +182,7 @@ impl Cursor {
 
 /// Logs the string table changes up to `mark` (passed over by a jump ahead to it) with `hub`.
 pub(super) fn log_tables(hub: &Mutex<Hub>, mark: &Checkpoint) {
-    hub.lock().unwrap_or_else(PoisonError::into_inner).log_tables(&mark.tables());
+    lock(hub).log_tables(&mark.tables());
 }
 
 #[cfg(test)]
