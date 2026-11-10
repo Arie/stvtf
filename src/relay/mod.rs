@@ -65,7 +65,7 @@ mod client_msg;
 mod play;
 mod transfer;
 pub(crate) use client_msg::{ClientMsg, client_messages};
-pub use play::{Beam, Camera, Note, Playback, Want};
+pub use play::{Beam, Camera, Light, Note, Playback, Want};
 
 /// How often the trace sums up what each client was sent.
 const TRACE_EVERY: Duration = Duration::from_secs(5);

@@ -15,6 +15,7 @@
 //!   [`Playback::problem`], and it tries again.
 
 mod index;
+mod light;
 mod notes;
 
 use super::{Hub, Relay};
@@ -27,6 +28,7 @@ use crate::net::messages::{self, TYPE_BITS};
 use crate::output::Line;
 use anyhow::{Context, Result, bail};
 use index::Index;
+pub use light::Light;
 pub use notes::Note;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
@@ -145,6 +147,8 @@ pub struct Playback {
     kept: Mutex<(u64, Arc<Vec<Beam>>)>,
     /// Notes they keep seeing, until replaced, and how many times they were.
     notes: Mutex<(u64, Arc<Vec<Note>>)>,
+    /// The light they keep seeing, if any.
+    light: Mutex<Option<Light>>,
 }
 
 impl Playback {
@@ -156,7 +160,14 @@ impl Playback {
             beams: Mutex::new(Vec::new()),
             kept: Mutex::new((0, Arc::default())),
             notes: Mutex::new((0, Arc::default())),
+            light: Mutex::new(None),
         }
+    }
+
+    /// The light the clients in the game keep seeing (a room's spotlight), in place of the one
+    /// before; None puts it out.
+    pub fn keep_light(&self, light: Option<Light>) {
+        *lock(&self.light) = light;
     }
 
     /// Notes the clients in the game keep seeing (a room's), in place of those before: shown
@@ -436,6 +447,7 @@ impl Relay {
                 cued: None,
                 kept: Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: Instant::now() },
                 shown_notes: notes::Shown::default(),
+                shown_light: light::Shown::default(),
                 laser: None,
                 clock: None,
                 beams_until: 0.0,
@@ -472,6 +484,8 @@ struct Player<'r> {
     kept: Kept,
     /// The notes the clients were given.
     shown_notes: notes::Shown,
+    /// The light the clients were given.
+    shown_light: light::Shown,
     /// Where the clients were given the laser beams are drawn with, if they were.
     laser: Option<u16>,
     /// The clients' clock (seconds) at an instant.
@@ -503,6 +517,7 @@ impl Player<'_> {
                         // Its own tables: the clients sign on to them, the laser not among them.
                         self.laser = None;
                         self.shown_notes = notes::Shown::default();
+                        self.shown_light = light::Shown::default();
                         self.clock = None;
                         self.beams_until = 0.0;
                         playback.set_problem(None);
@@ -524,6 +539,7 @@ impl Player<'_> {
                 self.show_kept(playback);
                 let (version, notes) = lock(&playback.notes).clone();
                 self.show_notes(version, &notes);
+                self.show_light(*lock(&playback.light));
             }
             match self.step(&want) {
                 Ok(()) => playback.set_problem(self.problem.clone()),
@@ -752,6 +768,7 @@ impl Player<'_> {
         self.flushing = Some(Instant::now() + FLUSH);
         self.beams_until = 0.0;
         self.kept.sent.clear();
+        self.shown_light.again();
         true
     }
 

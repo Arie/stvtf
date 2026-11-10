@@ -10,6 +10,7 @@ pub(crate) mod beams;
 mod crc;
 mod detail;
 mod extract;
+pub(crate) mod lights;
 mod modes;
 mod notes;
 mod props;
