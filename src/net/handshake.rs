@@ -128,10 +128,14 @@ fn le_u32(data: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?))
 }
 
+/// The text up to the first NUL, or to the end if there is none.
+fn until_nul(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
+
 fn reject_reason(data: &[u8]) -> String {
-    let tail = data.get(REJECT_REASON..).unwrap_or_default();
-    let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
-    String::from_utf8_lossy(&tail[..end]).into_owned()
+    until_nul(data.get(REJECT_REASON..).unwrap_or_default())
 }
 
 #[derive(Debug, PartialEq)]
@@ -342,13 +346,10 @@ pub(crate) fn parse_a2s_version(data: &[u8]) -> Result<String> {
     let mut pos = A2S_STRINGS;
     // Skip name, map, folder and game.
     for _ in 0..4 {
-        let rest = data.get(pos..).ok_or_else(|| anyhow!("truncated"))?;
-        let end = rest.iter().position(|&b| b == 0).ok_or_else(|| anyhow!("unterminated string"))?;
-        pos += end + 1;
+        read_cstr(data, &mut pos).ok_or_else(|| anyhow!("truncated A2S_INFO"))?;
     }
     let Some(tail) = data.get(pos + A2S_FIXED..) else { bail!("truncated A2S_INFO") };
-    let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
-    Ok(String::from_utf8_lossy(&tail[..end]).into_owned())
+    Ok(until_nul(tail))
 }
 
 /// A connectionless packet a client sends a server.
@@ -373,9 +374,8 @@ pub enum FromClient {
 /// Reads one NUL-terminated string at `*pos`, moving past it.
 fn read_cstr(data: &[u8], pos: &mut usize) -> Option<String> {
     let rest = data.get(*pos..)?;
-    let end = rest.iter().position(|&b| b == 0)?;
-    *pos += end + 1;
-    Some(String::from_utf8_lossy(&rest[..end]).into_owned())
+    *pos += rest.iter().position(|&b| b == 0)? + 1;
+    Some(until_nul(rest))
 }
 
 /// Parses what a client sends a server out of band; None for anything else.
