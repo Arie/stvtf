@@ -9,7 +9,7 @@
 //! The checkpoints are made on the side, by a thread decoding the whole demo as soon as playback
 //! opens it, and following it as it grows (a live match). Relays playing the same demo share them.
 
-use super::{Cursor, RECENT};
+use super::{Cursor, NOT_A_FRAME, RECENT};
 use crate::net::bits::BitBuf;
 use crate::relay::{Hub, lock};
 use anyhow::Result;
@@ -115,7 +115,7 @@ fn index_demo(path: &Path, index: &Weak<Index>, every: u32) -> Result<()> {
         match c.next_tick() {
             None if c.ended => return Ok(()),
             None => std::thread::sleep(WAIT),
-            Some(i64::MIN) => c.next = None,
+            Some(NOT_A_FRAME) => c.next = None,
             Some(_) => {
                 c.decode();
                 let tick = c.dec.server_tick();
@@ -192,7 +192,7 @@ mod tests {
     /// Every frame of the demo at `path`, from `c` on.
     fn read_out(mut c: Cursor) -> Cursor {
         while let Some(t) = c.next_tick() {
-            if t == i64::MIN {
+            if t == NOT_A_FRAME {
                 c.next = None;
             } else {
                 c.decode();

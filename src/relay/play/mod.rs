@@ -34,6 +34,8 @@ use std::time::{Duration, Instant};
 
 /// Off from the wanted moment by more than this, playback jumps instead of catching up.
 const JUMP: Duration = Duration::from_secs(1);
+/// What [`Cursor::next_tick`] gives for a packet that is not a frame: due at once.
+const NOT_A_FRAME: i64 = i64::MIN;
 /// How long the player waits for a frame that is not due, or not written yet.
 const NAP: Duration = Duration::from_millis(5);
 /// With nobody in for this long, the decoded demo is dropped.
@@ -300,7 +302,7 @@ impl Cursor {
 
     /// The server tick the next frame has: its own `net_Tick`, or as far as the frames so far tell
     /// (a demo's tick less the server's, which a pause changes: an STV demo has no frames while the
-    /// server is paused); None when there is none yet. Other packets come first, as due.
+    /// server is paused); None when there is none yet, [`NOT_A_FRAME`] for another packet.
     fn next_tick(&mut self) -> Option<i64> {
         let offset = self.offset;
         self.peek()?;
@@ -309,7 +311,7 @@ impl Cursor {
                 let guess = i64::from(*tick) + offset;
                 self.dec.frame_tick(data).map_or(guess, i64::from)
             }
-            _ => i64::MIN,
+            _ => NOT_A_FRAME,
         })
     }
 
@@ -610,7 +612,7 @@ impl Player<'_> {
         let Some(c) = &mut self.cur else { return Ok(()) };
         match c.next_tick() {
             // Not a frame (a user command of a POV demo, say): passed over, paused or not.
-            Some(i64::MIN) => c.next = None,
+            Some(NOT_A_FRAME) => c.next = None,
             // The first frame, in full, is only decoded: every client starts from a keyframe of
             // wherever playback is.
             Some(_) if !c.started => {
@@ -786,7 +788,7 @@ mod tests {
             while !c.started || c.dec.server_tick() < c.first.unwrap_or(i64::MAX).saturating_add(20 * 66) as u32 {
                 match c.next_tick() {
                     None => panic!("the demo ended"),
-                    Some(i64::MIN) => c.next = None,
+                    Some(NOT_A_FRAME) => c.next = None,
                     Some(_) => drop(c.decode()),
                 }
             }
@@ -824,7 +826,7 @@ mod tests {
         while !c.started {
             match c.next_tick() {
                 None => panic!("the demo ended"),
-                Some(i64::MIN) => c.next = None,
+                Some(NOT_A_FRAME) => c.next = None,
                 Some(_) => drop(c.decode()),
             }
         }
@@ -898,7 +900,7 @@ mod tests {
         while c.dec.server_tick() < c.first.unwrap_or(i64::MAX).saturating_add(660) as u32 || c.first.is_none() {
             match c.next_tick() {
                 None => panic!("the demo ended"),
-                Some(i64::MIN) => c.next = None,
+                Some(NOT_A_FRAME) => c.next = None,
                 Some(_) => {
                     let Some((bits, life)) = c.decode() else { continue };
                     cues += life.spans.iter().filter(|s| c.dec.is_director_cue(bits.bytes(), s)).count();
