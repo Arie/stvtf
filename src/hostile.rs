@@ -91,12 +91,9 @@ fn packets_of_a_connection_never_panic() {
     let mut rng = Rng::seeded(2);
     let mut rx = Receiver::new(Some(7));
     let now = Instant::now();
-    let markers: [&[u8]; 4] = [
-        b"",
-        b"\xfe\xff\xff\xff",
-        b"\xfd\xff\xff\xff",
-        &[b"\xfd\xff\xff\xff".as_slice(), compress::SNAPPY_MAGIC].concat(),
-    ];
+    let split = netchan::MARKER_SPLIT.to_le_bytes();
+    let compressed = netchan::MARKER_COMPRESSED.to_le_bytes();
+    let markers: [&[u8]; 4] = [b"", &split, &compressed, &[compressed.as_slice(), compress::SNAPPY_MAGIC].concat()];
     for _ in 0..rounds(20_000) {
         let mut data = markers[rng.below(markers.len())].to_vec();
         data.extend(rng.bytes(300));

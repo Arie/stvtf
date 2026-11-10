@@ -59,8 +59,7 @@ impl Recording {
                 }
             }
             if netchan::classify(&d) == Kind::Compressed {
-                let block = netchan::SEQUENCE_LEN + compress::SNAPPY_MAGIC.len();
-                d = compress::snappy(&d[block..]).unwrap();
+                d = compress::inflate_datagram(&d).unwrap();
             }
             packets.push(d);
         }
