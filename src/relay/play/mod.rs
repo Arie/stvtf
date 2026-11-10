@@ -785,6 +785,8 @@ mod tests {
     use tf_demo_parser::demo::gameevent_gen::GameEvent;
     use tf_demo_parser::demo::message::Message;
 
+    const SVC_GAMEEVENT: u8 = 25;
+
     /// `pl_upward.dem` decoded until `done`.
     fn upward_until(done: impl Fn(&Cursor) -> bool) -> Cursor {
         let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pl_upward.dem"));
@@ -880,7 +882,7 @@ mod tests {
             load.bytes().to_vec(),
             bitbuffer::LittleEndian,
         ));
-        assert_eq!(s.read_int::<u32>(TYPE_BITS).unwrap(), 13);
+        assert_eq!(s.read_int::<u32>(TYPE_BITS).unwrap(), u32::from(crate::relay::SVC_UPDATESTRINGTABLE));
         let msg =
             Message::from_type(tf_demo_parser::demo::message::MessageType::UpdateStringTable, &mut s, state).unwrap();
         let Message::UpdateStringTable(u) = msg else { panic!() };
@@ -915,7 +917,7 @@ mod tests {
         eprintln!("{cues} director cues in the first 10 s");
         let player = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
         let msg = c.dec.hltv_chase(player.id.0).unwrap();
-        let span = Span { id: 25, bits: 0..msg.nbits() };
+        let span = Span { id: SVC_GAMEEVENT, bits: 0..msg.nbits() };
         assert!(c.dec.is_director_cue(msg.bytes(), &span));
         let state = c.dec.parser_state_for_tests();
         let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
