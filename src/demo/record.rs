@@ -78,12 +78,11 @@ impl Tap for Recorder {
             st.in_signon = true;
             st.failed = false;
         }
+        let tick = life.tick.map(|t| t.max(0) as u32);
         let entities = life.spans.iter().any(|s| s.id == SVC_PACKETENTITIES);
         let msgs = cut(bits, life);
         if st.in_signon && !entities {
-            if let Some(t) = life.tick {
-                st.tick = Some(t.max(0) as u32);
-            }
+            st.tick = tick.or(st.tick);
             if msgs.nbits() > 0 {
                 st.signon.push(msgs.bytes().to_vec());
             }
@@ -95,9 +94,9 @@ impl Tap for Recorder {
         if life.spans.iter().any(|s| s.id == NET_TICK) && st.frame_tick.is_some() {
             self.write(&mut st);
         }
-        if let Some(t) = life.tick {
-            st.tick = Some(t.max(0) as u32);
-            st.frame_tick.get_or_insert(t.max(0) as u32);
+        if let Some(t) = tick {
+            st.tick = Some(t);
+            st.frame_tick.get_or_insert(t);
         }
         st.datagram.get_or_insert_with(BitWriter::new).write_buf(&msgs);
     }
