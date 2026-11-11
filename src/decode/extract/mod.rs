@@ -371,6 +371,7 @@ impl Extractor {
             injected: false,
             pause: false,
             team: None,
+            name: None,
         }));
     }
 

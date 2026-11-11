@@ -477,11 +477,14 @@ fn a_voice_line_says_only_when_it_was_injected_said_in_a_pause_or_has_just_a_tea
         injected: false,
         pause: false,
         team: None,
+        name: None,
     };
     let json = serde_json::to_string(&Line::Voice(plain.clone())).unwrap();
     assert!(!json.contains("injected") && !json.contains("pause") && !json.contains("\"team\""), "{json}");
+    assert!(!json.contains("\"name\""), "{json}");
     assert_eq!(serde_json::from_str::<Line>(&json).unwrap(), Line::Voice(plain.clone()), "as before they were");
-    let marked = Voice { injected: true, pause: true, team: Some(Team::Red), player: None, ..plain };
+    let marked =
+        Voice { injected: true, pause: true, team: Some(Team::Red), name: Some("coach".into()), player: None, ..plain };
     let json = serde_json::to_string(&Line::Voice(marked.clone())).unwrap();
     assert_eq!(serde_json::from_str::<Line>(&json).unwrap(), Line::Voice(marked));
 }

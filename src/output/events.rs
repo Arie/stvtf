@@ -806,6 +806,9 @@ pub struct Voice {
     /// The speaker's team, for one who is no player in the match (a coach).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<Team>,
+    /// The speaker's name, for one who is no player in the match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// The game was paused, or went on.
