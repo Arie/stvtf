@@ -7,11 +7,14 @@ use std::collections::HashMap;
 /// The most voice waiting to be sent; past it the oldest goes.
 pub(super) const MAX_QUEUED: usize = 512;
 
-/// Opus frames (20 ms each, in order) to send as the voice of the player with user id `user`.
+/// Opus frames (20 ms each, in order) to send as the voice of the player with user id `user`, or
+/// with none (a caster, a coach) as `SourceTV`'s own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceIn {
-    /// The player's user id.
-    pub user: u16,
+    /// The player's user id; none for a speaker who is no player.
+    pub user: Option<u16>,
+    /// The speaker's `SteamID` (`[U:1:…]`), for one who is no player; may be empty.
+    pub steamid: String,
     /// Samples a second the frames are labelled with.
     pub rate: u16,
     /// The Opus packets.
@@ -20,7 +23,7 @@ pub struct VoiceIn {
 
 /// The next frame number of each speaker, by user id: a client orders a speaker's frames by it.
 #[derive(Default)]
-pub(super) struct Sequences(HashMap<u16, u16>);
+pub(super) struct Sequences(HashMap<Option<u16>, u16>);
 
 impl Player<'_> {
     /// Sends `voice` to the clients in the game, unreliably, as the game sends voice; a speaker
@@ -30,7 +33,7 @@ impl Player<'_> {
         let mut hub = self.relay.hub();
         for v in voice {
             let seq = self.voice_seq.0.entry(v.user).or_insert(0);
-            if let Some(m) = c.dec.voice_message(v.user, v.rate, &v.frames, seq) {
+            if let Some(m) = c.dec.voice_message(v.user, &v.steamid, v.rate, &v.frames, seq) {
                 hub.tell_active_now(&m);
             }
         }
@@ -57,7 +60,7 @@ mod tests {
         let p = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
         let frames = vec![vec![0x68, 1, 2], vec![0x68, 3]];
         let mut seq = 0;
-        let msg = c.dec.voice_message(p.id.0, 24000, &frames, &mut seq).unwrap();
+        let msg = c.dec.voice_message(Some(p.id.0), "", 24000, &frames, &mut seq).unwrap();
         let (client, data) = voice_data(&c.dec, &msg);
         assert_eq!(u32::from(client) + 1, p.ent, "in the player's slot");
         let (steamid, rate, read) = crate::decode::steam_voice_for_tests(&data).unwrap();
@@ -83,17 +86,27 @@ mod tests {
             }
             out
         };
-        let first = c.dec.voice_message(user, 24000, &[vec![1], vec![2]], &mut seq).unwrap();
-        let second = c.dec.voice_message(user, 24000, &[vec![3]], &mut seq).unwrap();
+        let first = c.dec.voice_message(Some(user), "", 24000, &[vec![1], vec![2]], &mut seq).unwrap();
+        let second = c.dec.voice_message(Some(user), "", 24000, &[vec![3]], &mut seq).unwrap();
         assert_eq!(numbers(&voice_data(&c.dec, &first).1), [0, 1]);
         assert_eq!(numbers(&voice_data(&c.dec, &second).1), [2]);
     }
 
     #[test]
+    fn a_speaker_who_is_no_player_talks_as_sourcetv_itself() {
+        let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
+        let players: Vec<u32> = c.dec.extractor().snapshot().players.iter().map(|p| p.ent).collect();
+        let msg = c.dec.voice_message(None, "[U:1:77]", 24000, &[vec![0x68]], &mut 0).expect("the bot's slot");
+        let (client, data) = voice_data(&c.dec, &msg);
+        assert!(!players.contains(&(u32::from(client) + 1)), "no player's slot: {client}");
+        assert_eq!(crate::decode::steam_voice_for_tests(&data).unwrap().0 & 0xFFFF_FFFF, 77, "their own SteamID");
+    }
+
+    #[test]
     fn a_player_not_in_the_match_gets_no_packet() {
         let c = upward_until(|c| c.started);
-        assert!(c.dec.voice_message(u16::MAX, 24000, &[vec![1]], &mut 0).is_none());
+        assert!(c.dec.voice_message(Some(u16::MAX), "", 24000, &[vec![1]], &mut 0).is_none());
         let user = c.dec.extractor().snapshot().players.first().map_or(0, |p| p.id.0);
-        assert!(c.dec.voice_message(user, 24000, &[], &mut 0).is_none(), "nor one without frames");
+        assert!(c.dec.voice_message(Some(user), "", 24000, &[], &mut 0).is_none(), "nor one without frames");
     }
 }

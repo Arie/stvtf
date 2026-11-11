@@ -61,6 +61,16 @@ impl Extractor {
         }
     }
 
+    /// The entity of the `SourceTV` bot itself (a BOT on no playing team), if it is in the match.
+    pub(crate) fn sourcetv_entity(&self) -> Option<u32> {
+        let bot = self.state().players.iter().find(|p| {
+            p.info.as_ref().is_some_and(|i| i.steam_id == "BOT" && !self.left.contains(&u16::from(i.user_id)))
+                && !matches!(p.team, Team::Red | Team::Blue)
+                && p.class == Class::Other
+        })?;
+        Some(u32::from(bot.entity))
+    }
+
     /// A player as the snapshot shows them; none for players who left and the `SourceTV` bot.
     fn player(&self, p: &Player) -> Option<out::Player> {
         let info = p.info.as_ref()?;
