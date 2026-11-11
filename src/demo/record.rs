@@ -132,9 +132,17 @@ impl Recorder {
                     signon_bytes: 0,
                 };
                 let mut w = Writer::new(BufWriter::new(file), header, crate::DEFAULT_TICK_INTERVAL)?;
-                w.data_tables(&st.datatables)?;
-                for s in &st.signon {
+                // The data tables just before the class list (else with the last of the signon):
+                // where TF2 takes them when it plays the file itself.
+                let classes = st.signon.iter().position(|s| super::opens_with_classes(s)).unwrap_or(st.signon.len());
+                for (i, s) in st.signon.iter().enumerate() {
+                    if i == classes {
+                        w.data_tables(&st.datatables)?;
+                    }
                     w.signon(s)?;
+                }
+                if classes == st.signon.len() {
+                    w.data_tables(&st.datatables)?;
                 }
                 Ok(w)
             });
@@ -237,6 +245,21 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
         let header = Header::parse(&demo).unwrap();
         assert_eq!(header.map, "cp_badlands");
+        // The data tables come where TF2 wants them when it plays the file itself: in the
+        // signon, just before the packet that opens with the class list.
+        let mut r = crate::demo::Reader::new(std::io::Cursor::new(&demo)).unwrap();
+        let mut kinds = Vec::new();
+        while let crate::demo::Next::Packet(p) = r.next_packet().unwrap() {
+            match p {
+                crate::demo::Packet::Signon { data, .. } => {
+                    kinds.push(if crate::demo::opens_with_classes(&data) { "classes" } else { "signon" });
+                }
+                crate::demo::Packet::DataTables { .. } => kinds.push("tables"),
+                _ => break,
+            }
+        }
+        let at = kinds.iter().position(|k| *k == "tables").unwrap();
+        assert!(at > 0 && kinds[at - 1] == "signon" && kinds[at + 1] == "classes", "{kinds:?}");
         assert!(header.frames > 100 && header.ticks > 100 && header.signon_bytes > 1000, "{header:?}");
         let mut got = Vec::new();
         crate::decode::demo_file(&demo, 1000.0, &mut |l| got.push(l)).unwrap();

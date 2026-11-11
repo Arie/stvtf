@@ -40,6 +40,15 @@ const DATA_TABLES: u8 = 6;
 const STOP: u8 = 7;
 const STRING_TABLES: u8 = 8;
 
+/// The message a signon's class list is (`svc_ClassInfo`), in the six bits a message starts with.
+const SVC_CLASSINFO: u8 = 10;
+
+/// Whether a signon packet opens with the class list. The data tables go just before that one:
+/// TF2 playing a demo itself takes them nowhere else (first of all, it crashes once loaded).
+pub(crate) fn opens_with_classes(signon: &[u8]) -> bool {
+    signon.first().is_some_and(|b| b & 0x3f == SVC_CLASSINFO)
+}
+
 /// What a demo's header says.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
@@ -355,6 +364,9 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     // A speaker's frames are numbered on from one message to the next.
     let mut numbers: std::collections::HashMap<u8, u16> = std::collections::HashMap::new();
     let mut last = 0;
+    // Data tables that come before the signon (recordings made before had them so) wait for
+    // their place in it.
+    let (mut tables, mut signed_on): (Option<Vec<u8>>, bool) = (None, false);
     let mut say = |out: &mut W, header: &mut Header, v: &Voiced, tick: i32| -> Result<()> {
         let seq = numbers.entry(v.slot).or_insert(0);
         if let Some(m) = crate::decode::steam_voice(v.slot, u64::from(v.account), v.rate, &v.frames, seq) {
@@ -375,14 +387,26 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
                 header.frames += 1;
                 header.ticks = header.ticks.max(tick.max(0) as u32);
             }
-            Next::Packet(Packet::Signon { tick, data }) => put(&mut out, SIGNON, tick, &data)?,
+            Next::Packet(Packet::Signon { tick, data }) => {
+                if opens_with_classes(&data)
+                    && let Some(t) = tables.take()
+                {
+                    put(&mut out, DATA_TABLES, tick, &t)?;
+                }
+                signed_on = true;
+                put(&mut out, SIGNON, tick, &data)?;
+            }
             Next::Packet(Packet::SyncTick { tick }) => {
+                if let Some(t) = tables.take() {
+                    put(&mut out, DATA_TABLES, tick, &t)?;
+                }
                 // Everything before the frames is the signon, as the header counts it.
                 header.signon_bytes = (out.stream_position()? - HEADER_LEN as u64) as u32;
                 put(&mut out, SYNC_TICK, tick, &[])?;
             }
             Next::Packet(Packet::ConsoleCmd { tick, data }) => put(&mut out, CONSOLE_CMD, tick, &data)?,
             Next::Packet(Packet::UserCmd { tick, data }) => put(&mut out, USER_CMD, tick, &data)?,
+            Next::Packet(Packet::DataTables { data, .. }) if !signed_on => tables = Some(data),
             Next::Packet(Packet::DataTables { tick, data }) => put(&mut out, DATA_TABLES, tick, &data)?,
             Next::Packet(Packet::StringTables { tick, data }) => put(&mut out, STRING_TABLES, tick, &data)?,
             Next::Packet(Packet::Stop) | Next::Stop | Next::More => break,
@@ -480,7 +504,10 @@ mod tests {
             signon_bytes: 0,
         };
         let mut w = Writer::new(Cursor::new(Vec::new()), header, 0.015).unwrap();
+        // As recordings made before had it: the tables first. TF2 will not play that.
+        w.data_tables(b"tables").unwrap();
         w.signon(b"one").unwrap();
+        w.signon(&[SVC_CLASSINFO, 1]).unwrap();
         for tick in [1000, 1004, 1010] {
             w.message(tick, b"game").unwrap();
         }
@@ -491,12 +518,19 @@ mod tests {
         let out = with_voice(Cursor::new(&demo), &voices, Cursor::new(Vec::new())).unwrap().into_inner();
         let mut r = Reader::new(Cursor::new(&out)).unwrap();
         assert_eq!((r.header.frames, r.header.ticks, r.header.map.as_str()), (7, 10, "cp_x"));
-        let mut got = Vec::new();
+        let (mut got, mut before) = (Vec::new(), Vec::new());
         while let Next::Packet(p) = r.next_packet().unwrap() {
-            if let Packet::Message { tick, data } = p {
-                got.push((tick, data));
+            match p {
+                Packet::Message { tick, data } => got.push((tick, data)),
+                Packet::Signon { data, .. } | Packet::DataTables { data, .. } => before.push(data),
+                _ => {}
             }
         }
+        assert_eq!(
+            before,
+            [b"one".to_vec(), b"tables".to_vec(), vec![SVC_CLASSINFO, 1]],
+            "the tables before the class list"
+        );
         // A speaker's frames are numbered on, in the order they are heard.
         let (mut three, mut four) = (0, 0);
         let mut voice = |slot, frame: u8| {
