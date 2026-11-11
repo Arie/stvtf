@@ -465,3 +465,31 @@ fn every_kind_of_line_gives_its_players() {
         assert_eq!(line.players().collect::<Vec<_>>(), [a], "{line:?}");
     }
 }
+
+#[test]
+fn a_voice_line_says_only_when_it_was_injected_said_in_a_pause_or_has_just_a_team() {
+    let plain = Voice {
+        tick: 1,
+        player: Some(PlayerId(3)),
+        steamid: "[U:1:2]".into(),
+        rate: 24000,
+        frames: vec!["aA==".into()],
+        injected: false,
+        pause: false,
+        team: None,
+    };
+    let json = serde_json::to_string(&Line::Voice(plain.clone())).unwrap();
+    assert!(!json.contains("injected") && !json.contains("pause") && !json.contains("\"team\""), "{json}");
+    assert_eq!(serde_json::from_str::<Line>(&json).unwrap(), Line::Voice(plain.clone()), "as before they were");
+    let marked = Voice { injected: true, pause: true, team: Some(Team::Red), player: None, ..plain };
+    let json = serde_json::to_string(&Line::Voice(marked.clone())).unwrap();
+    assert_eq!(serde_json::from_str::<Line>(&json).unwrap(), Line::Voice(marked));
+}
+
+#[test]
+fn a_pause_line_reads_back() {
+    let line = Line::Pause(Pause { tick: 7, paused: true });
+    let json = serde_json::to_string(&line).unwrap();
+    assert_eq!(json, r#"{"type":"pause","tick":7,"paused":true}"#);
+    assert_eq!(serde_json::from_str::<Line>(&json).unwrap(), line);
+}

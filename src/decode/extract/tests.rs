@@ -727,3 +727,17 @@ mod voice_tests {
         assert_eq!(heard(&with(&[]), 3, true), vec![]);
     }
 }
+
+#[test]
+fn a_set_pause_is_a_pause_line_once_per_change() {
+    use tf_demo_parser::demo::message::generated::SetPauseMessage;
+    let mut x = Extractor { server_tick: 9, ..Extractor::default() };
+    x.set_pause(&SetPauseMessage { pause: false });
+    assert_eq!(x.drain(), vec![], "not paused, as it began");
+    x.set_pause(&SetPauseMessage { pause: true });
+    x.set_pause(&SetPauseMessage { pause: true });
+    x.set_pause(&SetPauseMessage { pause: false });
+    let lines = x.drain();
+    let paused: Vec<bool> = lines.iter().map(|l| matches!(l, Line::Pause(p) if p.paused && p.tick == 9)).collect();
+    assert_eq!((lines.len(), paused), (2, vec![true, false]));
+}

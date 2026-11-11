@@ -797,4 +797,22 @@ pub struct Voice {
     pub rate: u16,
     /// The Opus packets, in base64, in order: 20 ms each.
     pub frames: Vec<String>,
+    /// Not in the match's own stream (a team's Discord): a relay playing a demo must send it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub injected: bool,
+    /// Said while the game was paused: kept, not played with the match.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pause: bool,
+    /// The speaker's team, for one who is no player in the match (a coach).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<Team>,
+}
+
+/// The game was paused, or went on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pause {
+    /// Server tick: where the game stands still.
+    pub tick: u32,
+    /// Paused, or going on again.
+    pub paused: bool,
 }

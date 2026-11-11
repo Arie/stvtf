@@ -158,6 +158,8 @@ pub(crate) struct Extractor {
     /// Players who disconnected: the server keeps their slot, and so their entity and info, for
     /// a while after. A user id is not reused while the server runs.
     left: HashSet<u16>,
+    /// Whether the game is paused, as last told.
+    paused: bool,
     /// Scoreboard lines from the player resource, by player entity.
     stats: HashMap<u32, Stats>,
     /// Engineers carrying a building: player entity -> the building's entity.
@@ -336,6 +338,14 @@ impl Extractor {
         self.events.borrow_mut().push(line);
     }
 
+    /// The game paused or went on: a line when that changed.
+    fn set_pause(&mut self, p: &tf_demo_parser::demo::message::generated::SetPauseMessage) {
+        if p.pause != self.paused {
+            self.paused = p.pause;
+            self.push(Line::Pause(out::Pause { tick: self.server_tick, paused: p.pause }));
+        }
+    }
+
     /// A voice packet as a line: its speaker, the player in its slot (as the game shows them
     /// talking: the `SteamID` in the packet comes from the speaker's own client), else the one
     /// with that `SteamID`, and their own `SteamID`; and its Opus frames in base64. One without a
@@ -358,6 +368,9 @@ impl Extractor {
             steamid: info.map_or(claimed, |i| i.steam_id.clone()),
             rate: voice.rate,
             frames: voice.frames.iter().map(|f| b64.encode(f)).collect(),
+            injected: false,
+            pause: false,
+            team: None,
         }));
     }
 
@@ -430,6 +443,7 @@ impl MessageHandler for Extractor {
                     | MessageType::SetConVar
                     | MessageType::GameEventList
                     | MessageType::VoiceData
+                    | MessageType::SetPause
             )
     }
 
@@ -455,6 +469,7 @@ impl MessageHandler for Extractor {
             Message::TempEntities(te) => self.temp_entities(te, state),
             Message::UserMessage(m) => self.user_message(m),
             Message::VoiceData(v) => self.voice(v),
+            Message::SetPause(p) => self.set_pause(p),
             Message::GameEventList(list) => {
                 self.raw_names = list
                     .event_list
