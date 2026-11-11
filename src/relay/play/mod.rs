@@ -17,6 +17,7 @@
 mod index;
 mod light;
 mod notes;
+mod voice;
 
 use super::{Hub, Relay};
 pub use crate::decode::beams::Beam;
@@ -37,6 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
+pub use voice::VoiceIn;
 
 /// Off from the wanted moment by more than this, playback jumps instead of catching up.
 const JUMP: Duration = Duration::from_secs(1);
@@ -143,6 +145,8 @@ pub struct Playback {
     kept: Mutex<(u64, Arc<Vec<Beam>>)>,
     /// Notes they keep seeing, until replaced, and how many times they were.
     notes: Mutex<(u64, Arc<Vec<Note>>)>,
+    /// Voice to send the clients in the game as players' own, in order.
+    voice: Mutex<VecDeque<VoiceIn>>,
     /// The light they keep seeing, if any.
     light: Mutex<Option<Light>>,
 }
@@ -155,6 +159,7 @@ impl Playback {
             problem: Mutex::new(None),
             kept: Mutex::new((0, Arc::default())),
             notes: Mutex::new((0, Arc::default())),
+            voice: Mutex::new(VecDeque::new()),
             light: Mutex::new(None),
         }
     }
@@ -163,6 +168,20 @@ impl Playback {
     /// before; None puts it out.
     pub fn keep_light(&self, light: Option<Light>) {
         *lock(&self.light) = light;
+    }
+
+    /// Sends `v` to the clients in the game as that player's voice, those in it now; when more
+    /// waits than they could take, the oldest goes.
+    pub fn voice(&self, v: VoiceIn) {
+        let mut q = lock(&self.voice);
+        if q.len() >= voice::MAX_QUEUED {
+            q.pop_front();
+        }
+        q.push_back(v);
+    }
+
+    fn take_voice(&self) -> Vec<VoiceIn> {
+        lock(&self.voice).drain(..).collect()
     }
 
     /// Notes the clients in the game keep seeing (a room's), in place of those before: shown
@@ -430,6 +449,7 @@ impl Relay {
                 cued: None,
                 kept: Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: Instant::now() },
                 shown_notes: notes::Shown::default(),
+                voice_seq: voice::Sequences::default(),
                 shown_light: light::Shown::default(),
                 laser: None,
                 clock: None,
@@ -467,6 +487,8 @@ struct Player<'r> {
     kept: Kept,
     /// The notes the clients were given.
     shown_notes: notes::Shown,
+    /// Where each speaker's voice sent is.
+    voice_seq: voice::Sequences,
     /// The light the clients were given.
     shown_light: light::Shown,
     /// Where the clients were given the laser beams are drawn with, if they were.
@@ -521,6 +543,7 @@ impl Player<'_> {
                 self.show_kept(playback);
                 let (version, notes) = lock(&playback.notes).clone();
                 self.show_notes(version, &notes);
+                self.send_voice(&playback.take_voice());
                 self.show_light(*lock(&playback.light));
             }
             match self.step(&want) {

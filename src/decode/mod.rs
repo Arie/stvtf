@@ -15,6 +15,7 @@ mod modes;
 mod notes;
 mod props;
 mod tables;
+mod voice_out;
 mod world;
 
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
@@ -143,6 +144,12 @@ pub(crate) fn props_index_for_tests(
     id: tf_demo_parser::demo::sendprop::SendPropIdentifier,
 ) -> Option<u32> {
     props::prop_index(state.send_tables.get(usize::from(class))?, id)
+}
+
+/// A Steam voice packet's `SteamID64`, sample rate and Opus frames.
+#[cfg(test)]
+pub(crate) fn steam_voice_for_tests(data: &[u8]) -> Option<(u64, u16, Vec<Vec<u8>>)> {
+    extract::steam_voice_parts(data)
 }
 
 /// `svc_GameEvent`: its length's bits, then the event id's.

@@ -1,0 +1,99 @@
+//! Voice from outside the match (a team's Discord, through stv.tf), sent to the clients in the game
+//! as a player's own: `svc_VoiceData` in their slot, in Steam's framing, as it comes.
+
+use super::Player;
+use std::collections::HashMap;
+
+/// The most voice waiting to be sent; past it the oldest goes.
+pub(super) const MAX_QUEUED: usize = 512;
+
+/// Opus frames (20 ms each, in order) to send as the voice of the player with user id `user`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceIn {
+    /// The player's user id.
+    pub user: u16,
+    /// Samples a second the frames are labelled with.
+    pub rate: u16,
+    /// The Opus packets.
+    pub frames: Vec<Vec<u8>>,
+}
+
+/// The next frame number of each speaker, by user id: a client orders a speaker's frames by it.
+#[derive(Default)]
+pub(super) struct Sequences(HashMap<u16, u16>);
+
+impl Player<'_> {
+    /// Sends `voice` to the clients in the game, unreliably, as the game sends voice; a speaker
+    /// not in the match (yet, or any more) is passed over.
+    pub(super) fn send_voice(&mut self, voice: &[VoiceIn]) {
+        let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
+        let mut hub = self.relay.hub();
+        for v in voice {
+            let seq = self.voice_seq.0.entry(v.user).or_insert(0);
+            if let Some(m) = c.dec.voice_message(v.user, v.rate, &v.frames, seq) {
+                hub.tell_active_now(&m);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::upward_until;
+    use tf_demo_parser::demo::message::Message;
+
+    fn voice_data(dec: &crate::decode::Decoder, msg: &crate::net::bits::BitBuf) -> (u8, Vec<u8>) {
+        let state = dec.parser_state_for_tests();
+        let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
+        let t: tf_demo_parser::demo::message::MessageType = bitbuffer::BitRead::read(&mut s).unwrap();
+        let Message::VoiceData(v) = Message::from_type(t, &mut s, state).unwrap() else { panic!("not voice") };
+        let mut d = v.data.clone();
+        (v.client, (0..usize::from(v.length) / 8).map(|_| d.read_int::<u8>(8).unwrap()).collect())
+    }
+
+    #[test]
+    fn a_voice_packet_reads_back_as_the_games_own() {
+        let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
+        let p = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
+        let frames = vec![vec![0x68, 1, 2], vec![0x68, 3]];
+        let mut seq = 0;
+        let msg = c.dec.voice_message(p.id.0, 24000, &frames, &mut seq).unwrap();
+        let (client, data) = voice_data(&c.dec, &msg);
+        assert_eq!(u32::from(client) + 1, p.ent, "in the player's slot");
+        let (steamid, rate, read) = crate::decode::steam_voice_for_tests(&data).unwrap();
+        assert_eq!(format!("[U:1:{}]", steamid & 0xFFFF_FFFF), p.steamid);
+        assert_eq!((rate, read), (24000, frames));
+        let (body, crc) = data.split_at(data.len() - 4);
+        assert_eq!(crc, crc32fast::hash(body).to_le_bytes(), "Steam's checksum");
+        assert_eq!(seq, 2);
+    }
+
+    #[test]
+    fn frames_are_numbered_on_from_the_last_packet() {
+        let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
+        let user = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).unwrap().id.0;
+        let mut seq = 0;
+        let numbers = |data: &[u8]| {
+            // SteamID (8), rate chunk (3), Opus chunk's type and length (3), then its frames.
+            let (mut at, mut out) = (14, Vec::new());
+            while at + 4 <= data.len() - 4 {
+                let len = usize::from(u16::from_le_bytes([data[at], data[at + 1]]));
+                out.push(u16::from_le_bytes([data[at + 2], data[at + 3]]));
+                at += 4 + len;
+            }
+            out
+        };
+        let first = c.dec.voice_message(user, 24000, &[vec![1], vec![2]], &mut seq).unwrap();
+        let second = c.dec.voice_message(user, 24000, &[vec![3]], &mut seq).unwrap();
+        assert_eq!(numbers(&voice_data(&c.dec, &first).1), [0, 1]);
+        assert_eq!(numbers(&voice_data(&c.dec, &second).1), [2]);
+    }
+
+    #[test]
+    fn a_player_not_in_the_match_gets_no_packet() {
+        let c = upward_until(|c| c.started);
+        assert!(c.dec.voice_message(u16::MAX, 24000, &[vec![1]], &mut 0).is_none());
+        let user = c.dec.extractor().snapshot().players.first().map_or(0, |p| p.id.0);
+        assert!(c.dec.voice_message(user, 24000, &[], &mut 0).is_none(), "nor one without frames");
+    }
+}

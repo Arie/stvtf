@@ -410,6 +410,11 @@ impl Extractor {
     }
 }
 
+#[cfg(test)]
+pub(super) fn steam_voice_parts(data: &[u8]) -> Option<(u64, u16, Vec<Vec<u8>>)> {
+    voice::steam_voice(data).map(|v| (v.steamid, v.rate, v.frames))
+}
+
 impl MessageHandler for Extractor {
     type Output = Self;
 
