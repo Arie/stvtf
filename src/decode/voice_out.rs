@@ -42,30 +42,37 @@ impl Decoder {
                 (u8::try_from(self.extractor().sourcetv_entity()?.checked_sub(1)?).ok()?, account(steamid).unwrap_or(0))
             }
         };
-        if frames.is_empty() {
-            return None;
-        }
-        let mut chunk = Vec::new();
-        for f in frames {
-            chunk.extend(u16::try_from(f.len()).ok()?.to_le_bytes());
-            chunk.extend(seq.to_le_bytes());
-            chunk.extend(f);
-            *seq = seq.wrapping_add(1);
-        }
-        let mut data = (STEAMID64 + account).to_le_bytes().to_vec();
-        data.push(SAMPLE_RATE);
-        data.extend(rate.to_le_bytes());
-        data.push(OPUS_PLC);
-        data.extend(u16::try_from(chunk.len()).ok()?.to_le_bytes());
-        data.extend(chunk);
-        data.extend(crc32fast::hash(&data).to_le_bytes());
-        let bits = u16::try_from(data.len() * 8).ok()?;
-        let mut w = BitWriter::new();
-        w.write_bits(SVC_VOICEDATA, TYPE_BITS);
-        w.write_u8(slot);
-        w.write_u8(0); // proximity: heard everywhere
-        w.write_bits(u32::from(bits), 16);
-        w.write_bytes(&data);
-        Some(w.finish())
+        steam_voice(slot, account, rate, frames, seq)
     }
+}
+
+/// `frames` (Opus, 20 ms each) as the game sends a player's voice: `svc_VoiceData` in `slot`
+/// (the player's entity less one), Steam's framing with their account round the frames, numbered
+/// from `seq` on, which goes on by as many. None for no frames, or more than a packet holds.
+pub(crate) fn steam_voice(slot: u8, account: u64, rate: u16, frames: &[Vec<u8>], seq: &mut u16) -> Option<BitBuf> {
+    if frames.is_empty() {
+        return None;
+    }
+    let mut chunk = Vec::new();
+    for f in frames {
+        chunk.extend(u16::try_from(f.len()).ok()?.to_le_bytes());
+        chunk.extend(seq.to_le_bytes());
+        chunk.extend(f);
+        *seq = seq.wrapping_add(1);
+    }
+    let mut data = (STEAMID64 + account).to_le_bytes().to_vec();
+    data.push(SAMPLE_RATE);
+    data.extend(rate.to_le_bytes());
+    data.push(OPUS_PLC);
+    data.extend(u16::try_from(chunk.len()).ok()?.to_le_bytes());
+    data.extend(chunk);
+    data.extend(crc32fast::hash(&data).to_le_bytes());
+    let bits = u16::try_from(data.len() * 8).ok()?;
+    let mut w = BitWriter::new();
+    w.write_bits(SVC_VOICEDATA, TYPE_BITS);
+    w.write_u8(slot);
+    w.write_u8(0); // proximity: heard everywhere
+    w.write_bits(u32::from(bits), 16);
+    w.write_bytes(&data);
+    Some(w.finish())
 }

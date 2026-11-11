@@ -323,6 +323,102 @@ impl<W: Write + Seek> Writer<W> {
     }
 }
 
+/// Voice to write into a demo: Opus frames (20 ms each) as the voice of the player in `slot`
+/// (their entity less one), whose Steam account is `account`, heard at demo tick `tick`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Voiced {
+    /// The demo's tick it is heard at: the server's, less that of the demo's first frame.
+    pub tick: i32,
+    /// The speaker's slot.
+    pub slot: u8,
+    /// The speaker's Steam account (`[U:1:<account>]`).
+    pub account: u32,
+    /// Samples a second the frames are labelled with.
+    pub rate: u16,
+    /// The Opus packets.
+    pub frames: Vec<Vec<u8>>,
+}
+
+/// Copies demo `src` to `out` with `voices` in it, each a frame of its own before the first of
+/// the demo's at or after its tick, as the game's own voice messages (so the demo plays them as
+/// the players talking). The header's counts are made anew, and a demo still being written (no
+/// stop packet yet) gets one.
+pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mut out: W) -> Result<W> {
+    let mut r = Reader::new(src)?;
+    let mut header = r.header.clone();
+    let interval = if header.ticks > 0 && header.seconds > 0.0 { header.seconds / header.ticks as f32 } else { 0.015 };
+    (header.frames, header.ticks) = (0, 0);
+    out.write_all(&header.bytes())?;
+    let mut order: Vec<&Voiced> = voices.iter().collect();
+    order.sort_by_key(|v| v.tick);
+    let mut order = order.into_iter().peekable();
+    // A speaker's frames are numbered on from one message to the next.
+    let mut numbers: std::collections::HashMap<u8, u16> = std::collections::HashMap::new();
+    let mut last = 0;
+    let mut say = |out: &mut W, header: &mut Header, v: &Voiced, tick: i32| -> Result<()> {
+        let seq = numbers.entry(v.slot).or_insert(0);
+        if let Some(m) = crate::decode::steam_voice(v.slot, u64::from(v.account), v.rate, &v.frames, seq) {
+            put(out, MESSAGE, tick, m.bytes())?;
+            header.frames += 1;
+        }
+        Ok(())
+    };
+    loop {
+        match r.next_packet()? {
+            Next::Packet(Packet::Message { tick, data }) => {
+                while let Some(v) = order.next_if(|v| v.tick <= tick) {
+                    last = v.tick.clamp(last, tick);
+                    say(&mut out, &mut header, v, last)?;
+                }
+                put(&mut out, MESSAGE, tick, &data)?;
+                last = tick;
+                header.frames += 1;
+                header.ticks = header.ticks.max(tick.max(0) as u32);
+            }
+            Next::Packet(Packet::Signon { tick, data }) => put(&mut out, SIGNON, tick, &data)?,
+            Next::Packet(Packet::SyncTick { tick }) => {
+                // Everything before the frames is the signon, as the header counts it.
+                header.signon_bytes = (out.stream_position()? - HEADER_LEN as u64) as u32;
+                put(&mut out, SYNC_TICK, tick, &[])?;
+            }
+            Next::Packet(Packet::ConsoleCmd { tick, data }) => put(&mut out, CONSOLE_CMD, tick, &data)?,
+            Next::Packet(Packet::UserCmd { tick, data }) => put(&mut out, USER_CMD, tick, &data)?,
+            Next::Packet(Packet::DataTables { tick, data }) => put(&mut out, DATA_TABLES, tick, &data)?,
+            Next::Packet(Packet::StringTables { tick, data }) => put(&mut out, STRING_TABLES, tick, &data)?,
+            Next::Packet(Packet::Stop) | Next::Stop | Next::More => break,
+        }
+    }
+    // Said after the demo's last frame: with it.
+    for v in order {
+        say(&mut out, &mut header, v, last)?;
+    }
+    out.write_all(&[STOP])?;
+    out.write_all(&(header.ticks as i32).to_le_bytes())?;
+    header.seconds = header.ticks as f32 * interval;
+    out.seek(SeekFrom::Start(0))?;
+    out.write_all(&header.bytes())?;
+    out.seek(SeekFrom::End(0))?;
+    out.flush()?;
+    Ok(out)
+}
+
+/// One packet, as a demo has it.
+fn put<W: Write>(w: &mut W, cmd: u8, tick: i32, data: &[u8]) -> Result<()> {
+    w.write_all(&[cmd])?;
+    w.write_all(&tick.to_le_bytes())?;
+    if matches!(cmd, SIGNON | MESSAGE) {
+        w.write_all(&[0u8; META_LEN])?;
+    }
+    if cmd == USER_CMD {
+        w.write_all(&0u32.to_le_bytes())?;
+    }
+    if cmd != SYNC_TICK {
+        w.write_all(&(data.len() as u32).to_le_bytes())?;
+        w.write_all(data)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +464,95 @@ mod tests {
         let mut grown = Reader::new(Cursor::new(&bytes)).unwrap();
         grown.seek_to(r.pos).unwrap();
         assert_eq!(grown.next_packet().unwrap(), tenth);
+    }
+
+    #[test]
+    fn voice_is_written_into_a_demo_as_frames_of_its_own_at_their_ticks() {
+        let header = Header {
+            protocol: 24,
+            server: "s".into(),
+            client: "SourceTV Demo".into(),
+            map: "cp_x".into(),
+            game: "tf".into(),
+            seconds: 0.0,
+            ticks: 0,
+            frames: 0,
+            signon_bytes: 0,
+        };
+        let mut w = Writer::new(Cursor::new(Vec::new()), header, 0.015).unwrap();
+        w.signon(b"one").unwrap();
+        for tick in [1000, 1004, 1010] {
+            w.message(tick, b"game").unwrap();
+        }
+        let demo = w.finish().unwrap().into_inner();
+        let said = |tick, slot, frame: u8| Voiced { tick, slot, account: 77, rate: 24000, frames: vec![vec![frame]] };
+        // Out of order, before the first frame, and past the last: each lands where it can.
+        let voices = [said(7, 3, 2), said(2, 3, 1), said(-5, 4, 9), said(99, 3, 3)];
+        let out = with_voice(Cursor::new(&demo), &voices, Cursor::new(Vec::new())).unwrap().into_inner();
+        let mut r = Reader::new(Cursor::new(&out)).unwrap();
+        assert_eq!((r.header.frames, r.header.ticks, r.header.map.as_str()), (7, 10, "cp_x"));
+        let mut got = Vec::new();
+        while let Next::Packet(p) = r.next_packet().unwrap() {
+            if let Packet::Message { tick, data } = p {
+                got.push((tick, data));
+            }
+        }
+        // A speaker's frames are numbered on, in the order they are heard.
+        let (mut three, mut four) = (0, 0);
+        let mut voice = |slot, frame: u8| {
+            let seq = if slot == 3 { &mut three } else { &mut four };
+            crate::decode::steam_voice(slot, 77, 24000, &[vec![frame]], seq).unwrap().bytes().to_vec()
+        };
+        let game = b"game".to_vec();
+        let expected = [
+            (0, voice(4, 9)),
+            (0, game.clone()),
+            (2, voice(3, 1)),
+            (4, game.clone()),
+            (7, voice(3, 2)),
+            (10, game),
+            (10, voice(3, 3)),
+        ];
+        assert_eq!(got, expected);
+        assert_eq!(three, 3);
+    }
+
+    #[test]
+    fn a_demo_still_being_written_gets_its_voice_and_an_end() {
+        let mut w = Writer::new(Cursor::new(Vec::new()), Header { map: "cp_x".into(), ..blank() }, 0.015).unwrap();
+        w.signon(b"one").unwrap();
+        w.message(1000, b"game").unwrap();
+        w.message(1004, b"game").unwrap();
+        w.flush_packets().unwrap();
+        // No stop packet, and the header's counts not written yet.
+        let cut = w.w.into_inner();
+        let voices = [Voiced { tick: 2, slot: 1, account: 5, rate: 24000, frames: vec![vec![1]] }];
+        let out = with_voice(Cursor::new(&cut), &voices, Cursor::new(Vec::new())).unwrap().into_inner();
+        let mut r = Reader::new(Cursor::new(&out)).unwrap();
+        assert_eq!((r.header.frames, r.header.ticks), (3, 4), "counted as it is copied");
+        assert!(r.header.signon_bytes > 0, "and the signon measured");
+        let mut n = 0;
+        let end = loop {
+            match r.next_packet().unwrap() {
+                Next::Packet(_) => n += 1,
+                end => break end,
+            }
+        };
+        assert_eq!((n, end), (5, Next::Stop), "signon, sync, two frames and the voice, then the end");
+    }
+
+    fn blank() -> Header {
+        Header {
+            protocol: 24,
+            server: String::new(),
+            client: String::new(),
+            map: String::new(),
+            game: "tf".into(),
+            seconds: 0.0,
+            ticks: 0,
+            frames: 0,
+            signon_bytes: 0,
+        }
     }
 
     #[test]
