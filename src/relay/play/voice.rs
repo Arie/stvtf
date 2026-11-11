@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 /// The most voice waiting to be sent; past it the oldest goes.
 pub(super) const MAX_QUEUED: usize = 512;
+/// The most speakers whose frame numbers are kept: more than a server has slots.
+const MAX_SPEAKERS: usize = 256;
 
 /// Opus frames (20 ms each, in order) to send as the voice of the player with user id `user`, or
 /// with none (a caster, a coach) in a slot nobody is in; on a full server as `SourceTV`'s own,
@@ -93,9 +95,17 @@ impl Player<'_> {
                     None => continue,
                 },
             };
-            let seq = self.voice_seq.next.entry(slot).or_insert(0);
-            if let Some(m) = c.dec.voice_message(v.user, spare, &v.steamid, v.rate, &v.frames, seq) {
-                hub.tell_active_now(&m);
+            // Numbered from where the speaker's last left off; kept only for one who was sent.
+            let mut seq = self.voice_seq.next.get(&slot).copied().unwrap_or(0);
+            let mut sent = false;
+            for part in crate::decode::packs(&v.frames) {
+                if let Some(m) = c.dec.voice_message(v.user, spare, &v.steamid, v.rate, part, &mut seq) {
+                    hub.tell_active_now(&m);
+                    sent = true;
+                }
+            }
+            if sent && (self.voice_seq.next.len() < MAX_SPEAKERS || self.voice_seq.next.contains_key(&slot)) {
+                self.voice_seq.next.insert(slot, seq);
             }
         }
     }

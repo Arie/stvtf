@@ -348,6 +348,12 @@ pub struct Voiced {
     pub frames: Vec<Vec<u8>>,
 }
 
+/// The tick voice due at `due` is heard at, before the frame at `tick`: no earlier than what
+/// went `before` it, nor later than the frame (whatever a demo's ticks say).
+fn heard_at(due: i32, before: i32, tick: i32) -> i32 {
+    due.max(before).min(tick)
+}
+
 /// Copies demo `src` to `out` with `voices` in it, each a frame of its own before the first of
 /// the demo's at or after its tick, as the game's own voice messages (so the demo plays them as
 /// the players talking). The header's counts are made anew, and a demo still being written (no
@@ -369,9 +375,11 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     let (mut tables, mut signed_on): (Option<Vec<u8>>, bool) = (None, false);
     let mut say = |out: &mut W, header: &mut Header, v: &Voiced, tick: i32| -> Result<()> {
         let seq = numbers.entry(v.slot).or_insert(0);
-        if let Some(m) = crate::decode::steam_voice(v.slot, u64::from(v.account), v.rate, &v.frames, seq) {
-            put(out, MESSAGE, tick, m.bytes())?;
-            header.frames += 1;
+        for part in crate::decode::packs(&v.frames) {
+            if let Some(m) = crate::decode::steam_voice(v.slot, u64::from(v.account), v.rate, part, seq) {
+                put(out, MESSAGE, tick, m.bytes())?;
+                header.frames += 1;
+            }
         }
         Ok(())
     };
@@ -379,7 +387,7 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
         match r.next_packet()? {
             Next::Packet(Packet::Message { tick, data }) => {
                 while let Some(v) = order.next_if(|v| v.tick <= tick) {
-                    last = v.tick.clamp(last, tick);
+                    last = heard_at(v.tick, last, tick);
                     say(&mut out, &mut header, v, last)?;
                 }
                 put(&mut out, MESSAGE, tick, &data)?;
@@ -549,6 +557,14 @@ mod tests {
         ];
         assert_eq!(got, expected);
         assert_eq!(three, 3);
+    }
+
+    #[test]
+    fn voice_is_heard_no_earlier_than_what_went_before_it_whatever_a_demos_ticks_say() {
+        assert_eq!(heard_at(7, 4, 10), 7);
+        assert_eq!(heard_at(2, 4, 10), 4);
+        // A demo whose ticks go back: at the frame's, no panic.
+        assert_eq!(heard_at(-5, 0, -1), -1);
     }
 
     #[test]

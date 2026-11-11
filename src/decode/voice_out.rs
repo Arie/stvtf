@@ -12,9 +12,32 @@ const STEAMID64: u64 = 76_561_197_960_265_728;
 const SAMPLE_RATE: u8 = 0x0B;
 const OPUS_PLC: u8 = 0x06;
 
+/// The most bytes of frames (each with its length and number) in one message: a client takes
+/// some four thousand of voice whole, and drops what is longer.
+pub(crate) const MAX_CHUNK: usize = 2000;
+
 /// The account of `[U:1:<account>]`.
 fn account(steamid: &str) -> Option<u64> {
-    steamid.strip_prefix("[U:1:")?.strip_suffix(']')?.parse().ok()
+    steamid.strip_prefix("[U:1:")?.strip_suffix(']')?.parse::<u32>().ok().map(u64::from)
+}
+
+/// `frames` in runs that each fit one message, in order; a frame too long for any is left out.
+pub(crate) fn packs(frames: &[Vec<u8>]) -> impl Iterator<Item = &[Vec<u8>]> {
+    let (mut parts, mut from, mut size) = (Vec::new(), 0, 0);
+    for (i, f) in frames.iter().enumerate() {
+        let takes = f.len() + 4;
+        if takes > MAX_CHUNK {
+            parts.push(&frames[from..i]);
+            (from, size) = (i + 1, 0);
+        } else if size + takes > MAX_CHUNK {
+            parts.push(&frames[from..i]);
+            (from, size) = (i, takes);
+        } else {
+            size += takes;
+        }
+    }
+    parts.push(&frames[from..]);
+    parts.into_iter().filter(|p| !p.is_empty())
 }
 
 impl Decoder {
@@ -48,19 +71,24 @@ impl Decoder {
 
 /// `frames` (Opus, 20 ms each) as the game sends a player's voice: `svc_VoiceData` in `slot`
 /// (the player's entity less one), Steam's framing with their account round the frames, numbered
-/// from `seq` on, which goes on by as many. None for no frames, or more than a packet holds.
+/// from `seq` on, which goes on by as many. None for no frames, or more than a message holds
+/// ([`packs`] makes runs that fit): then no numbers are used.
 pub(crate) fn steam_voice(slot: u8, account: u64, rate: u16, frames: &[Vec<u8>], seq: &mut u16) -> Option<BitBuf> {
     if frames.is_empty() {
         return None;
     }
-    let mut chunk = Vec::new();
+    let (mut chunk, mut next) = (Vec::new(), *seq);
     for f in frames {
         chunk.extend(u16::try_from(f.len()).ok()?.to_le_bytes());
-        chunk.extend(seq.to_le_bytes());
+        chunk.extend(next.to_le_bytes());
         chunk.extend(f);
-        *seq = seq.wrapping_add(1);
+        next = next.wrapping_add(1);
     }
-    let mut data = (STEAMID64 + account).to_le_bytes().to_vec();
+    if chunk.len() > MAX_CHUNK {
+        return None;
+    }
+    *seq = next;
+    let mut data = STEAMID64.checked_add(account)?.to_le_bytes().to_vec();
     data.push(SAMPLE_RATE);
     data.extend(rate.to_le_bytes());
     data.push(OPUS_PLC);
@@ -75,4 +103,37 @@ pub(crate) fn steam_voice(slot: u8, account: u64, rate: u16, frames: &[Vec<u8>],
     w.write_bits(u32::from(bits), 16);
     w.write_bytes(&data);
     Some(w.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_account_is_no_more_than_steam_has() {
+        assert_eq!(account("[U:1:9]"), Some(9));
+        assert_eq!(account("[U:1:4294967296]"), None);
+        assert_eq!(account("[U:1:18446744073709551615]"), None);
+    }
+
+    #[test]
+    fn frames_that_make_no_packet_use_no_numbers() {
+        let mut seq = 5;
+        assert!(steam_voice(1, 9, 24000, &[vec![1], vec![0; 70_000]], &mut seq).is_none());
+        assert_eq!(seq, 5);
+        assert!(steam_voice(1, 9, 24000, &[vec![1], vec![2]], &mut seq).is_some());
+        assert_eq!(seq, 7);
+    }
+
+    #[test]
+    fn many_frames_go_in_packets_a_client_takes_whole() {
+        let frames: Vec<Vec<u8>> = (0..60u8).map(|i| vec![i; 100]).collect();
+        let parts: Vec<&[Vec<u8>]> = packs(&frames).collect();
+        assert!(parts.len() > 1);
+        assert!(parts.iter().all(|p| p.iter().map(|f| f.len() + 4).sum::<usize>() <= MAX_CHUNK));
+        assert_eq!(parts.concat(), frames, "all of them, in order");
+        // One too long for any packet is left out; those around it go.
+        let frames = [vec![1], vec![0; MAX_CHUNK], vec![2]];
+        assert_eq!(packs(&frames).collect::<Vec<_>>().concat(), [vec![1], vec![2]]);
+    }
 }
