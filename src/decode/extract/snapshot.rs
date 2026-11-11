@@ -71,6 +71,14 @@ impl Extractor {
         Some(u32::from(bot.entity))
     }
 
+    /// The player slots nobody is in (no player, no bot, nobody still leaving), highest first:
+    /// players come into the lowest.
+    pub(crate) fn spare_slots(&self) -> Vec<u8> {
+        let taken: Vec<u32> =
+            self.state().players.iter().filter(|p| p.info.is_some()).map(|p| u32::from(p.entity)).collect();
+        (0..self.max_players).rev().filter(|slot| !taken.contains(&(u32::from(*slot) + 1))).collect()
+    }
+
     /// A player as the snapshot shows them; none for players who left and the `SourceTV` bot.
     fn player(&self, p: &Player) -> Option<out::Player> {
         let info = p.info.as_ref()?;

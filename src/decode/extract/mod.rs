@@ -138,6 +138,8 @@ pub(crate) struct Extractor {
     class_names: Vec<String>,
     /// Seconds per tick from `ServerInfo`.
     tick_interval: Option<f32>,
+    /// The server's player slots, once it said.
+    max_players: u8,
     /// King of the hill: each team's own timer, which runs while that team holds the point.
     koth_timers: [Option<u32>; 2],
     stopwatch: StopwatchRules,
@@ -412,6 +414,7 @@ impl Extractor {
         if info.interval_per_tick > 0.0 {
             self.tick_interval = Some(info.interval_per_tick);
         }
+        self.max_players = info.max_player_count;
         self.push(Line::Server(out::Server {
             tick: self.server_tick,
             map: info.map.clone(),

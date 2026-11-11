@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 pub(super) const MAX_QUEUED: usize = 512;
 
 /// Opus frames (20 ms each, in order) to send as the voice of the player with user id `user`, or
-/// with none (a caster, a coach) as `SourceTV`'s own, one such voice at a time.
+/// with none (a caster, a coach) in a slot nobody is in; on a full server as `SourceTV`'s own,
+/// one such voice at a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceIn {
     /// The player's user id; none for a speaker who is no player.
@@ -22,24 +23,56 @@ pub struct VoiceIn {
     pub frames: Vec<Vec<u8>>,
 }
 
-/// The next frame number of each speaker, by user id: a client orders a speaker's frames by it.
-#[derive(Default)]
-pub(super) struct Sequences(HashMap<Option<u16>, u16>, Option<(String, Instant)>);
+/// Whose voice a packet is, to number its frames: a client orders a speaker's frames by them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Slot {
+    /// A player, by user id.
+    Player(u16),
+    /// Someone who is no player, in a slot nobody is in.
+    Spare(u8),
+    /// The same, in `SourceTV`'s own: a full server has no other.
+    SourceTv,
+}
 
-/// How long `SourceTV`'s slot stays its last speaker's after their last frame.
+/// The next frame number of each speaker, and where those who are no player talk.
+#[derive(Default)]
+pub(super) struct Sequences {
+    next: HashMap<Slot, u16>,
+    /// The slot nobody is in that each of them has, and when they last talked in it.
+    spare: HashMap<String, (u8, Instant)>,
+    /// Who has `SourceTV`'s slot, and when they last talked.
+    sourcetv: Option<(String, Instant)>,
+}
+
+/// How long `SourceTV`'s slot stays its last speaker's after their last frame, and a slot nobody
+/// is in.
 const SLOT_HELD: Duration = Duration::from_millis(400);
+const SPARE_HELD: Duration = Duration::from_secs(30);
 
 impl Sequences {
+    /// The slot for `steamid`, who is no player, of those nobody is in now (`free`): theirs while
+    /// it stays free, else the first no other voice has. A client plays a voice in such a slot
+    /// as of someone unconnected. None when there is none left.
+    pub(super) fn spare_for(&mut self, steamid: &str, free: &[u8], now: Instant) -> Option<u8> {
+        self.spare.retain(|_, (slot, last)| free.contains(slot) && now.saturating_duration_since(*last) < SPARE_HELD);
+        let slot = match self.spare.get(steamid) {
+            Some((slot, _)) => *slot,
+            None => *free.iter().find(|f| !self.spare.values().any(|(s, _)| s == *f))?,
+        };
+        self.spare.insert(steamid.to_string(), (slot, now));
+        Some(slot)
+    }
+
     /// Whether `steamid`, who is no player, has `SourceTV`'s slot now: it is one voice's at a
     /// time (two in one slot are noise), the first to talk until they fall silent.
     pub(super) fn takes_slot(&mut self, steamid: &str, now: Instant) -> bool {
-        if let Some((holder, last)) = &self.1
+        if let Some((holder, last)) = &self.sourcetv
             && holder != steamid
             && now.saturating_duration_since(*last) < SLOT_HELD
         {
             return false;
         }
-        self.1 = Some((steamid.to_string(), now));
+        self.sourcetv = Some((steamid.to_string(), now));
         true
     }
 }
@@ -50,12 +83,18 @@ impl Player<'_> {
     pub(super) fn send_voice(&mut self, voice: &[VoiceIn]) {
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
         let mut hub = self.relay.hub();
+        let now = Instant::now();
         for v in voice {
-            if v.user.is_none() && !self.voice_seq.takes_slot(&v.steamid, Instant::now()) {
-                continue;
-            }
-            let seq = self.voice_seq.0.entry(v.user).or_insert(0);
-            if let Some(m) = c.dec.voice_message(v.user, &v.steamid, v.rate, &v.frames, seq) {
+            let (spare, slot) = match v.user {
+                Some(user) => (None, Slot::Player(user)),
+                None => match self.voice_seq.spare_for(&v.steamid, &c.dec.extractor().spare_slots(), now) {
+                    Some(slot) => (Some(slot), Slot::Spare(slot)),
+                    None if self.voice_seq.takes_slot(&v.steamid, now) => (None, Slot::SourceTv),
+                    None => continue,
+                },
+            };
+            let seq = self.voice_seq.next.entry(slot).or_insert(0);
+            if let Some(m) = c.dec.voice_message(v.user, spare, &v.steamid, v.rate, &v.frames, seq) {
                 hub.tell_active_now(&m);
             }
         }
@@ -88,12 +127,42 @@ mod tests {
     }
 
     #[test]
+    fn those_who_are_no_player_each_have_a_slot_nobody_is_in() {
+        use std::time::{Duration, Instant};
+        let (mut seqs, now) = (super::Sequences::default(), Instant::now());
+        assert_eq!(seqs.spare_for("caster", &[23, 22, 21], now), Some(23));
+        assert_eq!(seqs.spare_for("other", &[23, 22, 21], now), Some(22), "talking at once, each their own");
+        assert_eq!(seqs.spare_for("caster", &[23, 22, 21], now), Some(23), "and they keep it");
+        assert_eq!(seqs.spare_for("caster", &[22, 21], now), Some(21), "a player came into theirs: another");
+        assert_eq!(seqs.spare_for("third", &[22, 21], now), None, "none left over");
+        let later = now + Duration::from_secs(60);
+        assert_eq!(seqs.spare_for("caster", &[22, 21], later), Some(22), "one long silent is free again");
+        assert_eq!(seqs.spare_for("third", &[], later), None, "a full server has none");
+    }
+
+    #[test]
+    fn a_speaker_who_is_no_player_talks_in_a_slot_nobody_is_in() {
+        let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
+        let spare = c.dec.extractor().spare_slots();
+        let taken: Vec<u32> = c.dec.extractor().snapshot().players.iter().map(|p| p.ent).collect();
+        assert!(
+            !spare.is_empty() && spare.iter().all(|s| !taken.contains(&(u32::from(*s) + 1))),
+            "{spare:?} {taken:?}"
+        );
+        assert!(spare.is_sorted_by(|a, b| a > b), "from the top, away from where players come in");
+        let msg = c.dec.voice_message(None, Some(spare[0]), "[U:1:77]", 24000, &[vec![0x68]], &mut 0).unwrap();
+        let (client, data) = voice_data(&c.dec, &msg);
+        assert_eq!(client, spare[0]);
+        assert_eq!(crate::decode::steam_voice_for_tests(&data).unwrap().0 & 0xFFFF_FFFF, 77);
+    }
+
+    #[test]
     fn a_voice_packet_reads_back_as_the_games_own() {
         let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
         let p = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
         let frames = vec![vec![0x68, 1, 2], vec![0x68, 3]];
         let mut seq = 0;
-        let msg = c.dec.voice_message(Some(p.id.0), "", 24000, &frames, &mut seq).unwrap();
+        let msg = c.dec.voice_message(Some(p.id.0), None, "", 24000, &frames, &mut seq).unwrap();
         let (client, data) = voice_data(&c.dec, &msg);
         assert_eq!(u32::from(client) + 1, p.ent, "in the player's slot");
         let (steamid, rate, read) = crate::decode::steam_voice_for_tests(&data).unwrap();
@@ -119,8 +188,8 @@ mod tests {
             }
             out
         };
-        let first = c.dec.voice_message(Some(user), "", 24000, &[vec![1], vec![2]], &mut seq).unwrap();
-        let second = c.dec.voice_message(Some(user), "", 24000, &[vec![3]], &mut seq).unwrap();
+        let first = c.dec.voice_message(Some(user), None, "", 24000, &[vec![1], vec![2]], &mut seq).unwrap();
+        let second = c.dec.voice_message(Some(user), None, "", 24000, &[vec![3]], &mut seq).unwrap();
         assert_eq!(numbers(&voice_data(&c.dec, &first).1), [0, 1]);
         assert_eq!(numbers(&voice_data(&c.dec, &second).1), [2]);
     }
@@ -129,7 +198,7 @@ mod tests {
     fn a_speaker_who_is_no_player_talks_as_sourcetv_itself() {
         let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
         let players: Vec<u32> = c.dec.extractor().snapshot().players.iter().map(|p| p.ent).collect();
-        let msg = c.dec.voice_message(None, "[U:1:77]", 24000, &[vec![0x68]], &mut 0).expect("the bot's slot");
+        let msg = c.dec.voice_message(None, None, "[U:1:77]", 24000, &[vec![0x68]], &mut 0).expect("the bot's slot");
         let (client, data) = voice_data(&c.dec, &msg);
         assert!(!players.contains(&(u32::from(client) + 1)), "no player's slot: {client}");
         assert_eq!(crate::decode::steam_voice_for_tests(&data).unwrap().0 & 0xFFFF_FFFF, 77, "their own SteamID");
@@ -138,8 +207,8 @@ mod tests {
     #[test]
     fn a_player_not_in_the_match_gets_no_packet() {
         let c = upward_until(|c| c.started);
-        assert!(c.dec.voice_message(Some(u16::MAX), "", 24000, &[vec![1]], &mut 0).is_none());
+        assert!(c.dec.voice_message(Some(u16::MAX), None, "", 24000, &[vec![1]], &mut 0).is_none());
         let user = c.dec.extractor().snapshot().players.first().map_or(0, |p| p.id.0);
-        assert!(c.dec.voice_message(Some(user), "", 24000, &[], &mut 0).is_none(), "nor one without frames");
+        assert!(c.dec.voice_message(Some(user), None, "", 24000, &[], &mut 0).is_none(), "nor one without frames");
     }
 }
