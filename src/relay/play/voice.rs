@@ -3,12 +3,13 @@
 
 use super::Player;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// The most voice waiting to be sent; past it the oldest goes.
 pub(super) const MAX_QUEUED: usize = 512;
 
 /// Opus frames (20 ms each, in order) to send as the voice of the player with user id `user`, or
-/// with none (a caster, a coach) as `SourceTV`'s own.
+/// with none (a caster, a coach) as `SourceTV`'s own, one such voice at a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceIn {
     /// The player's user id; none for a speaker who is no player.
@@ -23,7 +24,25 @@ pub struct VoiceIn {
 
 /// The next frame number of each speaker, by user id: a client orders a speaker's frames by it.
 #[derive(Default)]
-pub(super) struct Sequences(HashMap<Option<u16>, u16>);
+pub(super) struct Sequences(HashMap<Option<u16>, u16>, Option<(String, Instant)>);
+
+/// How long `SourceTV`'s slot stays its last speaker's after their last frame.
+const SLOT_HELD: Duration = Duration::from_millis(400);
+
+impl Sequences {
+    /// Whether `steamid`, who is no player, has `SourceTV`'s slot now: it is one voice's at a
+    /// time (two in one slot are noise), the first to talk until they fall silent.
+    pub(super) fn takes_slot(&mut self, steamid: &str, now: Instant) -> bool {
+        if let Some((holder, last)) = &self.1
+            && holder != steamid
+            && now.saturating_duration_since(*last) < SLOT_HELD
+        {
+            return false;
+        }
+        self.1 = Some((steamid.to_string(), now));
+        true
+    }
+}
 
 impl Player<'_> {
     /// Sends `voice` to the clients in the game, unreliably, as the game sends voice; a speaker
@@ -32,6 +51,9 @@ impl Player<'_> {
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
         let mut hub = self.relay.hub();
         for v in voice {
+            if v.user.is_none() && !self.voice_seq.takes_slot(&v.steamid, Instant::now()) {
+                continue;
+            }
             let seq = self.voice_seq.0.entry(v.user).or_insert(0);
             if let Some(m) = c.dec.voice_message(v.user, &v.steamid, v.rate, &v.frames, seq) {
                 hub.tell_active_now(&m);
@@ -52,6 +74,17 @@ mod tests {
         let Message::VoiceData(v) = Message::from_type(t, &mut s, state).unwrap() else { panic!("not voice") };
         let mut d = v.data.clone();
         (v.client, (0..usize::from(v.length) / 8).map(|_| d.read_int::<u8>(8).unwrap()).collect())
+    }
+
+    #[test]
+    fn those_who_are_no_player_have_sourcetvs_slot_one_at_a_time() {
+        use std::time::{Duration, Instant};
+        let (mut seqs, now) = (super::Sequences::default(), Instant::now());
+        assert!(seqs.takes_slot("caster", now));
+        assert!(seqs.takes_slot("caster", now + Duration::from_millis(100)));
+        assert!(!seqs.takes_slot("other", now + Duration::from_millis(200)), "two voices in one slot are noise");
+        assert!(seqs.takes_slot("caster", now + Duration::from_millis(300)));
+        assert!(seqs.takes_slot("other", now + Duration::from_millis(700)), "once the first fell silent");
     }
 
     #[test]
