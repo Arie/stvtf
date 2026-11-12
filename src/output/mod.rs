@@ -283,6 +283,13 @@ pub enum Status {
         /// Packets lost.
         lost: u64,
     },
+    /// A host is fetching a recording to play: this much of it is there, where it knows.
+    Fetching {
+        /// Of a hundred.
+        percent: Option<u8>,
+    },
+    /// A host is decoding a recording it fetched.
+    Decoding,
     /// A connection attempt failed; another follows.
     ConnectFailed {
         /// Why.
