@@ -115,6 +115,9 @@ pub use play::{Beam, Camera, Light, Note, Playback, VoiceIn, Want};
 const TRACE_EVERY: Duration = Duration::from_secs(5);
 
 const USERMESSAGE_RESETHUD: u32 = 6;
+const USERMESSAGE_VGUIMENU: u32 = 12;
+/// TF2's spectator panel.
+const SPECTATORS: &str = "specgui";
 /// How long after a HUD reset, and after going into the game, a client gets the notes again.
 const NOTES_AFTER_RESET: Duration = Duration::from_millis(300);
 const NOTES_AFTER_ENTERING: Duration = Duration::from_secs(2);
@@ -305,6 +308,8 @@ struct Hub {
     /// Messages a client gets again, reliably, after every full update: what one drops (a room's
     /// note bubbles).
     notes: Vec<BitBuf>,
+    /// Sent once with the next full update.
+    with_next: Vec<BitBuf>,
     map: String,
     build: String,
     seen_client: bool,
@@ -340,6 +345,7 @@ impl Hub {
             tail_full: false,
             keyframe: None,
             notes: Vec::new(),
+            with_next: Vec::new(),
             map: String::new(),
             build: crate::CURRENT_BUILD.to_string(),
             seen_client: false,
@@ -512,11 +518,14 @@ impl Hub {
         self.keyframe = Some(std::iter::once(key.clone()).chain(since.iter().cloned()).collect());
         // Always: one shown "paused" before a jump may not be any more.
         let pause = set_pause(paused);
+        // TF2's player bar freezes until its clock passes its last draw; re-showing resets that.
+        let again = std::mem::take(&mut self.with_next);
         for (addr, c) in &mut self.clients {
             if c.takes_full_update(&self.log) {
                 trace!("{addr} gets a keyframe of {} bits", key.nbits());
                 c.set_phase(Phase::Active, now);
                 c.queue.push(pause.clone());
+                c.queue.extend(again.iter().cloned());
                 c.enter_notes(&self.notes, now);
                 self.out.send(*addr, c, Some(key), true, now);
                 for f in since {
@@ -524,6 +533,11 @@ impl Hub {
                 }
             }
         }
+    }
+
+    /// The next full update sets clients' clocks back.
+    fn goes_back(&mut self) {
+        self.with_next = vec![show_panel(SPECTATORS, false), show_panel(SPECTATORS, true)];
     }
 
     /// What a client gets after every full update from now on, in place of what it got before.
@@ -834,6 +848,17 @@ fn reset_hud() -> BitBuf {
     w.write_bits(USERMESSAGE_RESETHUD, 8);
     w.write_bits(8, 11); // the length of its data in bits
     w.write_bits(0, 8);
+    w.finish()
+}
+
+/// `VGUIMenu` user message: name, show byte, key count (0).
+fn show_panel(name: &str, show: bool) -> BitBuf {
+    let mut data: Vec<u8> = name.bytes().chain([0, u8::from(show), 0]).collect();
+    let mut w = BitWriter::new();
+    w.write_bits(SVC_USERMESSAGE, TYPE_BITS);
+    w.write_bits(USERMESSAGE_VGUIMENU, 8);
+    w.write_bits(data.len() as u32 * 8, 11);
+    w.write_bytes(&std::mem::take(&mut data));
     w.finish()
 }
 
@@ -1405,6 +1430,24 @@ mod tests {
         assert!(is_reset_hud(reset.bytes(), &span(&reset, SVC_USERMESSAGE)));
         let pause = set_pause(true);
         assert!(!is_reset_hud(pause.bytes(), &span(&pause, SVC_SETPAUSE)));
+    }
+
+    #[test]
+    fn the_spectators_panel_is_hidden_and_shown_as_the_game_does() {
+        use tf_demo_parser::demo::message::usermessage::UserMessage;
+        for show in [false, true] {
+            let m = show_panel("specgui", show);
+            let mut s = tf_demo_parser::Stream::from(bitbuffer::BitReadBuffer::new_owned(
+                m.bytes().to_vec(),
+                bitbuffer::LittleEndian,
+            ));
+            assert_eq!(s.read_int::<u32>(TYPE_BITS).unwrap(), SVC_USERMESSAGE);
+            let u: UserMessage<'_> = s.read().unwrap();
+            let said = format!("{u:?}");
+            assert!(said.contains("VGuiMenu") && said.contains("specgui"), "{said}");
+            assert_eq!(s.bits_left(), m.bytes().len() * 8 - m.nbits(), "nothing after it");
+            assert_eq!(m.nbits(), TYPE_BITS + 8 + 11 + 10 * 8, "its name, whether to show it, and no keys");
+        }
     }
 
     #[test]

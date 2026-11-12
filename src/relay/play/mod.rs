@@ -583,6 +583,7 @@ impl Player<'_> {
     fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
         note!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
+        self.relay.hub().goes_back();
         let rewritten = c.dec.tables_rewritten();
         let took = Instant::now();
         // From the last checkpoint before it, or else the start.
