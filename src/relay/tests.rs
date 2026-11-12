@@ -429,6 +429,7 @@ fn a_new_map_signs_every_client_on_again() {
 #[test]
 fn a_new_signon_waits_for_the_clients_in_one() {
     let mut b = Bench::new("", 1);
+    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
     b.connect();
     let now = Instant::now();
     assert!(!b.hub.signon_waits(now), "a client just in, sent nothing yet");
@@ -454,6 +455,17 @@ fn a_new_signon_waits_for_the_clients_in_one() {
     assert!(b.hub.signon_waits(now));
     b.hub.clients.clear();
     assert!(!b.hub.signon_waits(now), "gone");
+}
+
+/// A hold given up (playback back on the demo playing, or nobody in) starts over the next time.
+#[test]
+fn a_hold_let_go_of_starts_over() {
+    let (mut hub, active) = hub_with_one_in();
+    hub.reconnect_all();
+    let now = Instant::now();
+    assert!(hub.signon_waits(now));
+    hub.no_signon_waits();
+    assert!(hub.signon_waits(now + CLIENT_TIMEOUT), "{:?}", hub.clients[&active].phase);
 }
 
 /// What anyone on the internet can send a relay: random, forged, or past the checksum.

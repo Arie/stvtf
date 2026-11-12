@@ -213,14 +213,20 @@ fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Life
 }
 
 /// A frame's stream without the server's `net_SignonState`s (a changelevel, say): a client's
-/// signon is the relay's. A `net_Disconnect` ends a stream, and is cut with what follows it.
+/// signon is the relay's. A `net_Disconnect` ends a stream, and is cut with what follows it. One in
+/// what the decoder could not parse (an [`UNPARSED`](crate::decode::UNPARSED) span) goes through.
 fn without_signon(bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
     let (bits, life) = without(bits, life, |s| u32::from(s.id) == NET_SIGNONSTATE);
     (bits, Lifecycle { signon: Vec::new(), ..life })
 }
 
+/// A frame's stream without the director's camera cues.
+pub(super) fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
+    without(bits, life, |s| dec.is_director_cue(bits.bytes(), s))
+}
+
 /// A stream without the messages `drop` picks.
-pub(super) fn without(bits: &BitBuf, life: &Lifecycle, drop: impl Fn(&Span) -> bool) -> (BitBuf, Lifecycle) {
+fn without(bits: &BitBuf, life: &Lifecycle, drop: impl Fn(&Span) -> bool) -> (BitBuf, Lifecycle) {
     if !life.spans.iter().any(&drop) {
         return (bits.clone(), life.clone());
     }

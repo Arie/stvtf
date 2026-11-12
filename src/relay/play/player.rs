@@ -1,14 +1,12 @@
 //! The player: playing demos to the clients where playback wants them, jumping when off.
 
 use super::beams::Kept;
-use super::cursor::{Cursor, owned, without};
+use super::cursor::{Cursor, owned, without_cues};
 use super::index::Index;
 use super::{
     CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, KEPT_BURST, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice,
 };
-use crate::decode::{Decoder, Lifecycle};
 use crate::lock;
-use crate::net::bits::BitBuf;
 use crate::output::Line;
 use crate::relay::{Hub, Relay};
 use anyhow::Result;
@@ -109,7 +107,8 @@ impl Player<'_> {
                 }
                 // Another demo (a live match's next one), or this again: clients in a game sign on again.
                 self.cur = None;
-                if self.signed_on.take().is_some() {
+                if let Some(was) = self.signed_on.take() {
+                    trace!("the clients leave {} for {}", was.display(), want.demo.display());
                     self.relay.hub().reconnect_all();
                 }
                 match Cursor::open(&want.demo, &self.relay.hub) {
@@ -135,6 +134,8 @@ impl Player<'_> {
                         continue;
                     }
                 }
+            } else {
+                self.relay.hub().no_signon_waits();
             }
             if self.flushing.is_none() {
                 self.show_kept(playback);
@@ -163,6 +164,7 @@ impl Player<'_> {
             self.idle = None;
             return true;
         }
+        hub.no_signon_waits();
         let since = *self.idle.get_or_insert_with(Instant::now);
         if since.elapsed() > IDLE && self.cur.is_some() {
             self.cur = None;
@@ -373,11 +375,6 @@ impl Player<'_> {
         }
         self.cued = Some((camera, Instant::now()));
     }
-}
-
-/// A frame's stream without the director's camera cues.
-pub(super) fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
-    without(bits, life, |s| dec.is_director_cue(bits.bytes(), s))
 }
 
 /// Decodes on to `target` without sending: only string table changes reach the clients. How many

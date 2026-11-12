@@ -153,8 +153,8 @@ impl Client {
     /// it.
     pub(super) fn in_signon(&self) -> bool {
         self.reconnecting
-            || self.phase == Phase::Signon
-                && (self.signing || self.cursor > 0 || !self.queue.is_empty() || self.outgoing.is_some())
+            || (self.phase == Phase::Signon
+                && (self.signing || self.cursor > 0 || !self.queue.is_empty() || self.outgoing.is_some()))
     }
 
     /// Still signing on, with more to send or an echo to wait for: a paced replay holds for it.

@@ -1,6 +1,5 @@
 use super::beams::past_beams;
-use super::cursor::Cursor;
-use super::player::without_cues;
+use super::cursor::{Cursor, without_cues};
 use super::*;
 use crate::decode::Span;
 use crate::demo::Packet;

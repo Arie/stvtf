@@ -569,6 +569,11 @@ impl Hub {
         false
     }
 
+    /// No signon waits: a hold let go of starts over the next time.
+    pub(super) fn no_signon_waits(&mut self) {
+        self.signon_held = None;
+    }
+
     /// A paced replay waits for a client, and for clients signing on.
     pub(super) fn hold(&self) -> bool {
         !self.seen_client || self.clients.values().any(Client::signing_on)
