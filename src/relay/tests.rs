@@ -424,6 +424,38 @@ fn a_new_map_signs_every_client_on_again() {
     assert_eq!((c.phase, c.cursor, c.gate, c.queue.len()), (Phase::Signon, 0, None, 0));
 }
 
+/// Another demo's signon goes only once no client is in one: a game client sent a second while
+/// it loads the map crashes.
+#[test]
+fn a_new_signon_waits_for_the_clients_in_one() {
+    let mut b = Bench::new("", 1);
+    b.connect();
+    let now = Instant::now();
+    assert!(!b.hub.signon_waits(now), "a client just in, sent nothing yet");
+    // In the game, then told to reconnect for a demo.
+    let c = b.client_state();
+    c.gate = None;
+    c.set_phase(Phase::Active, now);
+    let new_signon = |hub: &mut Hub| {
+        hub.reconnect_all();
+        hub.restart_signon(Instant::now());
+        hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    };
+    new_signon(&mut b.hub);
+    assert!(b.hub.signon_waits(now), "told to reconnect");
+    assert!(b.hub.signon_waits((now + CLIENT_TIMEOUT).checked_sub(Duration::from_millis(1)).unwrap()));
+    assert!(!b.hub.signon_waits(now + CLIENT_TIMEOUT), "not for good");
+    b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
+    assert_eq!(b.client_state().cursor, 1);
+    assert!(b.hub.signon_waits(now), "part of the signon sent");
+    b.client_state().set_phase(Phase::Active, now);
+    assert!(!b.hub.signon_waits(now), "through it");
+    new_signon(&mut b.hub);
+    assert!(b.hub.signon_waits(now));
+    b.hub.clients.clear();
+    assert!(!b.hub.signon_waits(now), "gone");
+}
+
 /// What anyone on the internet can send a relay: random, forged, or past the checksum.
 #[test]
 fn garbage_from_clients_never_panics_the_hub() {

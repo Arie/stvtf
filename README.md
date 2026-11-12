@@ -347,8 +347,9 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   most 30 s of the match (decoding with what a full update needs runs at about 500 times game
   speed). A checkpoint is the string table changes so far, a full update and the frames after it,
   and where the file goes on. A client is made to sign on again (`net_SignonState(CONNECTED)`
-  first, as a server's reconnect) only for another demo file. After a jump back it has the string
-  tables of later on: where an entry of `userinfo` (a player left or joined) or
+  first, as a server's reconnect) only for another demo file, and never while it is still in a
+  signon: the next demo waits until every client is through, 30 s at most. After a jump back it
+  has the string tables of later on: where an entry of `userinfo` (a player left or joined) or
   `instancebaseline` changed value since, it is first sent those entries as they were
   (`svc_UpdateStringTable`), and the stream's own changes again when playback comes to them.
 - A full update (a jump, or a client just in) is followed by the last round start, win panel or

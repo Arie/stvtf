@@ -43,6 +43,7 @@ impl Relay {
                 beams_until: 0.0,
                 rekeyed: false,
                 flushing: None,
+                signed_on: None,
             }
             .run(playback, stop);
         });
@@ -88,6 +89,8 @@ pub(super) struct Player<'r> {
     pub(super) rekeyed: bool,
     /// The full update waits until then, their clock put ahead.
     pub(super) flushing: Option<Instant>,
+    /// The demo whose signon the clients have: the next makes them reconnect first.
+    signed_on: Option<std::path::PathBuf>,
 }
 
 impl Player<'_> {
@@ -99,13 +102,20 @@ impl Player<'_> {
             }
             let want = playback.get();
             if self.cur.as_ref().is_none_or(|c| c.path != want.demo) {
-                // Another demo (a live match's next one): clients in a game sign on again.
-                if self.cur.take().is_some() {
+                // Not while a client is in a signon: a second crashes it. Nothing plays meanwhile.
+                if self.relay.hub().signon_waits(Instant::now()) {
+                    std::thread::sleep(NAP);
+                    continue;
+                }
+                // Another demo (a live match's next one), or this again: clients in a game sign on again.
+                self.cur = None;
+                if self.signed_on.take().is_some() {
                     self.relay.hub().reconnect_all();
                 }
                 match Cursor::open(&want.demo, &self.relay.hub) {
                     Ok(c) => {
                         self.cur = Some(c);
+                        self.signed_on = Some(want.demo.clone());
                         // Its own tables: the clients sign on to them, the laser not among them.
                         self.laser = None;
                         self.shown_notes = notes::Shown::default();
@@ -140,7 +150,6 @@ impl Player<'_> {
                     note!("playing {}: {e:#}", want.demo.display());
                     playback.set_problem(Some(format!("{e:#}")));
                     self.cur = None;
-                    self.relay.hub().reconnect_all();
                     std::thread::sleep(RETRY);
                 }
             }
@@ -158,6 +167,7 @@ impl Player<'_> {
         if since.elapsed() > IDLE && self.cur.is_some() {
             self.cur = None;
             self.index = None;
+            self.signed_on = None;
             hub.forget();
         }
         false
@@ -190,9 +200,9 @@ impl Player<'_> {
                 self.relay.hub().set_tables_back(&later, &msgs);
             } else {
                 note!(":{} the string tables changed since: the clients sign on again", self.relay.port());
-                self.relay.hub().reconnect_all();
-                drop(Cursor::open(&want.demo, &self.relay.hub)?);
-                self.relay.hub().log_tables(&owned(&again.tables));
+                self.cur = None;
+                self.dry = false;
+                return Ok(());
             }
         }
         self.cur = Some(again);

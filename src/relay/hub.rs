@@ -49,6 +49,8 @@ pub(super) struct Hub {
     pub(super) last_full: Option<Instant>,
     /// Passing a server on, or playing a demo (see [`play`](super::play)), paused or not.
     pub(super) mode: Mode,
+    /// Since when another signon waits for the clients in one.
+    signon_held: Option<Instant>,
     traced: Instant,
 }
 
@@ -83,6 +85,7 @@ impl Hub {
             seen_client: false,
             last_full: None,
             mode: Mode::Live,
+            signon_held: None,
             traced: Instant::now(),
         }
     }
@@ -110,6 +113,7 @@ impl Hub {
             c.queue.push(reconnect.clone());
             c.gate = Some(Signon::Connected);
             c.signing = false;
+            c.reconnecting = true;
         }
     }
 
@@ -417,6 +421,7 @@ impl Hub {
                     ClientMsg::Signon(s) => {
                         trace!("{from} signon {s:?} at {} ms", now.duration_since(c.connected).as_millis());
                         c.signing |= s > Signon::Connected;
+                        c.reconnecting &= s < Signon::Connected;
                         if c.gate.is_some_and(|g| s >= g) {
                             c.gate = None;
                         }
@@ -546,6 +551,22 @@ impl Hub {
             }
         }
         self.clients.clear();
+    }
+
+    /// Whether another signon waits: a client is in one. As long as a client loading a map may be
+    /// silent, at most.
+    pub(super) fn signon_waits(&mut self, now: Instant) -> bool {
+        if !self.clients.values().any(Client::in_signon) {
+            self.signon_held = None;
+            return false;
+        }
+        let since = *self.signon_held.get_or_insert(now);
+        if now.duration_since(since) < CLIENT_TIMEOUT {
+            return true;
+        }
+        note!(":{} a client is still in its signon: the next goes anyway", self.port);
+        self.signon_held = None;
+        false
     }
 
     /// A paced replay waits for a client, and for clients signing on.

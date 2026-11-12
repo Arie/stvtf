@@ -59,6 +59,8 @@ pub(super) struct Client {
     pub(super) gone: Option<String>,
     /// It went on past CONNECTED in the current signon: a new signon must make it reconnect.
     pub(super) signing: bool,
+    /// Told to reconnect, and not yet said it has.
+    pub(super) reconnecting: bool,
 }
 
 impl Client {
@@ -87,6 +89,7 @@ impl Client {
             last_sent: now,
             gone: None,
             signing: false,
+            reconnecting: false,
         }
     }
 
@@ -144,6 +147,14 @@ impl Client {
         if o.done() {
             self.outgoing = None;
         }
+    }
+
+    /// Told to reconnect, or sent part of a signon, and not through it: another signon would crash
+    /// it.
+    pub(super) fn in_signon(&self) -> bool {
+        self.reconnecting
+            || self.phase == Phase::Signon
+                && (self.signing || self.cursor > 0 || !self.queue.is_empty() || self.outgoing.is_some())
     }
 
     /// Still signing on, with more to send or an echo to wait for: a paced replay holds for it.
