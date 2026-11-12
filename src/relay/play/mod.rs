@@ -332,7 +332,7 @@ impl Cursor {
                 }
                 // A demo cut off in a broken packet (a recording stopped short, say) ends there.
                 Err(e) => {
-                    trace!("{} ends in an unreadable packet: {e:#}", self.path.display());
+                    note!("{} ends in an unreadable packet: {e:#}", self.path.display());
                     self.ended = true;
                     None
                 }
@@ -532,7 +532,7 @@ impl Player<'_> {
                     }
                     Err(e) => {
                         // Not written yet, or not playable: try again in a while.
-                        trace!("cannot play {}: {e:#}", want.demo.display());
+                        note!("cannot play {}: {e:#}", want.demo.display());
                         playback.set_problem(Some(format!("{e:#}")));
                         std::thread::sleep(RETRY);
                         continue;
@@ -550,7 +550,7 @@ impl Player<'_> {
                 Ok(()) => playback.set_problem(self.problem.clone()),
                 Err(e) => {
                     // The file went or is corrupt: tell why, and open it again in a while.
-                    trace!("playing {}: {e:#}", want.demo.display());
+                    note!("playing {}: {e:#}", want.demo.display());
                     playback.set_problem(Some(format!("{e:#}")));
                     self.cur = None;
                     self.relay.hub().reconnect_all();
@@ -582,7 +582,7 @@ impl Player<'_> {
     /// set back first.
     fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
-        trace!("jump back from {} to {target}", c.tick());
+        note!("jump back from {} to {target}, {} clients", c.tick(), self.relay.clients());
         let rewritten = c.dec.tables_rewritten();
         let took = Instant::now();
         // From the last checkpoint before it, or else the start.
@@ -601,7 +601,7 @@ impl Player<'_> {
                 trace!("string tables set back with {} messages", msgs.len());
                 self.relay.hub().set_tables_back(&later, &msgs);
             } else {
-                trace!("the string tables changed since: the clients sign on again");
+                note!("the string tables changed since: the clients sign on again");
                 self.relay.hub().reconnect_all();
                 drop(Cursor::open(&want.demo, &self.relay.hub)?);
                 self.relay.hub().log_tables(&owned(&again.tables));
@@ -657,7 +657,12 @@ impl Player<'_> {
             }
             let (decoded, dry) = skim(c, &self.relay.hub, target);
             let decoded = decoded + usize::from(mark.is_some());
-            trace!("jump ahead from {from} to {} in {} ms", c.tick(), took.elapsed().as_millis());
+            note!(
+                "jump ahead from {from} to {} in {} ms, {} clients",
+                c.tick(),
+                took.elapsed().as_millis(),
+                self.relay.clients()
+            );
             self.dry = dry;
             if decoded > 0 {
                 self.relay.hub().all_want_keyframe(Instant::now());

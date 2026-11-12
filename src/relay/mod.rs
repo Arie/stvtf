@@ -61,6 +61,50 @@ macro_rules! trace {
     };
 }
 
+/// Where what a relay notes goes: stderr, unless a host takes it ([`notes_to`]).
+static NOTES: std::sync::OnceLock<Notes> = std::sync::OnceLock::new();
+type Notes = Box<dyn Fn(&str) + Send + Sync>;
+
+/// Has `take` given what relays note from here on (clients coming and going, jumps, demos that
+/// will not play), a line each, instead of stderr. Once: a second call changes nothing.
+pub fn notes_to(take: impl Fn(&str) + Send + Sync + 'static) {
+    let _ = NOTES.set(Box::new(take));
+}
+
+pub(crate) fn note(line: &str) {
+    match NOTES.get() {
+        Some(take) => take(line),
+        None => eprintln!("{line}"),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_clients_address_is_noted_without_its_end() {
+    assert_eq!(whence("203.0.113.57:27005".parse().unwrap()), "203.0.113.x:27005");
+    assert_eq!(whence("[2001:db8:1:2:3:4:5:6]:27005".parse().unwrap()), "2001:db8:1::x:27005");
+}
+
+/// What is worth keeping of a relay's life, traced or not: a line a client, a jump or a failure.
+macro_rules! note {
+    ($($arg:tt)*) => {
+        $crate::relay::note(&format!("relay: {}", format_args!($($arg)*)))
+    };
+}
+
+/// A client's address as it is noted: without the end of it, the port kept to tell two apart.
+pub(crate) fn whence(addr: SocketAddr) -> String {
+    match addr.ip() {
+        std::net::IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            format!("{a}.{b}.{c}.x:{}", addr.port())
+        }
+        std::net::IpAddr::V6(ip) => {
+            format!("{:x}:{:x}:{:x}::x:{}", ip.segments()[0], ip.segments()[1], ip.segments()[2], addr.port())
+        }
+    }
+}
+
 mod client_msg;
 mod play;
 mod transfer;
@@ -638,7 +682,7 @@ impl Hub {
             }
         }
         if let Some(reason) = &c.gone {
-            trace!("{} ({from}) left: {}", c.name.escape_debug(), reason.escape_debug());
+            note!("{} ({}) left: {}", c.name.escape_debug(), whence(from), reason.escape_debug());
             self.clients.remove(&from);
             return;
         }
@@ -679,12 +723,12 @@ impl Hub {
                         &format!("This relay speaks protocol {}", handshake::PROTOCOL_VERSION),
                     )
                 } else if !self.password.is_empty() && password != self.password {
-                    trace!("{} ({from}) gave a wrong password", name.escape_debug());
+                    note!("{} ({}) gave a wrong password", name.escape_debug(), whence(from));
                     handshake::build_reject(nonce, "#GameUI_ServerRejectBadPassword")
                 } else if self.clients.len() >= self.slots && !self.clients.contains_key(&from) {
                     handshake::build_reject(nonce, "#GameUI_ServerRejectServerFull")
                 } else {
-                    trace!("{} ({from}) connected", name.escape_debug());
+                    note!("{} ({}) connected", name.escape_debug(), whence(from));
                     self.clients.insert(from, Client::new(name, challenge, nonce, now));
                     self.seen_client = true;
                     handshake::build_accept(nonce)
@@ -710,9 +754,10 @@ impl Hub {
         self.clients.retain(|addr, c| {
             let alive = now.duration_since(c.last_heard) < CLIENT_TIMEOUT;
             if !alive {
-                trace!(
-                    "{} ({addr}) timed out, {:?} for {:.1} s when last heard",
+                note!(
+                    "{} ({}) timed out, {:?} for {:.1} s when last heard",
                     c.name.escape_debug(),
+                    whence(*addr),
                     c.phase,
                     c.last_heard.saturating_duration_since(c.since).as_secs_f32()
                 );
