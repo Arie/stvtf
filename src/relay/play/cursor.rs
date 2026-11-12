@@ -5,7 +5,7 @@ use crate::decode::{Decoder, Lifecycle, Span, Tables};
 use crate::demo::{self, Next, Packet};
 use crate::lock;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::{self, TYPE_BITS};
+use crate::net::messages::{self, NET_SIGNONSTATE, TYPE_BITS};
 use crate::relay::Hub;
 use anyhow::{Context, Result, bail};
 use std::collections::VecDeque;
@@ -163,6 +163,7 @@ impl Cursor {
         let Some(Packet::Message { tick, data }) = self.next.take() else { return None };
         let bits = BitBuf::from_bytes(data);
         let life = self.dec.feed(bits.bytes(), bits.nbits());
+        let (bits, life) = without_signon(&bits, &life);
         self.dec.take_output();
         self.offset = i64::from(self.dec.server_tick()) - i64::from(tick);
         self.started = true;
@@ -209,6 +210,28 @@ fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Life
         ..Lifecycle::default()
     };
     (w.finish(), fixed)
+}
+
+/// A frame's stream without the server's `net_SignonState`s (a changelevel, say): a client's
+/// signon is the relay's. A `net_Disconnect` ends a stream, and is cut with what follows it.
+fn without_signon(bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
+    let (bits, life) = without(bits, life, |s| u32::from(s.id) == NET_SIGNONSTATE);
+    (bits, Lifecycle { signon: Vec::new(), ..life })
+}
+
+/// A stream without the messages `drop` picks.
+pub(super) fn without(bits: &BitBuf, life: &Lifecycle, drop: impl Fn(&Span) -> bool) -> (BitBuf, Lifecycle) {
+    if !life.spans.iter().any(&drop) {
+        return (bits.clone(), life.clone());
+    }
+    let mut w = BitWriter::new();
+    let mut spans = Vec::with_capacity(life.spans.len());
+    for span in life.spans.iter().filter(|s| !drop(s)) {
+        let start = w.nbits();
+        w.write_range(bits.bytes(), span.bits.clone());
+        spans.push(Span { id: span.id, bits: start..w.nbits() });
+    }
+    (w.finish(), Lifecycle { spans, ..life.clone() })
 }
 
 /// String table changes as messages of their own.

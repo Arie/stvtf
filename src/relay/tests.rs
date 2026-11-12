@@ -197,16 +197,16 @@ fn tables_set_back_go_again_on_every_jump_back() {
 }
 
 /// The relay's protocol from the client's side, without threads or clocks.
-struct Bench {
-    hub: Hub,
-    client: UdpSocket,
-    addr: SocketAddr,
-    challenge: u32,
+pub(super) struct Bench {
+    pub(super) hub: Hub,
+    pub(super) client: UdpSocket,
+    pub(super) addr: SocketAddr,
+    pub(super) challenge: u32,
     nonce: u32,
 }
 
 impl Bench {
-    fn new(password: &str, slots: usize) -> Self {
+    pub(super) fn new(password: &str, slots: usize) -> Self {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let config = RelayConfig { password: password.into(), slots, ..RelayConfig::new("127.0.0.1:0") };
         let hub = Hub::new(sock, &config);
@@ -228,7 +228,7 @@ impl Bench {
         self.reply()
     }
 
-    fn connect(&mut self) {
+    pub(super) fn connect(&mut self) {
         let packet = self.connect_packet("", handshake::PROTOCOL_VERSION);
         assert_eq!(self.connect_with(&packet)[4], b'B', "accepted");
     }
@@ -240,7 +240,7 @@ impl Bench {
         buf
     }
 
-    fn client_state(&mut self) -> &mut Client {
+    pub(super) fn client_state(&mut self) -> &mut Client {
         self.hub.clients.get_mut(&self.addr).unwrap()
     }
 

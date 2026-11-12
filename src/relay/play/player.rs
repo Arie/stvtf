@@ -1,14 +1,14 @@
 //! The player: playing demos to the clients where playback wants them, jumping when off.
 
 use super::beams::Kept;
-use super::cursor::{Cursor, owned};
+use super::cursor::{Cursor, owned, without};
 use super::index::Index;
 use super::{
     CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, KEPT_BURST, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice,
 };
-use crate::decode::{Decoder, Lifecycle, Span};
+use crate::decode::{Decoder, Lifecycle};
 use crate::lock;
-use crate::net::bits::{BitBuf, BitWriter};
+use crate::net::bits::BitBuf;
 use crate::output::Line;
 use crate::relay::{Hub, Relay};
 use anyhow::Result;
@@ -367,17 +367,7 @@ impl Player<'_> {
 
 /// A frame's stream without the director's camera cues.
 pub(super) fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
-    if !life.spans.iter().any(|s| dec.is_director_cue(bits.bytes(), s)) {
-        return (bits.clone(), life.clone());
-    }
-    let mut w = BitWriter::new();
-    let mut spans = Vec::with_capacity(life.spans.len());
-    for span in life.spans.iter().filter(|s| !dec.is_director_cue(bits.bytes(), s)) {
-        let start = w.nbits();
-        w.write_range(bits.bytes(), span.bits.clone());
-        spans.push(Span { id: span.id, bits: start..w.nbits() });
-    }
-    (w.finish(), Lifecycle { spans, ..life.clone() })
+    without(bits, life, |s| dec.is_director_cue(bits.bytes(), s))
 }
 
 /// Decodes on to `target` without sending: only string table changes reach the clients. How many

@@ -356,6 +356,8 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   jump passes over the event that would.
 - An STV demo's signon states carry another spawn count than its ServerInfo; a game client
   refuses that, so they are given the ServerInfo's.
+- A frame's own `net_SignonState` (the changelevel a demo ends with) is not passed on: a game
+  client would leave the map for one. A client's signon is the relay's.
 - A client that joins, loses a frame or follows a jump ahead gets a full update written from the
   decoded entities (`decode::world`): each entity entering with its props that differ from its
   class's static baseline, as a server writes one. It is of the frame the next one builds on

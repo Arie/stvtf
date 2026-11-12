@@ -3,7 +3,14 @@ use super::cursor::Cursor;
 use super::player::without_cues;
 use super::*;
 use crate::decode::Span;
-use crate::net::messages::{self, TYPE_BITS};
+use crate::demo::Packet;
+use crate::net::bits::BitWriter;
+use crate::net::messages::{self, SVC_USERMESSAGE, Signon, TYPE_BITS};
+use crate::net::receiver::Receiver;
+use crate::relay::client::Phase;
+use crate::relay::server_msg::show_panel;
+use crate::relay::tests::Bench;
+use std::time::{Duration, Instant};
 
 use crate::net::messages::{SVC_GAMEEVENT, SVC_TEMPENTITIES};
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
@@ -188,4 +195,85 @@ fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
     let GameEvent::HLTVChase(chase) = e.event else { panic!("{:?}", e.event) };
     assert_eq!(u32::from(chase.target_1), player.ent);
     assert_eq!(chase.in_eye, 1);
+}
+
+/// `pl_upward.dem` a few frames in, with the next one read as the server's changelevel would
+/// have it: `net_SignonState(CHANGELEVEL)` and a panel shown put in after its first message.
+/// What the frame's message types are without the changelevel, too.
+fn upward_with_changelevel() -> (Cursor, Vec<u8>) {
+    let (mut c, mut copy) = (upward_until(few_in), upward_until(few_in));
+    let Some(Packet::Message { tick, .. }) = copy.peek().cloned() else { panic!("a frame next") };
+    let (bits, life) = copy.decode().unwrap();
+    let mut w = BitWriter::new();
+    let mut ids = Vec::new();
+    for (i, span) in life.spans.iter().enumerate() {
+        w.write_range(bits.bytes(), span.bits.clone());
+        ids.push(span.id);
+        if i == 0 {
+            w.write_buf(&messages::signonstate(Signon::ChangeLevel, 3));
+            w.write_buf(&show_panel(crate::relay::SPECTATORS, true));
+            ids.push(u8::try_from(SVC_USERMESSAGE).unwrap());
+        }
+    }
+    c.peek();
+    c.next = Some(Packet::Message { tick, data: w.into_bytes() });
+    (c, ids)
+}
+
+fn few_in(c: &Cursor) -> bool {
+    c.recent.len() >= 4
+}
+
+/// The message types of each stream the bench's client is sent without a transfer, as read by
+/// `reader`.
+fn sent_unreliably(b: &Bench, reader: &mut Cursor) -> Vec<Vec<u8>> {
+    b.client.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+    let mut rx = Receiver::new(Some(b.challenge));
+    let mut buf = vec![0u8; crate::net::MAX_DATAGRAM];
+    let mut sent = Vec::new();
+    while let Ok(n) = b.client.recv(&mut buf) {
+        let Some(pkt) = rx.feed(&buf[..n], Instant::now()) else { continue };
+        for s in pkt.streams.iter().filter(|s| !s.reliable) {
+            sent.push(reader.dec.feed(s.bits.bytes(), s.bits.nbits()).spans.iter().map(|s| s.id).collect());
+        }
+    }
+    sent
+}
+
+/// The bench's client, in the game.
+fn bench_with_one_in() -> Bench {
+    let mut b = Bench::new("", 1);
+    b.connect();
+    let c = b.client_state();
+    c.gate = None;
+    c.set_phase(Phase::Active, Instant::now());
+    b
+}
+
+#[test]
+fn a_played_frame_reaches_a_client_without_the_servers_changelevel() {
+    let (mut c, ids) = upward_with_changelevel();
+    let mut reader = upward_until(few_in);
+    let (bits, life) = c.decode().unwrap();
+    let mut b = bench_with_one_in();
+    b.hub.upstream_stream(&bits, false, &life);
+    b.hub.upstream_flush();
+    assert_eq!(sent_unreliably(&b, &mut reader), [ids]);
+}
+
+#[test]
+fn the_frames_sent_with_a_full_update_are_without_the_servers_changelevel() {
+    let (mut c, ids) = upward_with_changelevel();
+    let mut reader = upward_until(few_in);
+    c.decode().unwrap();
+    c.peek();
+    let (_, key) = c.dec.keyframe(c.next_frame()).unwrap();
+    // From two frames back: the changelevel's frame, and the one it builds on, go as they are.
+    let recent = c.recent.make_contiguous();
+    let since = c.dec.catch_up(recent[recent.len() - 3].0, recent);
+    let mut b = bench_with_one_in();
+    b.client_state().set_phase(Phase::WaitingFull, Instant::now());
+    b.hub.send_keyframe(&key, &since, false);
+    let sent = sent_unreliably(&b, &mut reader);
+    assert_eq!(sent.last(), Some(&ids), "{sent:?}");
 }
