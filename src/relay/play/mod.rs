@@ -379,7 +379,7 @@ impl Cursor {
                 self.paused = p;
             }
         }
-        self.tables.extend(super::table_changes(&bits, &life).map(Arc::new));
+        self.tables.extend(super::server_msg::table_changes(&bits, &life).map(Arc::new));
         self.recent.push_back((self.dec.server_tick(), life.cut(&bits)));
         if self.recent.len() > RECENT {
             self.recent.pop_front();
@@ -400,7 +400,7 @@ fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Life
     let mut spans = Vec::with_capacity(life.spans.len());
     for span in &life.spans {
         let msg = BitReader::slice(bits.bytes(), span.bits.clone());
-        let msg = match super::signon_state(span.id, &msg) {
+        let msg = match super::server_msg::signon_state(span.id, &msg) {
             Some(s) => messages::signonstate(s, count),
             None => msg,
         };
@@ -435,7 +435,7 @@ impl Relay {
     pub fn play(&self, playback: &Playback, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<()> {
         self.announce(emit)?;
         self.serving(stop, || {
-            self.hub().mode = super::Mode::Play { paused: false };
+            self.hub().mode = super::hub::Mode::Play { paused: false };
             Player {
                 relay: self,
                 cur: None,
@@ -737,7 +737,7 @@ impl Player<'_> {
         hub.upstream_flush();
         self.clock = Some((c.tick() as f64 * f64::from(c.dec.tick_interval()), Instant::now()));
         // The match's own HUD resets (a spawn, a new round) drop the notes too.
-        if life.spans.iter().any(|s| super::is_reset_hud(bits.bytes(), s)) {
+        if life.spans.iter().any(|s| super::server_msg::is_reset_hud(bits.bytes(), s)) {
             hub.notes_again(Instant::now());
         }
         // The match paused or went on: the clients are told reliably too.
