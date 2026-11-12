@@ -582,7 +582,7 @@ impl Player<'_> {
     /// set back first.
     fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
-        note!("jump back from {} to {target}, {} clients", c.tick(), self.relay.clients());
+        note!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
         let rewritten = c.dec.tables_rewritten();
         let took = Instant::now();
         // From the last checkpoint before it, or else the start.
@@ -601,7 +601,7 @@ impl Player<'_> {
                 trace!("string tables set back with {} messages", msgs.len());
                 self.relay.hub().set_tables_back(&later, &msgs);
             } else {
-                note!("the string tables changed since: the clients sign on again");
+                note!(":{} the string tables changed since: the clients sign on again", self.relay.port());
                 self.relay.hub().reconnect_all();
                 drop(Cursor::open(&want.demo, &self.relay.hub)?);
                 self.relay.hub().log_tables(&owned(&again.tables));
@@ -658,7 +658,8 @@ impl Player<'_> {
             let (decoded, dry) = skim(c, &self.relay.hub, target);
             let decoded = decoded + usize::from(mark.is_some());
             note!(
-                "jump ahead from {from} to {} in {} ms, {} clients",
+                ":{} jump ahead from {from} to {} in {} ms, {} clients",
+                self.relay.port(),
                 c.tick(),
                 took.elapsed().as_millis(),
                 self.relay.clients()

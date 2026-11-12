@@ -285,6 +285,8 @@ impl Client {
 /// Everything the upstream and client threads share.
 struct Hub {
     out: Out,
+    /// The port it listens on: which relay a note is of.
+    port: u16,
     password: String,
     slots: usize,
     /// Keys the challenge of each address, so none need be stored before it connects.
@@ -325,6 +327,7 @@ enum Mode {
 impl Hub {
     fn new(sock: UdpSocket, config: &RelayConfig) -> Self {
         Hub {
+            port: sock.local_addr().map_or(0, |a| a.port()),
             out: Out { sock, split_group: 0 },
             password: config.password.clone(),
             slots: config.slots.min(MAX_SLOTS),
@@ -682,7 +685,7 @@ impl Hub {
             }
         }
         if let Some(reason) = &c.gone {
-            note!("{} ({}) left: {}", c.name.escape_debug(), whence(from), reason.escape_debug());
+            note!(":{} {} ({}) left: {}", self.port, c.name.escape_debug(), whence(from), reason.escape_debug());
             self.clients.remove(&from);
             return;
         }
@@ -723,12 +726,12 @@ impl Hub {
                         &format!("This relay speaks protocol {}", handshake::PROTOCOL_VERSION),
                     )
                 } else if !self.password.is_empty() && password != self.password {
-                    note!("{} ({}) gave a wrong password", name.escape_debug(), whence(from));
+                    note!(":{} {} ({}) gave a wrong password", self.port, name.escape_debug(), whence(from));
                     handshake::build_reject(nonce, "#GameUI_ServerRejectBadPassword")
                 } else if self.clients.len() >= self.slots && !self.clients.contains_key(&from) {
                     handshake::build_reject(nonce, "#GameUI_ServerRejectServerFull")
                 } else {
-                    note!("{} ({}) connected", name.escape_debug(), whence(from));
+                    note!(":{} {} ({}) connected", self.port, name.escape_debug(), whence(from));
                     self.clients.insert(from, Client::new(name, challenge, nonce, now));
                     self.seen_client = true;
                     handshake::build_accept(nonce)
@@ -751,11 +754,12 @@ impl Hub {
 
     /// Resends, keepalives and timeouts.
     fn service(&mut self, now: Instant) {
+        let port = self.port;
         self.clients.retain(|addr, c| {
             let alive = now.duration_since(c.last_heard) < CLIENT_TIMEOUT;
             if !alive {
                 note!(
-                    "{} ({}) timed out, {:?} for {:.1} s when last heard",
+                    ":{port} {} ({}) timed out, {:?} for {:.1} s when last heard",
                     c.name.escape_debug(),
                     whence(*addr),
                     c.phase,
@@ -956,6 +960,11 @@ impl Relay {
     /// The address clients connect to.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.sock.local_addr()
+    }
+
+    /// The port clients connect to: which relay a note is of.
+    pub(crate) fn port(&self) -> u16 {
+        self.sock.local_addr().map_or(0, |a| a.port())
     }
 
     /// How many clients are in.
