@@ -2,7 +2,7 @@
 //! player, shown until hidden. A full update drops them, so the hub sends them again after every
 //! one; a note gone from the room is hidden.
 
-use super::Player;
+use super::player::Player;
 use crate::decode::Decoder;
 use crate::net::bits::BitBuf;
 use serde::{Deserialize, Serialize};
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn a_note_on_a_dead_player_is_no_bubble_until_they_respawn() {
         use crate::output::Team;
-        let dead = |c: &super::super::Cursor| {
+        let dead = |c: &super::super::cursor::Cursor| {
             let players = c.dec.extractor().snapshot().players;
             players.iter().find(|p| !p.alive && matches!(p.team, Team::Red | Team::Blue)).map(|p| p.id.0)
         };

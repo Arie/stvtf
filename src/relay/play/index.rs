@@ -9,7 +9,8 @@
 //! The checkpoints are made on the side, by a thread decoding the whole demo as soon as playback
 //! opens it, and following it as it grows (a live match). Relays playing the same demo share them.
 
-use super::{Cursor, NOT_A_FRAME, RECENT};
+use super::cursor::Cursor;
+use super::{NOT_A_FRAME, RECENT};
 use crate::lock;
 use crate::net::bits::BitBuf;
 use anyhow::Result;
@@ -44,7 +45,7 @@ pub(super) struct Checkpoint {
 impl Checkpoint {
     /// The string table changes up to it, as a client given them would have them.
     pub(super) fn tables(&self) -> Vec<BitBuf> {
-        super::owned(&self.tables)
+        super::cursor::owned(&self.tables)
     }
 }
 

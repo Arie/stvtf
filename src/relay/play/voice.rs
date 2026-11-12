@@ -1,7 +1,7 @@
 //! Voice from outside the match (a team's Discord, through stv.tf), sent to the clients in the game
 //! as a player's own: `svc_VoiceData` in their slot, in Steam's framing, as it comes.
 
-use super::Player;
+use super::player::Player;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 

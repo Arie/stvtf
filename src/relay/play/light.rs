@@ -2,7 +2,7 @@
 //! (and so to those who join), put out when the room has none. The clients have one such light:
 //! each sent takes the last one's place.
 
-use super::Player;
+use super::player::Player;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
