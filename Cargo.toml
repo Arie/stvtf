@@ -3,7 +3,7 @@ name = "stvtf"
 version = "0.1.0"
 edition = "2024"
 description = "Headless SourceTV spectator for TF2 that emits top-down overview data as JSON lines"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 tf-demo-parser = { version = "0.7.2", git = "https://codeberg.org/Kanarie/parser.git", rev = "579f9f6bb32a93d019f760928535383f2e541c52", features = ["write"] }
