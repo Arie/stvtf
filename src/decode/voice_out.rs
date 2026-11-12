@@ -11,6 +11,8 @@ const STEAMID64: u64 = 76_561_197_960_265_728;
 /// Steam's chunk types: the sample rate, and Opus with loss concealment.
 const SAMPLE_RATE: u8 = 0x0B;
 const OPUS_PLC: u8 = 0x06;
+/// In place of a frame's length: the speaker stopped, the next frame is number 0.
+const END: u16 = 0xFFFF;
 
 /// The most bytes of frames (each with its length and number) in one message: a client takes
 /// some four thousand of voice whole, and drops what is longer.
@@ -54,7 +56,19 @@ impl Decoder {
         frames: &[Vec<u8>],
         seq: &mut u16,
     ) -> Option<BitBuf> {
-        let (slot, account) = match (user, spare) {
+        let (slot, account) = self.voice_slot(user, spare, steamid)?;
+        steam_voice(slot, account, rate, frames, seq)
+    }
+
+    /// The end of what [`Self::voice_message`] sent for the same speaker.
+    pub(crate) fn voice_end(&self, user: Option<u16>, spare: Option<u8>, steamid: &str, rate: u16) -> Option<BitBuf> {
+        let (slot, account) = self.voice_slot(user, spare, steamid)?;
+        message(slot, account, rate, END.to_le_bytes().to_vec())
+    }
+
+    /// The slot and account a voice is sent in.
+    fn voice_slot(&self, user: Option<u16>, spare: Option<u8>, steamid: &str) -> Option<(u8, u64)> {
+        Some(match (user, spare) {
             (Some(user), _) => {
                 let snapshot = self.extractor().snapshot();
                 let p = snapshot.players.iter().find(|p| p.id.0 == user)?;
@@ -64,8 +78,7 @@ impl Decoder {
             (None, None) => {
                 (u8::try_from(self.extractor().sourcetv_entity()?.checked_sub(1)?).ok()?, account(steamid).unwrap_or(0))
             }
-        };
-        steam_voice(slot, account, rate, frames, seq)
+        })
     }
 }
 
@@ -88,6 +101,11 @@ pub(crate) fn steam_voice(slot: u8, account: u64, rate: u16, frames: &[Vec<u8>],
         return None;
     }
     *seq = next;
+    message(slot, account, rate, chunk)
+}
+
+/// `svc_VoiceData` in `slot`: Steam's framing round an Opus `chunk`.
+fn message(slot: u8, account: u64, rate: u16, chunk: Vec<u8>) -> Option<BitBuf> {
     let mut data = STEAMID64.checked_add(account)?.to_le_bytes().to_vec();
     data.push(SAMPLE_RATE);
     data.extend(rate.to_le_bytes());

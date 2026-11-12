@@ -44,7 +44,21 @@ pub(super) struct Sequences {
     spare: HashMap<String, (u8, Instant)>,
     /// Who has `SourceTV`'s slot, and when they last talked.
     sourcetv: Option<(String, Instant)>,
+    /// Those being sent, until they stop.
+    talking: HashMap<Slot, Talking>,
 }
+
+/// A speaker being sent: as whom, and when last.
+struct Talking {
+    last: Instant,
+    user: Option<u16>,
+    spare: Option<u8>,
+    steamid: String,
+    rate: u16,
+}
+
+/// How long without frames ends a speaker's burst: posts come 100 ms apart.
+const STOPPED: Duration = Duration::from_millis(300);
 
 /// How long `SourceTV`'s slot stays its last speaker's after their last frame, and a slot nobody
 /// is in.
@@ -52,6 +66,22 @@ const SLOT_HELD: Duration = Duration::from_millis(400);
 const SPARE_HELD: Duration = Duration::from_secs(30);
 
 impl Sequences {
+    fn talks(&mut self, slot: Slot, who: Talking) {
+        self.talking.insert(slot, who);
+    }
+
+    /// Those who stopped, once each; their numbering starts over.
+    fn stopped(&mut self, now: Instant) -> Vec<Talking> {
+        let gone: Vec<Slot> = self
+            .talking
+            .iter()
+            .filter(|(_, t)| now.saturating_duration_since(t.last) >= STOPPED)
+            .map(|(s, _)| *s)
+            .collect();
+        self.next.retain(|s, _| !gone.contains(s));
+        gone.iter().filter_map(|s| self.talking.remove(s)).collect()
+    }
+
     /// The slot for `steamid`, who is no player, of those nobody is in now (`free`): theirs while
     /// it stays free, else the first no other voice has. A client plays a voice in such a slot
     /// as of someone unconnected. None when there is none left.
@@ -106,6 +136,14 @@ impl Player<'_> {
             }
             if sent && (self.voice_seq.next.len() < MAX_SPEAKERS || self.voice_seq.next.contains_key(&slot)) {
                 self.voice_seq.next.insert(slot, seq);
+                let who = Talking { last: now, user: v.user, spare, steamid: v.steamid.clone(), rate: v.rate };
+                self.voice_seq.talks(slot, who);
+            }
+        }
+        // As the game ends a voice: without it a client's decoder is left mid-speech.
+        for t in self.voice_seq.stopped(now) {
+            if let Some(m) = c.dec.voice_end(t.user, t.spare, &t.steamid, t.rate) {
+                hub.tell_active_now(&m);
             }
         }
     }
@@ -202,6 +240,34 @@ mod tests {
         let second = c.dec.voice_message(Some(user), None, "", 24000, &[vec![3]], &mut seq).unwrap();
         assert_eq!(numbers(&voice_data(&c.dec, &first).1), [0, 1]);
         assert_eq!(numbers(&voice_data(&c.dec, &second).1), [2]);
+    }
+
+    #[test]
+    fn a_speaker_who_stopped_is_ended_and_numbered_from_nought_again() {
+        use std::time::{Duration, Instant};
+        let (mut seqs, now) = (super::Sequences::default(), Instant::now());
+        let slot = super::Slot::Player(7);
+        seqs.next.insert(slot, 5);
+        seqs.talks(slot, super::Talking { last: now, user: Some(7), spare: None, steamid: String::new(), rate: 24000 });
+        assert!(seqs.stopped(now + Duration::from_millis(150)).is_empty(), "between two posts");
+        assert_eq!(seqs.next.get(&slot), Some(&5));
+        let ended = seqs.stopped(now + Duration::from_millis(400));
+        assert_eq!(ended.iter().map(|t| t.user).collect::<Vec<_>>(), [Some(7)]);
+        assert_eq!(seqs.next.get(&slot), None);
+        assert!(seqs.stopped(now + Duration::from_secs(1)).is_empty(), "ended once");
+    }
+
+    #[test]
+    fn the_end_of_a_voice_is_steams_marker_alone() {
+        let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
+        let p = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
+        let msg = c.dec.voice_end(Some(p.id.0), None, "", 24000).unwrap();
+        let (client, data) = voice_data(&c.dec, &msg);
+        assert_eq!(u32::from(client) + 1, p.ent);
+        // SteamID (8), rate chunk (3), then the Opus chunk: type, length 2, the marker.
+        assert_eq!(data[11..data.len() - 4], [0x06, 2, 0, 0xFF, 0xFF]);
+        let (body, crc) = data.split_at(data.len() - 4);
+        assert_eq!(crc, crc32fast::hash(body).to_le_bytes());
     }
 
     #[test]
