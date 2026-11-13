@@ -219,11 +219,13 @@ impl<'o> Session<'o> {
         self.broke.get_or_insert((reason, fatal));
     }
 
-    fn send(&mut self, reliable: Option<&BitBuf>, unreliable: Option<&BitBuf>) {
+    /// Sends a packet; its sequence.
+    fn send(&mut self, reliable: Option<&BitBuf>, unreliable: Option<&BitBuf>) -> i32 {
+        let sequence = self.out_seq;
         self.out_seq += 1;
-        let Some(sock) = self.sock else { return };
+        let Some(sock) = self.sock else { return sequence };
         let header = OutHeader {
-            sequence: self.out_seq - 1,
+            sequence,
             ack: self.rx.in_seq,
             challenge: self.challenge,
             reliable_state: self.in_reliable_state,
@@ -232,6 +234,7 @@ impl<'o> Session<'o> {
         if let Err(e) = sock.send(&pkt) {
             self.break_with(format!("socket error: {e}"), None);
         }
+        sequence
     }
 
     fn send_reliable(&mut self, body: &BitBuf, subchannel: Option<u8>) {
@@ -242,14 +245,14 @@ impl<'o> Session<'o> {
         });
         let region = messages::reliable_region(body, sub);
         self.out_reliable_state ^= 1 << sub;
-        self.send(Some(&region), None);
-        self.pending = Some(Pending { region, subchannel: sub, seq: self.out_seq - 1 });
+        let seq = self.send(Some(&region), None);
+        self.pending = Some(Pending { region, subchannel: sub, seq });
     }
 
     fn transmit_pending(&mut self) {
         if let Some(p) = self.pending.take() {
-            self.send(Some(&p.region), None);
-            self.pending = Some(Pending { seq: self.out_seq - 1, ..p });
+            let seq = self.send(Some(&p.region), None);
+            self.pending = Some(Pending { seq, ..p });
         }
     }
 
