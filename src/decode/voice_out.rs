@@ -3,9 +3,8 @@
 
 use super::Decoder;
 use crate::net::bits::{BitBuf, BitWriter};
-use crate::net::messages::TYPE_BITS;
+use crate::net::messages::{SVC_VOICEDATA, TYPE_BITS};
 
-const SVC_VOICEDATA: u32 = 15;
 /// Steam's `SteamID64` of account 0.
 const STEAMID64: u64 = 76_561_197_960_265_728;
 /// Steam's chunk types: the sample rate, and Opus with loss concealment.
@@ -13,6 +12,8 @@ const SAMPLE_RATE: u8 = 0x0B;
 const OPUS_PLC: u8 = 0x06;
 /// In place of a frame's length: the speaker stopped, the next frame is number 0.
 const END: u16 = 0xFFFF;
+/// What goes before each frame: its length and its number.
+const FRAME_HEADER: usize = 4;
 
 /// The most bytes of frames (each with its length and number) in one message: a client takes
 /// some four thousand of voice whole, and drops what is longer.
@@ -27,7 +28,7 @@ fn account(steamid: &str) -> Option<u64> {
 pub(crate) fn packs(frames: &[Vec<u8>]) -> impl Iterator<Item = &[Vec<u8>]> {
     let (mut parts, mut from, mut size) = (Vec::new(), 0, 0);
     for (i, f) in frames.iter().enumerate() {
-        let takes = f.len() + 4;
+        let takes = f.len() + FRAME_HEADER;
         if takes > MAX_CHUNK {
             parts.push(&frames[from..i]);
             (from, size) = (i + 1, 0);
@@ -149,7 +150,7 @@ mod tests {
         let frames: Vec<Vec<u8>> = (0..60u8).map(|i| vec![i; 100]).collect();
         let parts: Vec<&[Vec<u8>]> = packs(&frames).collect();
         assert!(parts.len() > 1);
-        assert!(parts.iter().all(|p| p.iter().map(|f| f.len() + 4).sum::<usize>() <= MAX_CHUNK));
+        assert!(parts.iter().all(|p| p.iter().map(|f| f.len() + FRAME_HEADER).sum::<usize>() <= MAX_CHUNK));
         assert_eq!(parts.concat(), frames, "all of them, in order");
         // One too long for any packet is left out; those around it go.
         let frames = [vec![1], vec![0; MAX_CHUNK], vec![2]];

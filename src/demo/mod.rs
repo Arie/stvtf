@@ -6,6 +6,7 @@
 //! stream; data tables, string tables and console commands a length and the data; user commands
 //! a sequence, a length and the data; sync ticks nothing. A stop packet ends it.
 
+use crate::net::messages::{SVC_CLASSINFO, TYPE_BITS};
 use anyhow::{Context, Result, bail};
 
 mod record;
@@ -40,13 +41,11 @@ const DATA_TABLES: u8 = 6;
 const STOP: u8 = 7;
 const STRING_TABLES: u8 = 8;
 
-/// The message a signon's class list is (`svc_ClassInfo`), in the six bits a message starts with.
-const SVC_CLASSINFO: u8 = 10;
-
-/// Whether a signon packet opens with the class list. The data tables go just before that one:
-/// TF2 playing a demo itself takes them nowhere else (first of all, it crashes once loaded).
+/// Whether a signon packet opens with the class list (`svc_ClassInfo`). The data tables go just
+/// before that one: TF2 playing a demo itself takes them nowhere else (first of all, it crashes
+/// once loaded).
 pub(crate) fn opens_with_classes(signon: &[u8]) -> bool {
-    signon.first().is_some_and(|b| b & 0x3f == SVC_CLASSINFO)
+    signon.first().is_some_and(|b| u32::from(*b) & ((1 << TYPE_BITS) - 1) == SVC_CLASSINFO)
 }
 
 /// What a demo's header says.
@@ -515,7 +514,7 @@ mod tests {
         // As older recordings have it: the tables first. TF2 will not play that.
         w.data_tables(b"tables").unwrap();
         w.signon(b"one").unwrap();
-        w.signon(&[SVC_CLASSINFO, 1]).unwrap();
+        w.signon(&[SVC_CLASSINFO as u8, 1]).unwrap();
         for tick in [1000, 1004, 1010] {
             w.message(tick, b"game").unwrap();
         }
@@ -536,7 +535,7 @@ mod tests {
         }
         assert_eq!(
             before,
-            [b"one".to_vec(), b"tables".to_vec(), vec![SVC_CLASSINFO, 1]],
+            [b"one".to_vec(), b"tables".to_vec(), vec![SVC_CLASSINFO as u8, 1]],
             "the tables before the class list"
         );
         // A speaker's frames are numbered on, in the order they are heard.
