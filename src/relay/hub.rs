@@ -103,11 +103,7 @@ impl Hub {
         for c in self.clients.values_mut() {
             if play && c.in_signon() && !c.reconnecting {
                 // Part-way through the last demo's, come in as the switch went: it reconnects too.
-                c.queue.clear();
-                c.queue.push(reconnect.clone());
-                c.gate = Some(Signon::Connected);
-                c.signing = false;
-                c.reconnecting = true;
+                c.ask_to_reconnect(&reconnect);
             } else {
                 c.queue.retain(|m| *m == reconnect);
                 c.gate = c.gate.filter(|g| *g == Signon::Connected);
@@ -123,11 +119,7 @@ impl Hub {
     pub(super) fn reconnect_all(&mut self) {
         let reconnect = messages::signonstate(Signon::Connected, -1);
         for c in self.clients.values_mut().filter(|c| c.signing || c.phase != Phase::Signon) {
-            c.queue.clear();
-            c.queue.push(reconnect.clone());
-            c.gate = Some(Signon::Connected);
-            c.signing = false;
-            c.reconnecting = true;
+            c.ask_to_reconnect(&reconnect);
         }
     }
 

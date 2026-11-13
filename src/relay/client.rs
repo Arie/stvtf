@@ -150,6 +150,16 @@ impl Client {
         }
     }
 
+    /// Tells the client to reconnect with `reconnect` (`net_SignonState(CONNECTED)`) in place of
+    /// whatever it was still to be sent; it gets no more of the log until it says it has.
+    pub(super) fn ask_to_reconnect(&mut self, reconnect: &BitBuf) {
+        self.queue.clear();
+        self.queue.push(reconnect.clone());
+        self.gate = Some(Signon::Connected);
+        self.signing = false;
+        self.reconnecting = true;
+    }
+
     /// Told to reconnect, or sent part of a signon, and not through it: another signon would crash
     /// it.
     pub(super) fn in_signon(&self) -> bool {
