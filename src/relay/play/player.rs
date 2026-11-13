@@ -243,99 +243,128 @@ impl Player<'_> {
         if self.restart_if_laser_loaded_twice() {
             return Ok(());
         }
-        let Some(c) = &mut self.cur else { return Ok(()) };
+        let Some(c) = &self.cur else { return Ok(()) };
         let interval = c.dec.tick_interval();
-        let first = c.first.unwrap_or(i64::MIN);
-        let wanted = i64::from(want.tick_now(interval));
-        // Not before the demo starts.
-        let target = if want.from_start { first.saturating_add(wanted) } else { wanted.max(first) };
-        let jump = (JUMP.as_secs_f32() / interval.max(1e-3)) as i64;
-        // A seek, not playback going on: a jump may find more written than the last.
+        let target = target_tick(c, want, interval);
+        let jump = jump_ticks(interval);
+        let behind = c.started && target + jump < c.tick();
+        self.follow_target(want, target, jump);
+        if behind {
+            return self.jump_back(want, target);
+        }
+        self.follow_pause(want);
+        self.jump_ahead(want, target, jump)?;
+        if self.relay.hub().wants_keyframe() && self.send_keyframe(interval).is_break() {
+            return Ok(());
+        }
+        self.cue(want.camera);
+        self.advance(want, target);
+        Ok(())
+    }
+
+    /// Takes `target` as the moment wanted: one far from the last is a seek, which may find more
+    /// written than the last jump did.
+    fn follow_target(&mut self, want: &Want, target: i64, jump: i64) {
         if self.last_target.is_none_or(|t| target.abs_diff(t) > jump.unsigned_abs()) {
             self.dry = false;
         }
         self.last_target = Some(target);
         if *crate::relay::TRACE && self.traced.is_none_or(|t| t.elapsed() >= crate::relay::TRACE_EVERY) {
             self.traced = Some(Instant::now());
-            trace!("playing tick {}, wanted {target}, paused {}, speed {}", c.tick(), want.paused, want.speed);
+            let tick = self.cur.as_ref().map_or(0, Cursor::tick);
+            trace!("playing tick {tick}, wanted {target}, paused {}, speed {}", want.paused, want.speed);
         }
-        if c.started && target + jump < c.tick() {
-            return self.jump_back(want, target);
+    }
+
+    /// The room paused or went on: the clients are told the match's own pause, and get a keyframe.
+    fn follow_pause(&mut self, want: &Want) {
+        if want.paused == self.paused {
+            return;
         }
-        if want.paused != self.paused {
-            trace!("paused: {}", want.paused);
-            self.paused = want.paused;
-            let demo_paused = self.cur.as_ref().is_some_and(|c| c.paused);
-            let mut hub = self.relay.hub();
-            hub.queue_pause(demo_paused);
-            // A full update with the round timers held, or as they are going on: one that needs no
-            // frame a client may lack (one just in has only its own full update).
-            drop(hub);
+        trace!("paused: {}", want.paused);
+        self.paused = want.paused;
+        let demo_paused = self.cur.as_ref().is_some_and(|c| c.paused);
+        self.relay.hub().queue_pause(demo_paused);
+        // A full update with the round timers held, or as they are going on: one that needs no
+        // frame a client may lack (one just in has only its own full update).
+        self.rekey();
+    }
+
+    /// Decodes on to `target` without sending when playback is more than `jump` behind it and the
+    /// demo has it written, from a checkpoint if one is well past: every client gets a keyframe.
+    fn jump_ahead(&mut self, want: &Want, target: i64, jump: i64) -> Result<()> {
+        let Some(c) = &mut self.cur else { return Ok(()) };
+        if !(c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target)) {
+            return Ok(());
+        }
+        let (from, took) = (c.tick(), Instant::now());
+        // From a checkpoint well past where it is, if there is one: the clients get the string
+        // table changes passed over with it.
+        let mark = self.index.as_ref().and_then(|i| i.before(target)).filter(|m| i64::from(m.tick) > from + jump);
+        if let Some(m) = &mark {
+            self.relay.hub().add_table_changes(&m.tables());
+            *c = Cursor::restore(&want.demo, m)?;
+        }
+        let (decoded, dry) = skim(c, &self.relay.hub, target);
+        let decoded = decoded + usize::from(mark.is_some());
+        log!(
+            ":{} jump ahead from {from} to {} in {} ms, {} clients",
+            self.relay.port(),
+            c.tick(),
+            took.elapsed().as_millis(),
+            self.relay.clients()
+        );
+        self.dry = dry;
+        if decoded > 0 {
             self.rekey();
         }
-        let Some(c) = &mut self.cur else { return Ok(()) };
-        if c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target) {
-            let (from, took) = (c.tick(), Instant::now());
-            // From a checkpoint well past where it is, if there is one: the clients get the string
-            // table changes passed over with it.
-            let mark = self.index.as_ref().and_then(|i| i.before(target)).filter(|m| i64::from(m.tick) > from + jump);
-            if let Some(m) = &mark {
-                self.relay.hub().add_table_changes(&m.tables());
-                *c = Cursor::restore(&want.demo, m)?;
-            }
-            let (decoded, dry) = skim(c, &self.relay.hub, target);
-            let decoded = decoded + usize::from(mark.is_some());
-            log!(
-                ":{} jump ahead from {from} to {} in {} ms, {} clients",
-                self.relay.port(),
-                c.tick(),
-                took.elapsed().as_millis(),
-                self.relay.clients()
-            );
-            self.dry = dry;
-            if decoded > 0 {
-                self.relay.hub().rekey_all(Instant::now());
-                self.rekeyed = true;
-                self.floor = None;
-            }
+        Ok(())
+    }
+
+    /// A keyframe for the clients waiting for one: of the frame the next one builds on, with the
+    /// frames since. Break while their clock is first put past their beams.
+    fn send_keyframe(&mut self, interval: f32) -> ControlFlow<()> {
+        let Some(at) = self.cur.as_ref().map(Cursor::tick) else { return ControlFlow::Continue(()) };
+        if self.flush(at, interval) {
+            return ControlFlow::Break(());
         }
-        if self.relay.hub().wants_keyframe() {
-            let at = c.tick();
-            if self.flush(at, interval) {
-                return Ok(());
-            }
-            let Some(c) = &mut self.cur else { return Ok(()) };
-            // Of the frame the next one builds on, which from a live server is often a few ticks
-            // back: at the end of what is written so far, it waits for that frame.
-            c.peek();
-            let next = c.next_frame();
-            if next.is_some() || c.ended {
-                let key = if self.paused { c.dec.keyframe_held(next) } else { c.dec.keyframe(next) };
-                if let Some((tick, key)) = key {
-                    let mut since = c.dec.catch_up(tick, c.recent.make_contiguous());
-                    // The round's end shown, or hidden, as at this moment.
-                    since.extend(c.dec.round_event());
-                    // Its clock may have gone back: the timers, waiting for a time it passed,
-                    // redraw.
-                    since.extend(c.dec.update_timer());
-                    let mut hub = self.relay.hub();
-                    hub.send_keyframe(&key, &since, c.paused);
-                    hub.reshow_notes(Instant::now());
-                    drop(hub);
-                    self.floor = Some(super::follow::floor_after(self.floor, &c.dec, tick, &since));
-                    if std::mem::take(&mut self.rekeyed) {
-                        self.clock = Some((f64::from(tick) * f64::from(interval), Instant::now()));
-                    }
-                    self.problem = None;
-                    // Those just in are told where the camera is.
-                    self.cued = None;
-                } else if c.started {
-                    self.problem = Some("this demo cannot be followed from a full update here".into());
-                }
-            }
+        let Some(c) = &mut self.cur else { return ControlFlow::Continue(()) };
+        // Of the frame the next one builds on, which from a live server is often a few ticks
+        // back: at the end of what is written so far, it waits for that frame.
+        c.peek();
+        let next = c.next_frame();
+        if next.is_none() && !c.ended {
+            return ControlFlow::Continue(());
         }
-        self.cue(want.camera);
-        let Some(c) = &mut self.cur else { return Ok(()) };
+        let key = if self.paused { c.dec.keyframe_held(next) } else { c.dec.keyframe(next) };
+        let Some((tick, key)) = key else {
+            if c.started {
+                self.problem = Some("this demo cannot be followed from a full update here".into());
+            }
+            return ControlFlow::Continue(());
+        };
+        let mut since = c.dec.catch_up(tick, c.recent.make_contiguous());
+        // The round's end shown, or hidden, as at this moment.
+        since.extend(c.dec.round_event());
+        // Its clock may have gone back: the timers, waiting for a time it passed, redraw.
+        since.extend(c.dec.update_timer());
+        let mut hub = self.relay.hub();
+        hub.send_keyframe(&key, &since, c.paused);
+        hub.reshow_notes(Instant::now());
+        drop(hub);
+        self.floor = Some(super::follow::floor_after(self.floor, &c.dec, tick, &since));
+        if std::mem::take(&mut self.rekeyed) {
+            self.clock = Some((f64::from(tick) * f64::from(interval), Instant::now()));
+        }
+        self.problem = None;
+        // Those just in are told where the camera is.
+        self.cued = None;
+        ControlFlow::Continue(())
+    }
+
+    /// Plays the next frame if it is due, passes over a packet that is no frame, or waits a moment.
+    fn advance(&mut self, want: &Want, target: i64) {
+        let Some(c) = &mut self.cur else { return };
         match c.next_tick() {
             // Not a frame (a user command of a POV demo, say): passed over, paused or not.
             Some(NOT_A_FRAME) => c.next = None,
@@ -349,8 +378,19 @@ impl Player<'_> {
             Some(next) if !want.paused && next <= target => self.play_frame(want.camera),
             _ => std::thread::sleep(NAP),
         }
-        Ok(())
     }
+}
+
+/// The server tick `want` wants now, not before the demo starts.
+fn target_tick(c: &Cursor, want: &Want, interval: f32) -> i64 {
+    let first = c.first.unwrap_or(i64::MIN);
+    let wanted = i64::from(want.tick_now(interval));
+    if want.from_start { first.saturating_add(wanted) } else { wanted.max(first) }
+}
+
+/// The ticks in [`JUMP`]: off by more, playback jumps.
+fn jump_ticks(interval: f32) -> i64 {
+    (JUMP.as_secs_f32() / interval.max(1e-3)) as i64
 }
 
 impl Player<'_> {
