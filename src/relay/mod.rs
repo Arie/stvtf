@@ -254,9 +254,9 @@ impl Relay {
             .collect();
         let opt = Options { snapshot_hz: 0.0, ..Options::default() };
         self.announce(emit)?;
-        let hold = || self.hub().hold();
+        let wait = || self.hub().replay_waits();
         self.serving(stop, || {
-            session::replay_paced(challenge, &datagrams, tables, &opt, speed, self, &hold, stop, emit)
+            session::replay_paced(challenge, &datagrams, tables, &opt, speed, self, &wait, stop, emit)
         })
     }
 

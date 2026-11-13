@@ -84,7 +84,7 @@ impl Hub {
         let reconnect = messages::signonstate(Signon::Connected, -1);
         let play = matches!(self.mode, Mode::Play { .. });
         for c in self.clients.values_mut() {
-            if play && c.in_signon() && !c.reconnecting {
+            if play && c.mid_signon() && !c.reconnecting {
                 // Part-way through the last demo's, come in as the switch went: it reconnects too.
                 c.ask_to_reconnect(&reconnect);
             } else {
@@ -101,7 +101,7 @@ impl Hub {
     /// says it has: a game client sent a new signon in the middle of a game crashes.
     pub(super) fn reconnect_all(&mut self) {
         let reconnect = messages::signonstate(Signon::Connected, -1);
-        for c in self.clients.values_mut().filter(|c| c.signing || c.phase != Phase::Signon) {
+        for c in self.clients.values_mut().filter(|c| c.past_connected || c.phase != Phase::Signon) {
             c.ask_to_reconnect(&reconnect);
         }
     }
@@ -379,7 +379,7 @@ impl Hub {
             return;
         }
         // Not started on a signon the next demo waits to replace: it would not get through it.
-        if self.signon_held.is_none() || c.in_signon() || c.phase != Phase::Signon {
+        if self.signon_held.is_none() || c.mid_signon() || c.phase != Phase::Signon {
             c.pump(&self.backlog);
         }
         // An active client hears from us with the next server datagram. During signon its acks
@@ -457,7 +457,7 @@ impl Hub {
     /// Whether another signon waits: a client is in one. For [`SIGNON_HOLD`] at most; then those
     /// still in one are dropped, told why, and it goes.
     pub(super) fn signon_waits(&mut self, now: Instant) -> bool {
-        if !self.clients.values().any(Client::in_signon) {
+        if !self.clients.values().any(Client::mid_signon) {
             self.signon_held = None;
             return false;
         }
@@ -470,7 +470,7 @@ impl Hub {
         let port = self.port;
         let out = &mut self.out;
         self.clients.retain(|addr, c| {
-            if !c.in_signon() {
+            if !c.mid_signon() {
                 return true;
             }
             log!(":{port} {} ({}) still in its signon: dropped", c.name.escape_debug(), whence(*addr));
@@ -496,7 +496,7 @@ impl Hub {
     }
 
     /// A paced replay waits for a client, and for clients signing on.
-    pub(super) fn hold(&self) -> bool {
-        !self.admission.seen_client || self.clients.values().any(Client::signing_on)
+    pub(super) fn replay_waits(&self) -> bool {
+        !self.admission.seen_client || self.clients.values().any(Client::has_signon_pending)
     }
 }

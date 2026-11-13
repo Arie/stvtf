@@ -55,7 +55,7 @@ pub(super) struct Client {
     /// The client said goodbye.
     pub(super) gone: Option<String>,
     /// It went on past CONNECTED in the current signon: a new signon must make it reconnect.
-    pub(super) signing: bool,
+    pub(super) past_connected: bool,
     /// Told to reconnect, and not yet said it has.
     pub(super) reconnecting: bool,
 }
@@ -85,7 +85,7 @@ impl Client {
             last_heard: now,
             last_sent: now,
             gone: None,
-            signing: false,
+            past_connected: false,
             reconnecting: false,
         }
     }
@@ -155,7 +155,7 @@ impl Client {
                 match m {
                     ClientMsg::Signon(s) => {
                         trace!("{from} signon {s:?} at {} ms", now.duration_since(self.connected).as_millis());
-                        self.signing |= s > Signon::Connected;
+                        self.past_connected |= s > Signon::Connected;
                         self.reconnecting &= s < Signon::Connected;
                         if self.gate.is_some_and(|g| s >= g) {
                             self.gate = None;
@@ -188,20 +188,20 @@ impl Client {
         self.queue.clear();
         self.queue.push(reconnect.clone());
         self.gate = Some(Signon::Connected);
-        self.signing = false;
+        self.past_connected = false;
         self.reconnecting = true;
     }
 
     /// Told to reconnect, or sent part of a signon, and not through it: another signon would crash
     /// it.
-    pub(super) fn in_signon(&self) -> bool {
+    pub(super) fn mid_signon(&self) -> bool {
         self.reconnecting
             || (self.phase == Phase::Signon
-                && (self.signing || self.cursor > 0 || !self.queue.is_empty() || self.outgoing.is_some()))
+                && (self.past_connected || self.cursor > 0 || !self.queue.is_empty() || self.outgoing.is_some()))
     }
 
-    /// Still signing on, with more to send or an echo to wait for: a paced replay holds for it.
-    pub(super) fn signing_on(&self) -> bool {
+    /// Still signing on, with more to send or an echo to wait for: a paced replay waits for it.
+    pub(super) fn has_signon_pending(&self) -> bool {
         self.phase == Phase::Signon && (self.gate.is_some() || !self.queue.is_empty() || self.outgoing.is_some())
     }
 }

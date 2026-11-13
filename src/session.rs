@@ -593,7 +593,7 @@ pub fn replay(
 }
 
 /// Replays one recorded session at the pace it was recorded, `speed` times as fast, into a
-/// tap. `hold` pauses the clock while it holds (a relay client still signing on).
+/// tap. `wait` pauses the clock while it says so (a relay client still signing on).
 #[allow(clippy::too_many_arguments, reason = "internal plumbing")]
 pub(crate) fn replay_paced(
     challenge: u32,
@@ -602,7 +602,7 @@ pub(crate) fn replay_paced(
     opt: &Options,
     speed: f64,
     tap: &dyn Tap,
-    hold: &dyn Fn() -> bool,
+    wait: &dyn Fn() -> bool,
     stop: &AtomicBool,
     emit: &mut dyn FnMut(Line),
 ) -> Result<()> {
@@ -618,7 +618,7 @@ pub(crate) fn replay_paced(
             if stop.load(Ordering::Relaxed) {
                 return Ok(Next::Stop);
             }
-            if hold() {
+            if wait() {
                 let paused = Instant::now();
                 std::thread::sleep(PACE_POLL);
                 start += paused.elapsed();
