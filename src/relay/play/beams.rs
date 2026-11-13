@@ -122,13 +122,15 @@ impl Player<'_> {
         if n == 0 {
             return;
         }
-        k.tokens -= n as f64;
         let life = KEPT_EVERY.as_secs_f32();
         let show: Vec<Beam> = due[..n].iter().map(|(_, b)| Beam { life, ..**b }).collect();
-        for b in &show {
-            k.sent.insert(beam_key(b), now);
-        }
+        // Shown only when there is a sprite to draw them with: else they are due again at once.
         if let Some(msgs) = self.beam_messages(&show) {
+            let k = &mut self.kept;
+            k.tokens -= n as f64;
+            for b in &show {
+                k.sent.insert(beam_key(b), now);
+            }
             let mut hub = self.relay.hub();
             for m in &msgs {
                 hub.tell_active_now(m);
