@@ -286,7 +286,8 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
   to on whichever address answers the challenge: one on the same host behind Docker answers from
   the bridge gateway.
 - `src/session.rs`: the signon state machine, reliable send/ack, tick acks every 100 ms, silence
-  timeout and in-place map changes; the same driver runs live and over captures.
+  timeout and in-place map changes; the same driver runs live and over captures. A reliable
+  message goes again only when the server's ack shows it lost, never on a timer.
 - `src/decode`: [tf-demo-parser](https://crates.io/crates/tf-demo-parser) parses each message
   stream with the same-build send tables; `extract/` turns its game state into the JSON above.
 
@@ -326,6 +327,8 @@ How it works (nothing is re-encoded: clients get the server's own message bits):
   update (tick ack -1), at most once every 2 s, and passes it on. From then on, each datagram's
   unreliable part goes to the client unchanged.
 - A map change restarts the signon on the relay's connection, and every client signs on again.
+- A client that has not been heard from is dropped: after 120 s while it signs on (loading a map
+  is silent), after 30 s in the game.
 - A client in the game gets exactly one packet per server packet, as from the STV itself:
   `net_graph 5` shows the same rates and no packets without entities. Reliable data rides
   along, and only a server silent for 100 ms gets a keepalive in between. Signon transfers go
@@ -348,7 +351,8 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   speed). A checkpoint is the string table changes so far, a full update and the frames after it,
   and where the file goes on. A client is made to sign on again (`net_SignonState(CONNECTED)`
   first, as a server's reconnect) only for another demo file, and never while it is still in a
-  signon: the next demo waits until every client is through, 30 s at most. After a jump back it
+  signon: the next demo waits until every client is through, 30 s at most, and one still signing on
+  then is dropped, with a reason (it can `retry`), not signed on a second time. After a jump back it
   has the string tables of later on: where an entry of `userinfo` (a player left or joined) or
   `instancebaseline` changed value since, it is first sent those entries as they were
   (`svc_UpdateStringTable`), and the stream's own changes again when playback comes to them.
@@ -364,7 +368,9 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   class's static baseline, as a server writes one. It is of the frame the next one builds on
   (in a recorded live session, the last one stvtf acked, often a few ticks back; the decoder
   keeps the frames since), followed by the frames played since then, so the demo's own frames
-  build on what the client has. Nothing is asked of a game server.
+  build on what the client has. Nothing is asked of a game server. A frame of the demo the clients
+  in the game cannot follow (a full update, or a delta from a frame older than they may hold) is
+  replaced by such a full update too.
 - Paused, no frames go out, and the clients get `svc_SetPause`.
 - With nobody in, nothing is decoded, and after a minute what was decoded is dropped.
 - A demo whose class tables are not this build's cannot be played: a game client builds its
@@ -389,8 +395,8 @@ the 64-datagram window gets no entities, since a capture cannot be asked for a f
 
 - Each instance takes one STV slot. One that vanishes without a goodbye holds it for 300 s, so
   the tool always disconnects when it stops or reconnects.
-- After a map change the server may drop the client or restart signon a few times within
-  `tv_delay`; the tool follows until the delayed stream reaches the new map.
+- After a map change the server sends the tool a packet every 2 s until the delayed stream reaches
+  the new map, `tv_delay` later; the tool waits through it.
 - SourceTV relays often send deltas from a frame a few ticks back, so a projectile that came and
   went in between is never deleted. Like a game client, the tool builds each frame's entities from
   the base frame's and drops the projectiles and buildings left out of it.
