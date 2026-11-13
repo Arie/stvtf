@@ -264,7 +264,8 @@ impl Decoder {
         out
     }
 
-    /// The server tick message stream `data` is of (its `net_Tick`), read, not decoded into anything.
+    /// The server tick message stream `data` is of (its `net_Tick`), read, not decoded into
+    /// anything.
     pub(crate) fn frame_tick(&self, data: &[u8]) -> Option<u32> {
         self.find_message(data, MessageType::NetTick, |stream, _| {
             tf_demo_parser::demo::message::NetTickMessage::read(stream).ok().map(|m| u32::from(m.tick))
@@ -289,7 +290,8 @@ impl Decoder {
         })
     }
 
-    /// `read` of the first message of type `kind` in message stream `data`, the ones before it skipped.
+    /// `read` of the first message of type `kind` in message stream `data`, the ones before it
+    /// skipped.
     fn find_message<T>(
         &self,
         data: &[u8],
@@ -867,8 +869,8 @@ mod keyframe_tests {
     }
 
     /// What of a snapshot comes from the entities alone: the rest (scores, a dead player's last
-    /// place, respawn times, health, who left) is gathered from events and frames a late decoder never
-    /// saw. Players are by id, to compare those both know.
+    /// place, respawn times, health, who left) is gathered from events and frames a late decoder
+    /// never saw. Players are by id, to compare those both know.
     fn entities(lines: Vec<Line>) -> Vec<(u32, BTreeMap<u16, String>, serde_json::Value)> {
         lines
             .into_iter()

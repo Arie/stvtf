@@ -9,9 +9,9 @@
 //! STVTF_LIVE_UPDATE=1 cargo test --test live -- --ignored --nocapture   # the current TF2 build
 //! ```
 //!
-//! `STVTF_LIVE_IMAGE` picks the image (by default `serveme/tf2-cloud-server:latest`): it needs TF2 in
-//! /home/tf2/hlserver/tf2, a map `ctf_turbine` and bash. Its own entrypoint is not run, and `SourceMod`
-//! is moved aside. `STVTF_LIVE_SOAK` sets the seconds of play to decode (60).
+//! `STVTF_LIVE_IMAGE` picks the image (by default `serveme/tf2-cloud-server:latest`): it needs TF2
+//! in /home/tf2/hlserver/tf2, a map `ctf_turbine` and bash. Its own entrypoint is not run, and
+//! `SourceMod` is moved aside. `STVTF_LIVE_SOAK` sets the seconds of play to decode (60).
 
 mod common;
 
@@ -126,7 +126,8 @@ impl Server {
             sock.send_to(&[A2S_INFO, &buf[5..9]].concat(), (self.ip.as_str(), TV_PORT)).ok()?;
             n = sock.recv(&mut buf).ok()?;
         }
-        // Name, map, folder, game, then 9 bytes: app id, players, slots, bots, type, OS, password, VAC.
+        // Name, map, folder, game, then 9 bytes: app id, players, slots, bots, type, OS, password,
+        // VAC.
         let mut strings = buf.get(6..n)?.splitn(5, |&b| b == 0);
         let rest = strings.nth(4)?;
         let build = rest.get(9..)?.split(|&b| b == 0).next()?;

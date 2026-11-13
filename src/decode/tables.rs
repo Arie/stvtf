@@ -114,7 +114,8 @@ impl Tables {
                         if let Some(t) = &e.text {
                             v.text = Some(t.to_string());
                         }
-                        // No data clears it, as a game client does (a player who left, in `userinfo`).
+                        // No data clears it, as a game client does (a player who left, in
+                        // `userinfo`).
                         v.data = e.extra_data.as_ref().map(|d| (d.to_owned(), data_bits(d)));
                         // Sent again as it was is no change.
                         if !fresh && !v.same(&was) {

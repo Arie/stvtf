@@ -1,4 +1,5 @@
-//! The hub: the clients, the signon log and the datagrams, shared by the upstream and client threads.
+//! The hub: the clients, the signon log and the datagrams, shared by the upstream and client
+//! threads.
 
 use super::client::{Client, Logged, Phase};
 use super::out::Out;

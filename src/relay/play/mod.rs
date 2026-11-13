@@ -33,7 +33,8 @@ pub use voice::VoiceIn;
 
 /// Off from the wanted moment by more than this, playback jumps instead of catching up.
 const JUMP: Duration = Duration::from_secs(1);
-/// What [`Cursor::next_tick`](cursor::Cursor::next_tick) gives for a packet that is not a frame: due at once.
+/// What [`Cursor::next_tick`](cursor::Cursor::next_tick) gives for a packet that is not a frame:
+/// due at once.
 const NOT_A_FRAME: i64 = i64::MIN;
 /// How long the player waits for a frame that is not due, or not written yet.
 const NAP: Duration = Duration::from_millis(5);

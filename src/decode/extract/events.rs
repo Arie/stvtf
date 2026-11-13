@@ -91,7 +91,8 @@ impl Extractor {
         }
     }
 
-    /// `player_spawn` arrives before the player's new position: it waits for the next entity update.
+    /// `player_spawn` arrives before the player's new position: it waits for the next entity
+    /// update.
     fn hold_spawn(&mut self, user_id: u16, team: u16, class: u16) {
         if self.pending_spawns.len() < MAX_PENDING_SPAWNS {
             let player = PlayerId(user_id);
@@ -109,7 +110,8 @@ impl Extractor {
             GameEvent::PlayerDeath(d) => {
                 // A suicide names the victim as attacker: it has none, nor a position for one.
                 let attacker = if d.attacker == d.user_id { 0 } else { d.attacker };
-                // Building kills (sentries) report the building as inflictor; attacker stays the engineer.
+                // Building kills (sentries) report the building as inflictor; attacker stays the
+                // engineer.
                 Line::Kill(out::Kill {
                     tick,
                     victim: user(d.user_id),

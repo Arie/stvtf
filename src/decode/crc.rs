@@ -48,7 +48,8 @@ pub(super) fn sendtable_crc(dt: &DataTablePacket) -> Result<u32> {
             format!("no send table {} for class {}", class.data_table.as_str(), class.name.as_str())
         })?;
         h.update(table.name.as_bytes());
-        // The parser keeps an array's element prop inside the array; the engine lists it just before.
+        // The parser keeps an array's element prop inside the array; the engine lists it just
+        // before.
         let props: Vec<&RawSendPropDefinition> =
             table.props.iter().flat_map(|p| p.array_property.as_deref().into_iter().chain([p])).collect();
         h.update(&(props.len() as u32).to_le_bytes());

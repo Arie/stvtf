@@ -222,7 +222,8 @@ fn relay_connect_record_terminate_and_replay() {
     std::fs::remove_file(&cap).unwrap();
 }
 
-/// A `SourceTV` that takes a connect and then says nothing, or nothing at all if `answers` is false.
+/// A `SourceTV` that takes a connect and then says nothing, or nothing at all if `answers` is
+/// false.
 struct SilentServer {
     addr: String,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,

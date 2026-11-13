@@ -369,7 +369,8 @@ mod frame_tests {
     fn game_mode_entities_and_flags_that_went_since_the_base_frame_are_gone() {
         let mut x = Extractor::default();
         frame(&mut x, 100, None, vec![]);
-        // A robot destruction core and a player destruction bottle, dropped and picked up since 100.
+        // A robot destruction core and a player destruction bottle, dropped and picked up since
+        // 100.
         x.modes.entity("CBonusPack", 12, std::iter::empty());
         x.ents.flags.insert(13, Flag::default());
         frame(&mut x, 101, Some(100), vec![update(12, UpdateType::Delta), update(13, UpdateType::Delta)]);

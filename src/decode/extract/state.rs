@@ -104,7 +104,8 @@ pub(super) struct Flag {
     pub(super) carrier: Option<u32>,
     /// Server time a dropped flag goes home.
     pub(super) reset_time: f32,
-    /// What it is worth: a robot destruction reactor's points, a player destruction pickup's bottles.
+    /// What it is worth: a robot destruction reactor's points, a player destruction pickup's
+    /// bottles.
     pub(super) points: i64,
     /// Not drawn: a map's spare flag (`pd_watergate` keeps two in the teams' bases).
     pub(super) hidden: bool,

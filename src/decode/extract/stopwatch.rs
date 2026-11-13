@@ -7,7 +7,8 @@ use crate::output::{self as out, Round, StopwatchState, round1};
 /// `m_iRole`: `TEAM_ROLE_DEFENDERS`, `TEAM_ROLE_ATTACKERS`.
 const ROLE_DEFENDERS: i64 = 1;
 const ROLE_ATTACKERS: i64 = 2;
-/// `m_nStopWatchState`: `STOPWATCH_CAPTURE_TIME_NOT_SET`, `STOPWATCH_RUNNING`, `STOPWATCH_OVERTIME`.
+/// `m_nStopWatchState`: `STOPWATCH_CAPTURE_TIME_NOT_SET`, `STOPWATCH_RUNNING`,
+/// `STOPWATCH_OVERTIME`.
 const STATE_RUNNING: i64 = 1;
 const STATE_OVERTIME: i64 = 2;
 /// A round timer this close to the stopwatch's time shows it.

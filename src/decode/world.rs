@@ -5,12 +5,12 @@
 //! baseline (the `instancebaseline` string table, which the client has too); every prop instead
 //! would not fit the message's 20-bit length.
 //!
-//! A delta builds on the frame it names, which from a live `SourceTV` is the last one acked, often a
-//! few ticks back: the frames since are kept (entities shared between them), as a game client keeps
-//! them. An entity entering on a baseline of the stream's own (`updated_base_line`) cannot be
-//! followed from a full update, as the client lacks that baseline: a server sends such baselines
-//! to a viewer that acks them, which stvtf never does, so they stay unused, but if one is used no
-//! full update is written.
+//! A delta builds on the frame it names, which from a live `SourceTV` is the last one acked, often
+//! a few ticks back: the frames since are kept (entities shared between them), as a game client
+//! keeps them. An entity entering on a baseline of the stream's own (`updated_base_line`) cannot be
+//! followed from a full update, as the client lacks that baseline: a server sends such baselines to
+//! a viewer that acks them, which stvtf never does, so they stay unused, but if one is used no full
+//! update is written.
 
 use crate::net::bits::{BitBuf, BitWriter};
 use crate::net::messages::{self, SVC_PACKETENTITIES};
@@ -241,9 +241,9 @@ impl World {
     /// so a client that starts from it can follow. None when they cannot be trusted (see `broken`)
     /// or do not encode.
     ///
-    /// With `hold` (the seconds a tick lasts), every running round timer is held where it is at that
-    /// frame: a client whose clock runs on with no frames coming (a room paused) shows the time as
-    /// it was, until a full update without.
+    /// With `hold` (the seconds a tick lasts), every running round timer is held where it is at
+    /// that frame: a client whose clock runs on with no frames coming (a room paused) shows the
+    /// time as it was, until a full update without.
     pub(crate) fn full_update(&self, state: &ParserState, at: Option<u32>, hold: Option<f32>) -> Option<(u32, BitBuf)> {
         if self.broken || !self.seen_full {
             return None;

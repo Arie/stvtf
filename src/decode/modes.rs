@@ -140,7 +140,8 @@ impl Followed {
             Followed::Ball(b) => {
                 // A carried ball is attached to its carrier, its own origin relative to them.
                 let carrier = b.carrier.and_then(player);
-                // The ball is not drawn while carried (the carrier's gun shows it) or between rounds.
+                // The ball is not drawn while carried (the carrier's gun shows it) or between
+                // rounds.
                 if b.hidden && carrier.is_none() {
                     return None;
                 }

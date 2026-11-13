@@ -187,8 +187,9 @@ impl Cursor {
     }
 }
 
-/// A signon stream with its `net_SignonState`s at `count`, the `ServerInfo`'s: a game client refuses
-/// any other ("Received wrong spawn count"), and an STV demo's differ from its `ServerInfo`'s.
+/// A signon stream with its `net_SignonState`s at `count`, the `ServerInfo`'s: a game client
+/// refuses any other ("Received wrong spawn count"), and an STV demo's differ from its
+/// `ServerInfo`'s.
 fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Lifecycle) {
     let mut w = BitWriter::new();
     let mut spans = Vec::with_capacity(life.spans.len());

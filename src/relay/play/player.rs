@@ -56,8 +56,8 @@ pub(super) struct Player<'r> {
     pub(super) voice_seq: voice::Sequences,
     /// The light the clients were given.
     pub(super) shown_light: light::Shown,
-    /// Where the clients were given the laser beams are drawn with, if they were: theirs there until
-    /// the next signon.
+    /// Where the clients were given the laser beams are drawn with, if they were: theirs there
+    /// until the next signon.
     pub(super) laser: Option<u16>,
     /// What the clients' `modelprecache` has had since their signon.
     pub(super) models: ModelsSent,
@@ -122,7 +122,8 @@ impl Player<'_> {
                     std::thread::sleep(NAP);
                     continue;
                 }
-                // Another demo (a live match's next one), or this again: clients in a game sign on again.
+                // Another demo (a live match's next one), or this again: clients in a game sign on
+                // again.
                 self.cur = None;
                 if let Some(was) = self.signed_on.take() {
                     trace!("the clients leave {} for {}", was.display(), want.demo.display());
@@ -201,10 +202,10 @@ impl Player<'_> {
         false
     }
 
-    /// Back to `target`: the demo again from the last checkpoint before it (or its start), decoded up
-    /// to there, and a full update of it: the clients stay in, and go back. If an entry of the
-    /// string tables they have changed value since (a player left or joined), those entries are
-    /// set back first.
+    /// Back to `target`: the demo again from the last checkpoint before it (or its start), decoded
+    /// up to there, and a full update of it: the clients stay in, and go back. If an entry of the
+    /// string tables they have changed value since (a player left or joined), those entries are set
+    /// back first.
     fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
         note!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
@@ -317,7 +318,8 @@ impl Player<'_> {
                     let mut since = c.dec.catch_up(tick, c.recent.make_contiguous());
                     // The round's end shown, or hidden, as at this moment.
                     since.extend(c.dec.round_event());
-                    // Its clock may have gone back: the timers, waiting for a time it passed, redraw.
+                    // Its clock may have gone back: the timers, waiting for a time it passed,
+                    // redraw.
                     since.extend(c.dec.update_timer());
                     let mut hub = self.relay.hub();
                     hub.send_keyframe(&key, &since, c.paused);

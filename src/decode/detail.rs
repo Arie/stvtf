@@ -419,7 +419,8 @@ fn read<'a, T: BitRead<'a, LittleEndian>>(data: &mut Stream<'a>) -> Option<T> {
     data.read().ok()
 }
 
-/// A null-terminated string; bitbuffer reads one cut short by the end of the data as whatever is there.
+/// A null-terminated string; bitbuffer reads one cut short by the end of the data as whatever is
+/// there.
 fn string(data: &mut Stream<'_>) -> Option<String> {
     let mut bytes = Vec::new();
     loop {
@@ -435,7 +436,8 @@ fn raw_user_message(kind: u8, data: &mut Stream<'_>, look: &Lookup<'_>) -> Optio
     let tick = look.tick;
     match kind {
         USER_MESSAGE_HINT_TEXT => Some(Line::Hint(Hint { tick, text: string(data)? })),
-        // channel, x, y, colour, second colour, effect, fade in, fade out, hold time, effect time, text.
+        // channel, x, y, colour, second colour, effect, fade in, fade out, hold time, effect time,
+        // text.
         USER_MESSAGE_HUD_MSG => {
             let channel = read::<u8>(data)?;
             let (left, top) = (read::<f32>(data)?, read::<f32>(data)?);
@@ -471,8 +473,9 @@ fn raw_user_message(kind: u8, data: &mut Stream<'_>, look: &Lookup<'_>) -> Optio
             let (issue, details) = (string(data)?, string(data)?);
             Some(Line::VotePassed(VotePassed { tick, team, issue, details }))
         }
-        // The player's entity, a byte, the item definition, the attribute, a byte, the cost: checked
-        // against the money the upgraded item then holds as refundable (`m_nRefundableCurrency`).
+        // The player's entity, a byte, the item definition, the attribute, a byte, the cost:
+        // checked against the money the upgraded item then holds as refundable
+        // (`m_nRefundableCurrency`).
         USER_MESSAGE_MVM_UPGRADED => {
             let player = look.user(read::<u8>(data)?)?;
             let _unknown = read::<u8>(data)?;

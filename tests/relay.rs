@@ -115,8 +115,8 @@ fn a_client_of_the_relay_decodes_what_the_capture_holds() {
     let want = data(&want);
 
     let mut tried = Vec::new();
-    // The capture runs 29 s: here 4 s, then 7 s, 15 s, and only after all of those fail, 29 s. On an
-    // overloaded machine a reliable event was seen a tick late even at 2x.
+    // The capture runs 29 s: here 4 s, then 7 s, 15 s, and only after all of those fail, 29 s. On
+    // an overloaded machine a reliable event was seen a tick late even at 2x.
     for speed in [8.0, 4.0, 2.0, 1.0] {
         let attempt = through_relay(&records, &opt, speed);
         let Some(difference) = attempt.difference(&want) else { return };
