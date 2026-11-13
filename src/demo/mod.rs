@@ -386,28 +386,17 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     let mut order: Vec<&Voiced> = voices.iter().collect();
     order.sort_by_key(|v| v.tick);
     let mut order = order.into_iter().peekable();
-    // A speaker's frames are numbered on from one message to the next.
-    let mut numbers: std::collections::HashMap<u8, u16> = std::collections::HashMap::new();
+    let mut voice = VoiceWriter::default();
     let mut last = 0;
     // Data tables that come before the signon (as older recordings have them) wait for their
     // place in it.
     let (mut tables, mut signed_on) = (HeldTables::<Vec<u8>>::new(None), false);
-    let mut say = |out: &mut W, header: &mut Header, v: &Voiced, tick: i32| -> Result<()> {
-        let seq = numbers.entry(v.slot).or_insert(0);
-        for part in crate::decode::voice_runs(&v.frames) {
-            if let Some(m) = crate::decode::steam_voice(v.slot, u64::from(v.account), v.rate, part, seq) {
-                put(out, MESSAGE, tick, m.bytes())?;
-                header.frames += 1;
-            }
-        }
-        Ok(())
-    };
     loop {
         match r.next_packet()? {
             Next::Packet(Packet::Message { tick, data }) => {
                 while let Some(v) = order.next_if(|v| v.tick <= tick) {
                     last = heard_at(v.tick, last, tick);
-                    say(&mut out, &mut header, v, last)?;
+                    voice.say(&mut out, &mut header, v, last)?;
                 }
                 put(&mut out, MESSAGE, tick, &data)?;
                 last = tick;
@@ -439,8 +428,34 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     }
     // Said after the demo's last frame: with it.
     for v in order {
-        say(&mut out, &mut header, v, last)?;
+        voice.say(&mut out, &mut header, v, last)?;
     }
+    end_demo(out, &mut header, interval)
+}
+
+/// Voice written into a demo: a speaker's frames are numbered on from one message to the next.
+#[derive(Default)]
+struct VoiceWriter {
+    numbers: std::collections::HashMap<u8, u16>,
+}
+
+impl VoiceWriter {
+    /// Writes `v` as frames of its own at `tick`, counted in `header`.
+    fn say<W: Write>(&mut self, out: &mut W, header: &mut Header, v: &Voiced, tick: i32) -> Result<()> {
+        let seq = self.numbers.entry(v.slot).or_insert(0);
+        for part in crate::decode::voice_runs(&v.frames) {
+            if let Some(m) = crate::decode::steam_voice(v.slot, u64::from(v.account), v.rate, part, seq) {
+                put(out, MESSAGE, tick, m.bytes())?;
+                header.frames += 1;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Ends a demo written to `out`: the stop packet, and `header` with its length at `interval`
+/// seconds a tick written over the one it started with.
+fn end_demo<W: Write + Seek>(mut out: W, header: &mut Header, interval: f32) -> Result<W> {
     out.write_all(&[STOP])?;
     out.write_all(&(header.ticks as i32).to_le_bytes())?;
     header.seconds = header.ticks as f32 * interval;
