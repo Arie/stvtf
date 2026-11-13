@@ -25,7 +25,7 @@ fn account(steamid: &str) -> Option<u64> {
 }
 
 /// `frames` in runs that each fit one message, in order; a frame too long for any is left out.
-pub(crate) fn packs(frames: &[Vec<u8>]) -> impl Iterator<Item = &[Vec<u8>]> {
+pub(crate) fn voice_runs(frames: &[Vec<u8>]) -> impl Iterator<Item = &[Vec<u8>]> {
     let (mut parts, mut from, mut size) = (Vec::new(), 0, 0);
     for (i, f) in frames.iter().enumerate() {
         let takes = f.len() + FRAME_HEADER;
@@ -65,7 +65,7 @@ impl Decoder {
     /// The end of what [`Self::voice_message`] sent for the same speaker.
     pub(crate) fn voice_end(&self, user: Option<u16>, spare: Option<u8>, steamid: &str, rate: u16) -> Option<BitBuf> {
         let (slot, account) = self.voice_slot(user, spare, steamid)?;
-        message(slot, account, rate, END.to_le_bytes().to_vec())
+        voice_data(slot, account, rate, END.to_le_bytes().to_vec())
     }
 
     /// The slot and account a voice is sent in.
@@ -87,7 +87,7 @@ impl Decoder {
 /// `frames` (Opus, 20 ms each) as the game sends a player's voice: `svc_VoiceData` in `slot`
 /// (the player's entity less one), Steam's framing with their account round the frames, numbered
 /// from `seq` on, which goes on by as many. None for no frames, or more than a message holds
-/// ([`packs`] makes runs that fit): then no numbers are used.
+/// ([`voice_runs`] makes runs that fit): then no numbers are used.
 pub(crate) fn steam_voice(slot: u8, account: u64, rate: u16, frames: &[Vec<u8>], seq: &mut u16) -> Option<BitBuf> {
     if frames.is_empty() {
         return None;
@@ -103,11 +103,11 @@ pub(crate) fn steam_voice(slot: u8, account: u64, rate: u16, frames: &[Vec<u8>],
         return None;
     }
     *seq = next;
-    message(slot, account, rate, chunk)
+    voice_data(slot, account, rate, chunk)
 }
 
 /// `svc_VoiceData` in `slot`: Steam's framing round an Opus `chunk`.
-fn message(slot: u8, account: u64, rate: u16, chunk: Vec<u8>) -> Option<BitBuf> {
+fn voice_data(slot: u8, account: u64, rate: u16, chunk: Vec<u8>) -> Option<BitBuf> {
     let mut data = STEAMID64.checked_add(account)?.to_le_bytes().to_vec();
     data.push(SAMPLE_RATE);
     data.extend(rate.to_le_bytes());
@@ -148,12 +148,12 @@ mod tests {
     #[test]
     fn many_frames_go_in_packets_a_client_takes_whole() {
         let frames: Vec<Vec<u8>> = (0..60u8).map(|i| vec![i; 100]).collect();
-        let parts: Vec<&[Vec<u8>]> = packs(&frames).collect();
+        let parts: Vec<&[Vec<u8>]> = voice_runs(&frames).collect();
         assert!(parts.len() > 1);
         assert!(parts.iter().all(|p| p.iter().map(|f| f.len() + FRAME_HEADER).sum::<usize>() <= MAX_CHUNK));
         assert_eq!(parts.concat(), frames, "all of them, in order");
         // One too long for any packet is left out; those around it go.
         let frames = [vec![1], vec![0; MAX_CHUNK], vec![2]];
-        assert_eq!(packs(&frames).collect::<Vec<_>>().concat(), [vec![1], vec![2]]);
+        assert_eq!(voice_runs(&frames).collect::<Vec<_>>().concat(), [vec![1], vec![2]]);
     }
 }

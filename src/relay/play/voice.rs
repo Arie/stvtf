@@ -133,7 +133,7 @@ impl Player<'_> {
             // Numbered from where the speaker's last left off; kept only for one who was sent.
             let mut seq = self.voice_seq.next.get(&slot).copied().unwrap_or(0);
             let mut sent = false;
-            for part in crate::decode::packs(&v.frames) {
+            for part in crate::decode::voice_runs(&v.frames) {
                 if let Some(m) = c.dec.voice_message(v.user, spare, &v.steamid, v.rate, part, &mut seq) {
                     hub.send_to_active(&m);
                     sent = true;

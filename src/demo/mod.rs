@@ -374,7 +374,7 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     let (mut tables, mut signed_on): (Option<Vec<u8>>, bool) = (None, false);
     let mut say = |out: &mut W, header: &mut Header, v: &Voiced, tick: i32| -> Result<()> {
         let seq = numbers.entry(v.slot).or_insert(0);
-        for part in crate::decode::packs(&v.frames) {
+        for part in crate::decode::voice_runs(&v.frames) {
             if let Some(m) = crate::decode::steam_voice(v.slot, u64::from(v.account), v.rate, part, seq) {
                 put(out, MESSAGE, tick, m.bytes())?;
                 header.frames += 1;

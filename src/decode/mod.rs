@@ -17,7 +17,7 @@ mod props;
 mod tables;
 mod voice_out;
 pub(crate) use tables::{BeamModel, ModelsSent};
-pub(crate) use voice_out::{packs, steam_voice};
+pub(crate) use voice_out::{steam_voice, voice_runs};
 mod world;
 
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
