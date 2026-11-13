@@ -131,20 +131,20 @@ impl Tables {
 
     /// The model index to draw beams with: the solid laser, loaded by the match or else by an
     /// `svc_UpdateStringTable` (also given) adding it to `modelprecache`. A game client adds an
-    /// entry past its last at the end, whatever its index, so it goes in the next free one; or in
-    /// `before`, where it went before, while the match has not taken that (after a jump back the
-    /// clients still have it there). None when the table is full or unknown.
+    /// entry past its last at the end, whatever its index, so it goes in the next free one.
+    /// `before` is where the clients were given it: they keep it there until they sign on again,
+    /// whatever the match loads there or elsewhere later (for an index it has, a game client takes
+    /// only the data; a name it has, it does not add again), and a jump back leaves it too. None
+    /// when the table is full or unknown.
     pub(crate) fn laser(&self, state: &ParserState, before: Option<u16>) -> Option<(u16, Option<BitBuf>)> {
+        if let Some(b) = before {
+            return Some((b, None));
+        }
         if let Some((0, index)) = self.beam_sprite {
             return Some((index, None));
         }
         let (id, table) = self.by_id.iter().enumerate().find(|(_, t)| t.name == MODEL_PRECACHE)?;
-        let next = table.entries.iter().max().map_or(0, |i| i + 1);
-        let slot = match before {
-            Some(b) if !table.entries.contains(&b) => b,
-            Some(b) => next.max(b + 1),
-            None => next,
-        };
+        let slot = table.entries.iter().max().map_or(0, |i| i + 1);
         if slot >= table.max {
             return None;
         }
@@ -255,6 +255,43 @@ mod tests {
         assert_eq!(value_of(&later, 1), value_of(&earlier, 1), "bob again");
         assert_eq!(value_of(&later, 0), value_of(&earlier, 0));
         assert!(value_of(&later, 2).is_some(), "a slot used only later stays");
+    }
+
+    fn models(entries: Vec<(u16, StringTableEntry<'static>)>) -> Message<'static> {
+        let table = StringTable {
+            name: MODEL_PRECACHE.into(),
+            entries,
+            max_entries: 2048,
+            fixed_user_data_size: None,
+            client_entries: None,
+            compressed: false,
+        };
+        Message::CreateStringTable(CreateStringTableMessage { table })
+    }
+
+    fn model(name: &str) -> StringTableEntry<'static> {
+        StringTableEntry { text: Some(Cow::Owned(name.into())), extra_data: None }
+    }
+
+    /// Given the laser at a slot, the clients keep it there: a game client takes only the data of
+    /// a later entry there, not its name.
+    #[test]
+    fn the_laser_keeps_its_slot_when_the_match_takes_it() {
+        let mut state = ParserState::new(24, |_| true, false);
+        state.string_tables.push(StringTableMeta { max_entries: 2048, fixed_userdata_size: None });
+        let mut t = Tables::default();
+        t.note(&[models(vec![(0, model("maps/x.bsp")), (1, model("models/a.mdl"))])]);
+        let (slot, load) = t.laser(&state, None).unwrap();
+        assert_eq!(slot, 2, "the next free");
+        assert!(load.is_some());
+        t.note(&[update(vec![(2, model("models/b.mdl"))])]);
+        assert_eq!(t.laser(&state, Some(2)).map(|(s, l)| (s, l.is_none())), Some((2, true)), "stays, no message");
+        t.note(&[update(vec![(3, model(BEAM_SPRITES[0]))])]);
+        assert_eq!(t.laser(&state, Some(2)).map(|(s, l)| (s, l.is_none())), Some((2, true)), "the match's own too");
+        // A new signon: the clients have the match's tables only.
+        let mut fresh = Tables::default();
+        fresh.note(&[models(vec![(0, model("maps/x.bsp")), (1, model("models/a.mdl")), (2, model("models/b.mdl"))])]);
+        assert_eq!(fresh.laser(&state, None).map(|(s, l)| (s, l.is_some())), Some((3, true)), "the next free again");
     }
 
     #[test]

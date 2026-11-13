@@ -77,7 +77,8 @@ pub(super) struct Player<'r> {
     pub(super) voice_seq: voice::Sequences,
     /// The light the clients were given.
     pub(super) shown_light: light::Shown,
-    /// Where the clients were given the laser beams are drawn with, if they were.
+    /// Where the clients were given the laser beams are drawn with, if they were: theirs there until
+    /// the next signon.
     pub(super) laser: Option<u16>,
     /// The clients' clock (seconds) at an instant.
     pub(super) clock: Option<(f64, Instant)>,
