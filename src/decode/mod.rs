@@ -341,7 +341,7 @@ impl Decoder {
     /// Every entity as the world has it.
     #[cfg(test)]
     pub(crate) fn world_dump(&self) -> std::collections::BTreeMap<u32, world::Dumped> {
-        self.world.as_ref().map(world::World::dump).unwrap_or_default()
+        self.world.as_ref().map_or_default(world::World::dump)
     }
 
     /// [`Decoder::world_dump`] to compare two decoders, one started from a full update: without

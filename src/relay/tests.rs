@@ -112,7 +112,7 @@ fn notes_go_again_after_every_full_update() {
     // The reliable data sent: the pause, then the note.
     let sent = |hub: &mut Hub| {
         let c = hub.clients.get_mut(&active).unwrap();
-        c.outgoing.take().map(|o| o.data().to_vec()).unwrap_or_default()
+        c.outgoing.take().map_or_default(|o| o.data().to_vec())
     };
     let mut w = BitWriter::new();
     w.write_buf(&set_pause(false));

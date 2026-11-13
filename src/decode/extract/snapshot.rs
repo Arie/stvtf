@@ -110,7 +110,7 @@ impl Extractor {
             pitch: last.map(|l| round1(l.pitch)),
             uber: uber_charge(p),
             ping: p.ping,
-            conds: conds.map(conditions).unwrap_or_default(),
+            conds: conds.map_or_default(conditions),
             ubered: conds.and_then(ubered),
             medigun: (p.class == Class::Medic).then(|| self.medigun_of(ent)).flatten(),
             weapon: self.weapon_of(ent),
