@@ -8,6 +8,7 @@ use crate::decode::ModelsSent;
 use crate::lock;
 use crate::relay::{Hub, Relay};
 use anyhow::Result;
+use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -100,43 +101,11 @@ impl Player<'_> {
                 continue;
             }
             let want = playback.want();
-            if self.cur.as_ref().is_none_or(|c| c.path != want.demo) {
-                // Not while a client is in a signon: a second crashes it. Nothing plays meanwhile.
-                if self.relay.hub().hold_for_signon(Instant::now()) {
-                    std::thread::sleep(NAP);
-                    continue;
-                }
-                // Another demo (a live match's next one), or this again: clients in a game sign on
-                // again.
-                self.cur = None;
-                if let Some(was) = self.signed_on.take() {
-                    trace!("the clients leave {} for {}", was.display(), want.demo.display());
-                    self.relay.hub().reconnect_all();
-                }
-                match Cursor::open(&want.demo, &self.relay.hub) {
-                    Ok(c) => {
-                        self.start_demo(c);
-                        playback.set_problem(None);
-                        if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
-                            self.index = Some(Index::shared(&want.demo));
-                        }
-                    }
-                    Err(e) => {
-                        // Not written yet, or not playable: try again in a while.
-                        log!("cannot play {}: {e:#}", want.demo.display());
-                        playback.set_problem(Some(format!("{e:#}")));
-                        std::thread::sleep(RETRY);
-                        continue;
-                    }
-                }
-            } else {
-                self.relay.hub().release_signon_hold();
+            if self.open_wanted(&want, playback).is_break() {
+                continue;
             }
             if self.flushing.is_none() {
-                self.show_kept(playback);
-                self.show_notes(&playback.notes());
-                self.send_voice(&playback.take_voice());
-                self.show_light(playback.light());
+                self.show_extras(playback);
             }
             match self.step(&want) {
                 Ok(()) => playback.set_problem(self.problem.clone()),
@@ -149,6 +118,51 @@ impl Player<'_> {
                 }
             }
         }
+    }
+
+    /// Opens the demo `want` names unless it is playing, once no signon is held: break while it is,
+    /// or the demo cannot be opened.
+    fn open_wanted(&mut self, want: &Want, playback: &Playback) -> ControlFlow<()> {
+        if self.cur.as_ref().is_some_and(|c| c.path == want.demo) {
+            self.relay.hub().release_signon_hold();
+            return ControlFlow::Continue(());
+        }
+        // Not while a client is in a signon: a second crashes it. Nothing plays meanwhile.
+        if self.relay.hub().hold_for_signon(Instant::now()) {
+            std::thread::sleep(NAP);
+            return ControlFlow::Break(());
+        }
+        // Another demo (a live match's next one), or this again: clients in a game sign on again.
+        self.cur = None;
+        if let Some(was) = self.signed_on.take() {
+            trace!("the clients leave {} for {}", was.display(), want.demo.display());
+            self.relay.hub().reconnect_all();
+        }
+        match Cursor::open(&want.demo, &self.relay.hub) {
+            Ok(c) => {
+                self.start_demo(c);
+                playback.set_problem(None);
+                if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
+                    self.index = Some(Index::shared(&want.demo));
+                }
+                ControlFlow::Continue(())
+            }
+            Err(e) => {
+                // Not written yet, or not playable: try again in a while.
+                log!("cannot play {}: {e:#}", want.demo.display());
+                playback.set_problem(Some(format!("{e:#}")));
+                std::thread::sleep(RETRY);
+                ControlFlow::Break(())
+            }
+        }
+    }
+
+    /// What the room shows besides the demo: kept beams, notes, voice and light.
+    fn show_extras(&mut self, playback: &Playback) {
+        self.show_kept(playback);
+        self.show_notes(&playback.notes());
+        self.send_voice(&playback.take_voice());
+        self.show_light(playback.light());
     }
 
     /// Plays `c`, just opened: the clients sign on to its tables, the laser not among them.
