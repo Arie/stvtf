@@ -61,6 +61,8 @@ pub(super) struct Player<'r> {
     pub(super) laser: Option<u16>,
     /// What the clients' `modelprecache` has had since their signon.
     pub(super) models: ModelsSent,
+    /// A demo whose match loads its own laser after the start: the relay's is not loaded for it.
+    pub(super) match_laser: Option<std::path::PathBuf>,
     /// The clients' clock (seconds) at an instant.
     pub(super) clock: Option<(f64, Instant)>,
     /// Their clock when their last beam runs out.
@@ -95,6 +97,7 @@ impl<'r> Player<'r> {
             shown_light: light::Shown::default(),
             laser: None,
             models: ModelsSent::default(),
+            match_laser: None,
             clock: None,
             beams_until: 0.0,
             rekeyed: false,
@@ -127,16 +130,7 @@ impl Player<'_> {
                 }
                 match Cursor::open(&want.demo, &self.relay.hub) {
                     Ok(c) => {
-                        self.cur = Some(c);
-                        self.signed_on = Some(want.demo.clone());
-                        // Its own tables: the clients sign on to them, the laser not among them.
-                        self.laser = None;
-                        self.models = ModelsSent::default();
-                        self.floor = None;
-                        self.shown_notes = notes::Shown::default();
-                        self.shown_light = light::Shown::default();
-                        self.clock = None;
-                        self.beams_until = 0.0;
+                        self.opened(c);
                         playback.set_problem(None);
                         if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
                             self.index = Some(Index::shared(&want.demo));
@@ -171,6 +165,22 @@ impl Player<'_> {
                 }
             }
         }
+    }
+
+    /// `c` just opened: the clients sign on to its tables, the laser not among them.
+    pub(super) fn opened(&mut self, c: Cursor) {
+        if self.match_laser.as_ref().is_some_and(|p| *p != c.path) {
+            self.match_laser = None;
+        }
+        self.signed_on = Some(c.path.clone());
+        self.cur = Some(c);
+        self.laser = None;
+        self.models = ModelsSent::default();
+        self.floor = None;
+        self.shown_notes = notes::Shown::default();
+        self.shown_light = light::Shown::default();
+        self.clock = None;
+        self.beams_until = 0.0;
     }
 
     /// Whether a client is in; after a while with none, the demo is dropped.

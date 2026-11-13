@@ -210,9 +210,10 @@ impl Decoder {
     }
 
     /// `net_Tick` and every entity in full, of the frame that `next` (the next frame's message
-    /// stream, if known) builds on, or else the latest, with that frame's server tick: a client
-    /// that starts from it, and gets the frames after it, can follow. None without
-    /// [`Decoder::keep_world`], before a full update came, or after a frame may have been missed.
+    /// stream, if known) builds on, or the latest when it is a full update or not known, with that
+    /// frame's server tick: a client that starts from it, and gets the frames after it, can
+    /// follow. None without [`Decoder::keep_world`], before a full update came, after a frame may
+    /// have been missed, or when the frame `next` builds on is not kept.
     pub(crate) fn keyframe(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
         let base = next.and_then(|d| self.delta_base(d));
         self.world.as_ref()?.full_update(self.handler.get_parser_state(), base, None)

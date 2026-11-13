@@ -245,6 +245,11 @@ impl Hub {
         }
     }
 
+    /// Whether a client is in the game.
+    pub(super) fn any_in_game(&self) -> bool {
+        self.clients.values().any(|c| c.phase == Phase::Active)
+    }
+
     /// Whether a client is ready for entities and waits for a full update.
     pub(super) fn wants_keyframe(&self) -> bool {
         self.clients.values().any(|c| c.takes_full_update(&self.log))

@@ -18,6 +18,7 @@ impl Player<'_> {
                 "a frame the clients cannot follow, from {base:?}, they have from {:?}: a full update instead",
                 self.floor
             );
+            // Only its string table changes reach them; its sounds, events and temp entities do not.
             if let Some((bits, life)) = c.decode() {
                 self.relay.hub().skim(&bits, &life);
             }

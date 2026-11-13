@@ -455,3 +455,46 @@ fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
     p.step(&want).unwrap();
     assert!(p.cur.is_none(), "a new signon");
 }
+
+/// Kept beams are drawn only to clients in the game, past a pending full update: at a demo's
+/// start, before playback skims to the wanted moment, the relay loads no laser of its own. Once the
+/// match loaded its own after the relay's, the relay's is not loaded again for that demo.
+#[test]
+fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
+    let c = upward_until(few_in);
+    let (ours, _) = c.dec.beam_model(None, ModelsSent::default()).unwrap();
+    let mut past = ModelsSent::default();
+    past.next = ours + 1;
+    let load = c.dec.beam_model(None, past).unwrap().1.unwrap();
+    let mut b = bench_with_one_in();
+    b.client_state().set_phase(Phase::Signon, Instant::now());
+    let tick = c.dec.server_tick();
+    let (relay, c, want) = playing(&mut b, c, tick);
+    let playback = Playback::new(want.clone());
+    let beam = Beam { from: [0.0; 3], to: [1.0; 3], rgb: [255, 0, 0], life: 1.0, width: 2.0, speed: 0 };
+    playback.keep(vec![beam]);
+    let mut p = player::Player::new(&relay);
+    p.opened(c);
+    p.show_kept(&playback);
+    assert_eq!(p.laser, None, "nobody in the game");
+    let in_game = |relay: &crate::relay::Relay, phase| {
+        for c in relay.hub().clients.values_mut() {
+            c.set_phase(phase, Instant::now());
+        }
+    };
+    in_game(&relay, Phase::Active);
+    p.rekeyed = true;
+    p.show_kept(&playback);
+    assert_eq!(p.laser, None, "a full update pending");
+    p.rekeyed = false;
+    p.show_kept(&playback);
+    assert_eq!(p.laser, Some(ours), "in the game");
+    // The match loads its own: a new signon, after which the relay's is not loaded again.
+    p.cur.as_mut().unwrap().dec.feed(load.bytes(), load.nbits());
+    p.step(&want).unwrap();
+    assert!(p.cur.is_none(), "a new signon");
+    p.opened(upward_until(few_in));
+    p.kept.sent.clear();
+    p.show_kept(&playback);
+    assert_eq!(p.laser, None, "not again");
+}

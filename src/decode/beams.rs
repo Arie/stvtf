@@ -51,6 +51,11 @@ impl Decoder {
         laser.or_else(|| Some((self.tables.beam_sprite()?, None)))
     }
 
+    /// A beam sprite the match loaded, if any.
+    pub(crate) fn beam_sprite(&self) -> Option<u16> {
+        self.tables.beam_sprite()
+    }
+
     /// Whether the match loaded the laser after the clients were given the relay's at `before` (see
     /// `Tables::laser_twice`).
     pub(crate) fn laser_twice(&self, before: Option<u16>) -> bool {

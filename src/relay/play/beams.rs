@@ -66,7 +66,11 @@ impl Player<'_> {
     fn beam_messages(&mut self, beams: &[Beam]) -> Option<Vec<BitBuf>> {
         let c = self.cur.as_ref().filter(|c| c.started)?;
         self.models = c.dec.models_sent(self.models);
-        let (model, load) = c.dec.beam_model(self.laser, self.models)?;
+        let (mut model, mut load) = c.dec.beam_model(self.laser, self.models)?;
+        if load.is_some() && self.match_laser.as_ref() == Some(&c.path) {
+            // Its own comes later: until the clients have it, a sprite of the match's or none.
+            (model, load) = (c.dec.beam_sprite()?, None);
+        }
         if let Some(msg) = load {
             self.relay.hub().log_once(&msg);
             self.laser = Some(model);
@@ -82,7 +86,7 @@ impl Player<'_> {
             return false;
         }
         note!(":{} the match loaded the laser too: the clients sign on again", self.relay.port());
-        self.cur = None;
+        self.match_laser = self.cur.take().map(|c| c.path);
         true
     }
 
@@ -91,7 +95,9 @@ impl Player<'_> {
     /// (a client that misses one cannot follow the next).
     pub(super) fn show_kept(&mut self, playback: &Playback) {
         let (version, beams) = playback.kept();
-        if self.cur.as_ref().is_none_or(|c| !c.started) {
+        // Only once a client is in the game where playback is: at a demo's start, before it skims
+        // to the wanted moment, a laser loaded would be the match's slot later.
+        if self.cur.as_ref().is_none_or(|c| !c.started) || self.rekeyed || !self.relay.hub().any_in_game() {
             return;
         }
         let now = Instant::now();
