@@ -3,14 +3,11 @@
 use super::beams::Kept;
 use super::cursor::{Cursor, owned};
 use super::index::Index;
-use super::{
-    CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, KEPT_BURST, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice,
-};
+use super::{CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice};
 use crate::decode::ModelsSent;
 use crate::lock;
 use crate::relay::{Hub, Relay};
 use anyhow::Result;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -78,7 +75,7 @@ impl<'r> Player<'r> {
             problem: None,
             index: None,
             cued: None,
-            kept: Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: Instant::now() },
+            kept: Kept::new(Instant::now()),
             shown_notes: notes::Shown::default(),
             voice_seq: voice::Sequences::default(),
             shown_light: light::Shown::default(),

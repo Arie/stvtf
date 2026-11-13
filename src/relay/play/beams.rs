@@ -11,10 +11,10 @@ use std::time::Instant;
 /// The kept beams shown: which of them were last handed over, when each was last sent, and
 /// how many may be sent now (refilled at [`KEPT_RATE`]).
 pub(super) struct Kept {
-    pub(super) version: u64,
-    pub(super) sent: HashMap<BeamKey, Instant>,
-    pub(super) tokens: f64,
-    pub(super) refilled: Instant,
+    version: u64,
+    sent: HashMap<BeamKey, Instant>,
+    tokens: f64,
+    refilled: Instant,
 }
 
 /// A beam as shown, but for how long.
@@ -22,6 +22,53 @@ type BeamKey = ([u32; 3], [u32; 3], [u8; 3], u32, u8);
 
 fn beam_key(b: &Beam) -> BeamKey {
     (b.from.map(f32::to_bits), b.to.map(f32::to_bits), b.rgb, b.width.to_bits(), b.speed)
+}
+
+impl Kept {
+    pub(super) fn new(now: Instant) -> Self {
+        Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: now }
+    }
+
+    /// Every kept beam is due again.
+    pub(super) fn clear(&mut self) {
+        self.sent.clear();
+    }
+
+    /// Those no longer kept are forgotten, once `version` changed.
+    fn follow(&mut self, version: u64, beams: &[Beam]) {
+        if version != self.version {
+            let keys: HashSet<BeamKey> = beams.iter().map(beam_key).collect();
+            self.sent.retain(|key, _| keys.contains(key));
+            self.version = version;
+        }
+    }
+
+    fn refill(&mut self, now: Instant) {
+        self.tokens = (self.tokens + now.duration_since(self.refilled).as_secs_f64() * KEPT_RATE).min(KEPT_BURST);
+        self.refilled = now;
+    }
+
+    /// Those of `beams` due now, as many as may be sent: those about to run out first, then those
+    /// never shown; each to show for `life`.
+    fn due(&self, beams: &[Beam], now: Instant, life: f32) -> Vec<Beam> {
+        let mut due: Vec<(bool, &Beam)> = beams
+            .iter()
+            .filter_map(|b| match self.sent.get(&beam_key(b)) {
+                Some(at) if now.duration_since(*at) < KEPT_EVERY => None,
+                at => Some((at.is_none(), b)),
+            })
+            .collect();
+        due.sort_by_key(|(new, _)| *new);
+        due.truncate(self.tokens as usize);
+        due.into_iter().map(|(_, b)| Beam { life, ..*b }).collect()
+    }
+
+    fn mark_sent(&mut self, shown: &[Beam], now: Instant) {
+        self.tokens -= shown.len() as f64;
+        for b in shown {
+            self.sent.insert(beam_key(b), now);
+        }
+    }
 }
 
 /// The tick past the beams, if the clock at `now` goes back to `key` with beams until `until`.
@@ -50,7 +97,7 @@ impl Player<'_> {
         self.relay.hub().send_to_waiting(&messages::tick(ahead));
         self.flushing = Some(Instant::now() + FLUSH);
         self.beams_until = 0.0;
-        self.kept.sent.clear();
+        self.kept.clear();
         self.shown_light.again();
         true
     }
@@ -102,36 +149,16 @@ impl Player<'_> {
             return;
         }
         let now = Instant::now();
-        let k = &mut self.kept;
-        if version != k.version {
-            let keys: HashSet<BeamKey> = beams.iter().map(beam_key).collect();
-            k.sent.retain(|key, _| keys.contains(key));
-            k.version = version;
-        }
-        k.tokens = (k.tokens + now.duration_since(k.refilled).as_secs_f64() * KEPT_RATE).min(KEPT_BURST);
-        k.refilled = now;
-        // Those about to run out first, then those never shown.
-        let mut due: Vec<(bool, &Beam)> = beams
-            .iter()
-            .filter_map(|b| match k.sent.get(&beam_key(b)) {
-                Some(at) if now.duration_since(*at) < KEPT_EVERY => None,
-                at => Some((at.is_none(), b)),
-            })
-            .collect();
-        due.sort_by_key(|(new, _)| *new);
-        let n = due.len().min(k.tokens as usize);
-        if n == 0 {
+        self.kept.follow(version, &beams);
+        self.kept.refill(now);
+        let life = KEPT_EVERY.as_secs_f32();
+        let show = self.kept.due(&beams, now, life);
+        if show.is_empty() {
             return;
         }
-        let life = KEPT_EVERY.as_secs_f32();
-        let show: Vec<Beam> = due[..n].iter().map(|(_, b)| Beam { life, ..**b }).collect();
         // Shown only when there is a sprite to draw them with: else they are due again at once.
         if let Some(msgs) = self.beam_messages(&show) {
-            let k = &mut self.kept;
-            k.tokens -= n as f64;
-            for b in &show {
-                k.sent.insert(beam_key(b), now);
-            }
+            self.kept.mark_sent(&show, now);
             let mut hub = self.relay.hub();
             for m in &msgs {
                 hub.send_to_active(m);
