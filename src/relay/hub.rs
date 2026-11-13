@@ -5,8 +5,8 @@ use super::client::{Client, Logged, Phase};
 use super::out::Out;
 use super::server_msg::{is_table_change, set_pause, show_panel, signon_state, table_changes};
 use super::{
-    CLIENT_TIMEOUT, ClientMsg, FULL_UPDATE_GRACE, KEEPALIVE, MAX_KEYFRAME, MAX_SLOTS, NOTES_AFTER_RESET, RelayConfig,
-    SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS, TRACE, TRACE_EVERY, client_messages, whence,
+    CLIENT_TIMEOUT, KEEPALIVE, MAX_KEYFRAME, MAX_SLOTS, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT,
+    SPECTATORS, TRACE, TRACE_EVERY, whence,
 };
 use crate::decode::Lifecycle;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
@@ -418,35 +418,7 @@ impl Hub {
         }
         let Some(c) = self.clients.get_mut(&from) else { return };
         let Some(pkt) = c.rx.feed(data, now) else { return };
-        c.last_heard = now;
-        if pkt.header.reliable()
-            && pkt.reliable_ok
-            && let Some(sub) = pkt.subchannel
-        {
-            c.in_reliable_state ^= 1 << sub;
-        }
-        c.acked(&pkt.header);
-        let mut ready = false;
-        for stream in &pkt.streams {
-            for m in client_messages(&stream.bits) {
-                match m {
-                    ClientMsg::Signon(s) => {
-                        trace!("{from} signon {s:?} at {} ms", now.duration_since(c.connected).as_millis());
-                        c.signing |= s > Signon::Connected;
-                        c.reconnecting &= s < Signon::Connected;
-                        if c.gate.is_some_and(|g| s >= g) {
-                            c.gate = None;
-                        }
-                        ready |= s >= Signon::Spawn && c.phase == Phase::Signon && c.gate.is_none();
-                    }
-                    ClientMsg::Tick(messages::FULL_UPDATE_TICK) => {
-                        ready |= c.phase == Phase::Active && now.duration_since(c.since) > FULL_UPDATE_GRACE;
-                    }
-                    ClientMsg::Tick(_) => {}
-                    ClientMsg::Disconnect(reason) => c.gone = Some(reason),
-                }
-            }
-        }
+        let ready = c.read_packet(from, &pkt, now);
         if let Some(reason) = &c.gone {
             log!(":{} {} ({}) left: {}", self.port, c.name.escape_debug(), whence(from), reason.escape_debug());
             self.clients.remove(&from);

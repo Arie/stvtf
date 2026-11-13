@@ -1,11 +1,12 @@
 //! A client of the relay: where it is in signon and what it is still to be sent.
 
-use super::NOTES_AFTER_ENTERING;
 use super::transfer::Outgoing;
+use super::{ClientMsg, FULL_UPDATE_GRACE, NOTES_AFTER_ENTERING, client_messages};
 use crate::net::bits::BitBuf;
-use crate::net::messages::Signon;
+use crate::net::messages::{self, Signon};
 use crate::net::netchan::Header;
-use crate::net::receiver::Receiver;
+use crate::net::receiver::{Received, Receiver};
+use std::net::SocketAddr;
 use std::time::Instant;
 
 /// A reliable message a client signing on needs, and the signon state it waits for after it.
@@ -139,6 +140,42 @@ impl Client {
             self.outgoing = Some(Outgoing::take(&mut self.queue));
         }
         self.outgoing.as_mut()?.next_block(seq)
+    }
+
+    /// Takes a packet from the client: its acks, its signon states and its goodbye. Whether it
+    /// is now ready for entities: through its signon, or in the game and asking for a full update
+    /// again after [`FULL_UPDATE_GRACE`].
+    pub(super) fn read_packet(&mut self, from: SocketAddr, pkt: &Received, now: Instant) -> bool {
+        self.last_heard = now;
+        if pkt.header.reliable()
+            && pkt.reliable_ok
+            && let Some(sub) = pkt.subchannel
+        {
+            self.in_reliable_state ^= 1 << sub;
+        }
+        self.acked(&pkt.header);
+        let mut ready = false;
+        for stream in &pkt.streams {
+            for m in client_messages(&stream.bits) {
+                match m {
+                    ClientMsg::Signon(s) => {
+                        trace!("{from} signon {s:?} at {} ms", now.duration_since(self.connected).as_millis());
+                        self.signing |= s > Signon::Connected;
+                        self.reconnecting &= s < Signon::Connected;
+                        if self.gate.is_some_and(|g| s >= g) {
+                            self.gate = None;
+                        }
+                        ready |= s >= Signon::Spawn && self.phase == Phase::Signon && self.gate.is_none();
+                    }
+                    ClientMsg::Tick(messages::FULL_UPDATE_TICK) => {
+                        ready |= self.phase == Phase::Active && now.duration_since(self.since) > FULL_UPDATE_GRACE;
+                    }
+                    ClientMsg::Tick(_) => {}
+                    ClientMsg::Disconnect(reason) => self.gone = Some(reason),
+                }
+            }
+        }
+        ready
     }
 
     /// Reads the client's acks of our transfer blocks from a packet header.
