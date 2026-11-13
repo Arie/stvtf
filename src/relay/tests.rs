@@ -444,8 +444,6 @@ fn a_new_signon_waits_for_the_clients_in_one() {
     };
     new_signon(&mut b.hub);
     assert!(b.hub.signon_waits(now), "told to reconnect");
-    assert!(b.hub.signon_waits((now + CLIENT_TIMEOUT).checked_sub(Duration::from_millis(1)).unwrap()));
-    assert!(!b.hub.signon_waits(now + CLIENT_TIMEOUT), "not for good");
     b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
     assert_eq!(b.client_state().cursor, 1);
     assert!(b.hub.signon_waits(now), "part of the signon sent");
@@ -455,6 +453,57 @@ fn a_new_signon_waits_for_the_clients_in_one() {
     assert!(b.hub.signon_waits(now));
     b.hub.clients.clear();
     assert!(!b.hub.signon_waits(now), "gone");
+}
+
+/// What the bench's client is sent, read as a client reads it: each stream's messages.
+fn sent_to(b: &Bench) -> Vec<ClientMsg> {
+    b.client.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+    let mut rx = crate::net::receiver::Receiver::new(Some(b.challenge));
+    let mut buf = vec![0u8; MAX_DATAGRAM];
+    let mut sent = Vec::new();
+    while let Ok(n) = b.client.recv(&mut buf) {
+        let Some(pkt) = rx.feed(&buf[..n], Instant::now()) else { continue };
+        for s in &pkt.streams {
+            sent.extend(client_messages(&s.bits));
+        }
+    }
+    sent
+}
+
+/// At the hold's end a client still in its signon is dropped, told why, before the next goes: a
+/// second signon crashes a game client. One in the game stays.
+#[test]
+fn a_client_still_in_its_signon_when_the_hold_ends_is_dropped_saying_why() {
+    let mut b = Bench::new("", 2);
+    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    b.connect();
+    let now = Instant::now();
+    b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
+    let active: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let mut c = Client::new("in".into(), 1, 1, now);
+    c.gate = None;
+    c.set_phase(Phase::Active, now);
+    b.hub.clients.insert(active, c);
+    assert!(b.hub.signon_waits(now));
+    sent_to(&b);
+    assert!(b.hub.signon_waits((now + CLIENT_TIMEOUT).checked_sub(Duration::from_millis(1)).unwrap()));
+    assert!(!b.hub.signon_waits(now + CLIENT_TIMEOUT), "not for good");
+    assert!(!b.hub.clients.contains_key(&b.addr), "dropped");
+    assert!(b.hub.clients.contains_key(&active), "the one in the game stays");
+    let sent = sent_to(&b);
+    assert!(
+        sent.iter().any(|m| matches!(m, ClientMsg::Disconnect(r) if r.contains("retry"))),
+        "told why, and what to do: {sent:?}"
+    );
+    // The next signon: nothing of it reaches the client dropped.
+    b.hub.reconnect_all();
+    b.hub.restart_signon(now);
+    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    for c in b.hub.clients.values_mut() {
+        c.pump(&b.hub.log);
+    }
+    b.hub.service(now);
+    assert_eq!(sent_to(&b), [], "nothing more");
 }
 
 /// A hold given up (playback back on the demo playing, or nobody in) starts over the next time.

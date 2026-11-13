@@ -17,6 +17,9 @@ use std::hash::{BuildHasher, RandomState};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
 
+/// What a client dropped for a signon it did not finish in time is told, in its console.
+const SLOW_SIGNON: &str = "stv.tf: took too long to load, retry";
+
 /// Everything the upstream and client threads share.
 pub(super) struct Hub {
     out: Out,
@@ -554,7 +557,7 @@ impl Hub {
     }
 
     /// Whether another signon waits: a client is in one. As long as a client loading a map may be
-    /// silent, at most.
+    /// silent, at most; then those still in one are dropped, told why, and it goes.
     pub(super) fn signon_waits(&mut self, now: Instant) -> bool {
         if !self.clients.values().any(Client::in_signon) {
             self.signon_held = None;
@@ -564,8 +567,23 @@ impl Hub {
         if now.duration_since(since) < CLIENT_TIMEOUT {
             return true;
         }
-        note!(":{} a client is still in its signon: the next goes anyway", self.port);
         self.signon_held = None;
+        let bye = messages::disconnect(SLOW_SIGNON);
+        let port = self.port;
+        let out = &mut self.out;
+        self.clients.retain(|addr, c| {
+            if !c.in_signon() {
+                return true;
+            }
+            note!(":{port} {} ({}) still in its signon: dropped", c.name.escape_debug(), whence(*addr));
+            // Only the goodbye: the rest of the signon is of no use to it.
+            c.queue.clear();
+            c.outgoing = None;
+            for _ in 0..2 {
+                out.send(*addr, c, Some(&bye), true, now);
+            }
+            false
+        });
         false
     }
 

@@ -61,7 +61,7 @@ pub fn parse_snapshot_hz(hz: &str) -> Result<f32> {
     }
     Ok(parsed)
 }
-/// How long a read waits, so resends and tick acks go out on time.
+/// How long a read waits, so tick acks go out on time.
 const READ_POLL: Duration = Duration::from_millis(20);
 const TICK_ACK_EVERY: Duration = Duration::from_millis(100);
 
@@ -242,8 +242,8 @@ impl<'o> Session<'o> {
         });
         let region = messages::reliable_region(body, sub);
         self.out_reliable_state ^= 1 << sub;
-        self.pending = Some(Pending { region, subchannel: sub, seq: 0 });
-        self.transmit_pending();
+        self.send(Some(&region), None);
+        self.pending = Some(Pending { region, subchannel: sub, seq: self.out_seq - 1 });
     }
 
     fn transmit_pending(&mut self) {
@@ -703,7 +703,7 @@ mod tests {
         s.send_reliable(&messages::signonstate(Signon::Spawn, 8), Some(0));
         let carried = s.out_seq - 1;
 
-        std::thread::sleep(Duration::from_millis(600));
+        std::thread::sleep(Duration::from_millis(50));
         let sent = s.out_seq;
         s.poll(&mut |_| {});
         assert_eq!(s.out_seq, sent, "a slow server is no reason to send it again");
@@ -711,9 +711,14 @@ mod tests {
         assert_eq!(s.out_seq, sent + 1, "only the reply: the server has not had the packet yet");
 
         let sent = s.out_seq;
-        from_server(&mut s, carried + 1, 0);
+        from_server(&mut s, carried, 0);
         assert_eq!(s.out_seq, sent + 2, "lost: sent again, then the reply");
+        let resent = sent;
         assert!(s.pending.is_some());
+
+        let sent = s.out_seq;
+        from_server(&mut s, resent - 1, 0);
+        assert_eq!(s.out_seq, sent + 1, "past the first copy, not the second: only the reply");
 
         let last = s.out_seq - 1;
         from_server(&mut s, last, 1);
