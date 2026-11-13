@@ -64,6 +64,12 @@ pub(super) enum Mode {
     Play { paused: bool },
 }
 
+impl Mode {
+    pub(super) fn is_play(self) -> bool {
+        matches!(self, Mode::Play { .. })
+    }
+}
+
 impl Hub {
     pub(super) fn new(sock: UdpSocket, config: &RelayConfig) -> Self {
         Hub {
@@ -89,7 +95,7 @@ impl Hub {
     pub(super) fn restart_signon(&mut self, now: Instant) {
         self.start_over();
         let reconnect = messages::signonstate(Signon::Connected, -1);
-        let play = matches!(self.mode, Mode::Play { .. });
+        let play = self.mode.is_play();
         for c in self.clients.values_mut() {
             if play && c.mid_signon() && !c.reconnecting {
                 // Part-way through the last demo's, come in as the switch went: it reconnects too.
@@ -164,7 +170,7 @@ impl Hub {
 
     /// Adds a string table change from a datagram's unreliable part to the backlog, once.
     fn add_unreliable_table_change(&mut self, msg: &BitBuf) {
-        let queue = matches!(self.mode, Mode::Play { .. });
+        let queue = self.mode.is_play();
         if self.backlog.add_table_change(msg, &mut self.clients, Delivery::InDatagrams { queue }) {
             trace!("a string table change of {} bits from a datagram into the backlog", msg.nbits());
         }
