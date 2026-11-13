@@ -55,9 +55,9 @@ impl Player<'_> {
         let Some(msg) = msg else { return };
         let mut hub = self.relay.hub();
         if changed {
-            hub.tell_active(&msg);
+            hub.queue_to_active(&msg);
         } else {
-            hub.tell_active_now(&msg);
+            hub.send_to_active(&msg);
         }
         *s = Shown { light, at: Some(Instant::now()) };
     }

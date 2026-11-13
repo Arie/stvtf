@@ -49,7 +49,7 @@ impl Player<'_> {
             if !c.paused
                 && let Some(m) = c.dec.update_timer()
             {
-                hub.tell_active(&m);
+                hub.queue_to_active(&m);
             }
         }
     }

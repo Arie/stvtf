@@ -46,7 +46,7 @@ impl Player<'_> {
             return false;
         };
         trace!("the clients' clock put ahead to {ahead}, past the beams they see");
-        self.relay.hub().tell_waiting_now(&messages::tick(ahead));
+        self.relay.hub().send_to_waiting(&messages::tick(ahead));
         self.flushing = Some(Instant::now() + FLUSH);
         self.beams_until = 0.0;
         self.kept.sent.clear();
@@ -133,7 +133,7 @@ impl Player<'_> {
             }
             let mut hub = self.relay.hub();
             for m in &msgs {
-                hub.tell_active_now(m);
+                hub.send_to_active(m);
             }
             drop(hub);
             self.shown_for(life);

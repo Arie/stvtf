@@ -75,11 +75,11 @@ impl Player<'_> {
             notes.iter().filter_map(|n| Some((n.id, bubble(&c.dec, &living, n)?))).collect();
         let mut hub = self.relay.hub();
         for m in gone(&s.bubbles, &bubbles).filter_map(|id| c.dec.hide_annotation(id)) {
-            hub.tell_active(&m);
+            hub.queue_to_active(&m);
         }
         // One with an id shown replaces that bubble.
         for m in fresh(&s.bubbles, &bubbles) {
-            hub.tell_active(m);
+            hub.queue_to_active(m);
         }
         hub.set_notes(bubbles.iter().map(|(_, m)| m.clone()).collect());
         *s = Shown { version: Some(version), bubbles, follows, tried: Some(Instant::now()) };

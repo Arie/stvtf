@@ -273,12 +273,12 @@ impl Hub {
     /// Tells the clients in the game that playback paused or went on, reliably.
     pub(super) fn set_paused(&mut self, paused: bool) {
         self.mode = Mode::Play { paused };
-        self.tell_active(&set_pause(paused));
+        self.queue_to_active(&set_pause(paused));
     }
 
     /// A message for the clients in the game now, unreliably: what is sent again at a pace, which
     /// must not wait for the reliable stream.
-    pub(super) fn tell_active_now(&mut self, msg: &BitBuf) {
+    pub(super) fn send_to_active(&mut self, msg: &BitBuf) {
         let now = Instant::now();
         for (addr, c) in self.clients.iter_mut().filter(|(_, c)| c.phase == Phase::Active) {
             self.out.send(*addr, c, Some(msg), false, now);
@@ -286,7 +286,7 @@ impl Hub {
     }
 
     /// A message for the clients waiting for a full update, unreliably.
-    pub(super) fn tell_waiting_now(&mut self, msg: &BitBuf) {
+    pub(super) fn send_to_waiting(&mut self, msg: &BitBuf) {
         let now = Instant::now();
         for (addr, c) in &mut self.clients {
             if c.takes_full_update(&self.backlog) {
@@ -296,7 +296,7 @@ impl Hub {
     }
 
     /// A message for the clients in the game, reliably.
-    pub(super) fn tell_active(&mut self, msg: &BitBuf) {
+    pub(super) fn queue_to_active(&mut self, msg: &BitBuf) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
             c.queue.push(msg.clone());
         }

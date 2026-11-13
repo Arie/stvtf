@@ -377,7 +377,7 @@ impl Player<'_> {
         let Camera::Follow { player } = camera;
         if let Some(msg) = c.dec.hltv_chase(player) {
             trace!("camera on player {player}");
-            self.relay.hub().tell_active(&msg);
+            self.relay.hub().queue_to_active(&msg);
         }
         self.cued = Some((camera, Instant::now()));
     }

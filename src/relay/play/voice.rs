@@ -135,7 +135,7 @@ impl Player<'_> {
             let mut sent = false;
             for part in crate::decode::packs(&v.frames) {
                 if let Some(m) = c.dec.voice_message(v.user, spare, &v.steamid, v.rate, part, &mut seq) {
-                    hub.tell_active_now(&m);
+                    hub.send_to_active(&m);
                     sent = true;
                 }
             }
@@ -147,7 +147,7 @@ impl Player<'_> {
         // As the game ends a voice: without it a client's decoder is left mid-speech.
         for t in self.voice_seq.take_stopped(now) {
             if let Some(m) = c.dec.voice_end(t.user, t.spare, &t.steamid, t.rate) {
-                hub.tell_active_now(&m);
+                hub.send_to_active(&m);
             }
         }
     }
