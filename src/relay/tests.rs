@@ -285,10 +285,31 @@ fn a_client_not_heard_from_times_out() {
     let mut b = Bench::new("", 1);
     b.connect();
     let now = Instant::now();
+    b.client_state().set_phase(Phase::Active, now);
     b.hub.service(now);
     assert_eq!(b.hub.clients.len(), 1);
     b.hub.service(now + CLIENT_TIMEOUT);
     assert!(b.hub.clients.is_empty());
+}
+
+/// A game client loading a map sends nothing: in its signon, or told to reconnect, it has longer.
+#[test]
+fn a_client_loading_a_map_is_given_longer() {
+    for reconnecting in [false, true] {
+        let mut b = Bench::new("", 1);
+        b.connect();
+        let now = Instant::now();
+        if reconnecting {
+            b.client_state().set_phase(Phase::Active, now);
+            b.hub.reconnect_all();
+        }
+        b.hub.service(now + CLIENT_TIMEOUT);
+        assert_eq!(b.hub.clients.len(), 1, "reconnecting {reconnecting}");
+        b.hub.service((now + SIGNON_TIMEOUT).checked_sub(Duration::from_millis(1)).unwrap());
+        assert_eq!(b.hub.clients.len(), 1, "reconnecting {reconnecting}");
+        b.hub.service(now + SIGNON_TIMEOUT);
+        assert!(b.hub.clients.is_empty(), "reconnecting {reconnecting}");
+    }
 }
 
 #[test]
@@ -486,8 +507,8 @@ fn a_client_still_in_its_signon_when_the_hold_ends_is_dropped_saying_why() {
     b.hub.clients.insert(active, c);
     assert!(b.hub.signon_waits(now));
     sent_to(&b);
-    assert!(b.hub.signon_waits((now + CLIENT_TIMEOUT).checked_sub(Duration::from_millis(1)).unwrap()));
-    assert!(!b.hub.signon_waits(now + CLIENT_TIMEOUT), "not for good");
+    assert!(b.hub.signon_waits((now + SIGNON_HOLD).checked_sub(Duration::from_millis(1)).unwrap()));
+    assert!(!b.hub.signon_waits(now + SIGNON_HOLD), "not for good");
     assert!(!b.hub.clients.contains_key(&b.addr), "dropped");
     assert!(b.hub.clients.contains_key(&active), "the one in the game stays");
     let sent = sent_to(&b);
@@ -514,7 +535,7 @@ fn a_hold_let_go_of_starts_over() {
     let now = Instant::now();
     assert!(hub.signon_waits(now));
     hub.no_signon_waits();
-    assert!(hub.signon_waits(now + CLIENT_TIMEOUT), "{:?}", hub.clients[&active].phase);
+    assert!(hub.signon_waits(now + SIGNON_HOLD), "{:?}", hub.clients[&active].phase);
 }
 
 /// What anyone on the internet can send a relay: random, forged, or past the checksum.

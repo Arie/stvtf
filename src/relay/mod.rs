@@ -124,6 +124,11 @@ pub const DEFAULT_SLOTS: usize = 10;
 /// The most clients a relay takes: a slot count fits the `A2S_INFO` reply's byte.
 pub const MAX_SLOTS: usize = 255;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
+/// A client in its signon may be silent this long: a game client loading a map sends nothing.
+const SIGNON_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long another signon waits for the clients in one: a caster does not wait on a slow
+/// viewer, who is dropped and retries.
+const SIGNON_HOLD: Duration = Duration::from_secs(30);
 /// A client hears from us at least this often, so its connection does not time out.
 const KEEPALIVE: Duration = Duration::from_millis(100);
 const READ_POLL: Duration = Duration::from_millis(5);

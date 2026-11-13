@@ -5,7 +5,7 @@ use super::out::Out;
 use super::server_msg::{is_table_change, set_pause, show_panel, signon_state, table_changes};
 use super::{
     CLIENT_TIMEOUT, ClientMsg, FULL_UPDATE_GRACE, KEEPALIVE, MAX_KEYFRAME, MAX_SLOTS, NOTES_AFTER_RESET, RelayConfig,
-    SPECTATORS, TRACE, TRACE_EVERY, client_messages, whence,
+    SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS, TRACE, TRACE_EVERY, client_messages, whence,
 };
 use crate::decode::Lifecycle;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
@@ -510,7 +510,8 @@ impl Hub {
     pub(super) fn service(&mut self, now: Instant) {
         let port = self.port;
         self.clients.retain(|addr, c| {
-            let alive = now.duration_since(c.last_heard) < CLIENT_TIMEOUT;
+            let loading = c.phase == Phase::Signon || c.reconnecting;
+            let alive = now.duration_since(c.last_heard) < if loading { SIGNON_TIMEOUT } else { CLIENT_TIMEOUT };
             if !alive {
                 note!(
                     ":{port} {} ({}) timed out, {:?} for {:.1} s when last heard",
@@ -556,15 +557,15 @@ impl Hub {
         self.clients.clear();
     }
 
-    /// Whether another signon waits: a client is in one. As long as a client loading a map may be
-    /// silent, at most; then those still in one are dropped, told why, and it goes.
+    /// Whether another signon waits: a client is in one. For [`SIGNON_HOLD`] at most; then those
+    /// still in one are dropped, told why, and it goes.
     pub(super) fn signon_waits(&mut self, now: Instant) -> bool {
         if !self.clients.values().any(Client::in_signon) {
             self.signon_held = None;
             return false;
         }
         let since = *self.signon_held.get_or_insert(now);
-        if now.duration_since(since) < CLIENT_TIMEOUT {
+        if now.duration_since(since) < SIGNON_HOLD {
             return true;
         }
         self.signon_held = None;
