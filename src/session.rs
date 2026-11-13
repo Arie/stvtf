@@ -1,6 +1,6 @@
 //! One `SourceTV` session: climb the signon ladder to FULL, keep acking, decode.
 //!
-//! The server pushes each signon state; we echo `net_SignonState(state, spawncount)`
+//! The server pushes each signon state; the client echoes `net_SignonState(state, spawncount)`
 //! for every state from CONNECTED up, quoting the spawncount of the latest
 //! `svc_ServerInfo`. NEW is answered with `clc_ClientInfo` carrying the `SendTable` CRC.
 //! FULL is not pushed: the client promotes itself once world data flows.
@@ -77,7 +77,7 @@ struct Pending {
 pub enum Fatal {
     /// The `tv_password` is wrong.
     BadPassword,
-    /// The server runs a build whose class tables or CRC we do not have.
+    /// The server runs a build whose class tables or CRC stvtf does not have.
     ClassTables,
 }
 

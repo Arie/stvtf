@@ -237,9 +237,9 @@ impl World {
     }
 
     /// `net_Tick` and the entities in full of the frame at server tick `at` (the latest when not
-    /// given; None when it is not kept), as one message stream: the frame the next delta builds on, so a
-    /// client that starts from it can follow. None when they cannot be trusted (see `broken`) or do
-    /// not encode.
+    /// given; None when it is not kept), as one message stream: the frame the next delta builds on,
+    /// so a client that starts from it can follow. None when they cannot be trusted (see `broken`)
+    /// or do not encode.
     ///
     /// With `hold` (the seconds a tick lasts), every running round timer is held where it is at that
     /// frame: a client whose clock runs on with no frames coming (a room paused) shows the time as

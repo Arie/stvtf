@@ -308,7 +308,7 @@ connection, so it costs the server no slot. In the library it is `Watch::relay`,
 - **Password**: `--relay-password`, else `STVTF_RELAY_PASSWORD`, else a random one printed to
   stderr. An empty password lets anyone in. A wrong one is refused as the server refuses it.
 - **Slots**: 10 clients at once by default (`--relay-slots`, 1 to 255). Each client gets what the
-  server sends us, on the order of 20 to 40 KB/s for a 6v6.
+  server sends the relay, on the order of 20 to 40 KB/s for a 6v6.
 - **Status line**: once the relay listens, `{"type":"status","state":"relay","listen":"0.0.0.0:27121"}`.
   The address is useful with port 0, which picks a free port.
 - **No reflection**: a connectionless reply is never larger than the query, until the address
@@ -428,7 +428,7 @@ Install Rust with [rustup](https://rustup.rs); `rust-toolchain.toml` picks stabl
 `rustfmt` and `clippy`; older Rust versions aren't supported. CI (`.github/workflows/ci.yml`) runs:
 
 ```
-cargo fmt                                         # format (settings in rustfmt.toml)
+cargo fmt --all --check                           # format (settings in rustfmt.toml)
 cargo clippy --all-targets -- -D warnings         # lint (lint set in Cargo.toml [lints])
 cargo test                                        # tests
 cargo deny check                                  # advisories and licenses (cargo install cargo-deny)
@@ -468,9 +468,9 @@ cuts a demo after tick N, to make a fixture.
 - Decoding is [tf-demo-parser](https://codeberg.org/demostf/parser) and
   [bitbuffer](https://crates.io/crates/bitbuffer) by Robin Appelman of
   [demos.tf](https://demos.tf) (MIT or Apache-2.0).
-- `tests/fixtures/pl_upward.dem` is cut from a serveme.tf match's STV demo on demos.tf, and
+- From demos.tf: `tests/fixtures/pl_upward.dem` is cut from a serveme.tf match's STV demo,
   `tests/fixtures/ctf_ballin_sky.dem` is a bball match's STV demo and
-  `tests/fixtures/ctf_turbine.dem` a ctf_turbine match's (demos.tf 1287498), both from demos.tf.
+  `tests/fixtures/ctf_turbine.dem` a ctf_turbine match's (demos.tf 1287498).
 - The game-mode fixtures are the starts of STV demos from demos.tf, cut with `cut_demo`:
   `pass_stadium.dem` (pass time, demos.tf 1516963), `rd_asteroid.dem` (robot destruction,
   954995), `pd_watergate.dem` (player destruction, 340112), `sd_doomsday.dem` (special delivery,

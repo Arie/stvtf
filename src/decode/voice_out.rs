@@ -45,8 +45,9 @@ pub(crate) fn packs(frames: &[Vec<u8>]) -> impl Iterator<Item = &[Vec<u8>]> {
 impl Decoder {
     /// `frames` (Opus, 20 ms each) as the voice of the player with user id `user`, or with none
     /// (a caster, a coach: `steamid` theirs, if they have one) in slot `spare`, which nobody is
-    /// in, or without one as `SourceTV`'s own, in its bot's slot. Numbered from `seq` on, which goes on by as many. None for no frames, more than a
-    /// packet holds, a player not in the match or without a `SteamID`, or no bot to speak as.
+    /// in, or without one as `SourceTV`'s own, in its bot's slot. Numbered from `seq` on, which
+    /// goes on by as many. None for no frames, more than a packet holds, a player not in the match
+    /// or without a `SteamID`, or no bot to speak as.
     pub(crate) fn voice_message(
         &self,
         user: Option<u16>,

@@ -22,7 +22,7 @@ pub struct Snapshot {
     pub projectiles: Vec<Projectile>,
     /// Buildings, except those being carried.
     pub buildings: Vec<Building>,
-    /// Control points, carts and flags.
+    /// Control points, carts, flags and the game modes' objectives.
     pub objectives: Vec<Objective>,
     /// The round state.
     pub round: Round,

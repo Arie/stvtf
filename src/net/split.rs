@@ -79,7 +79,7 @@ impl SplitReassembler {
     }
 }
 
-/// Payload bytes in each part of a datagram we split (`nSplitSizeMinusHeader`), within the
+/// Payload bytes in each part [`split`] makes (`nSplitSizeMinusHeader`), within the
 /// 564 to 1248 the engine accepts.
 pub const SPLIT_SIZE: usize = 1200;
 

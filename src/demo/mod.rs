@@ -370,8 +370,8 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     // A speaker's frames are numbered on from one message to the next.
     let mut numbers: std::collections::HashMap<u8, u16> = std::collections::HashMap::new();
     let mut last = 0;
-    // Data tables that come before the signon (recordings made before had them so) wait for
-    // their place in it.
+    // Data tables that come before the signon (as older recordings have them) wait for their
+    // place in it.
     let (mut tables, mut signed_on): (Option<Vec<u8>>, bool) = (None, false);
     let mut say = |out: &mut W, header: &mut Header, v: &Voiced, tick: i32| -> Result<()> {
         let seq = numbers.entry(v.slot).or_insert(0);
@@ -512,7 +512,7 @@ mod tests {
             signon_bytes: 0,
         };
         let mut w = Writer::new(Cursor::new(Vec::new()), header, 0.015).unwrap();
-        // As recordings made before had it: the tables first. TF2 will not play that.
+        // As older recordings have it: the tables first. TF2 will not play that.
         w.data_tables(b"tables").unwrap();
         w.signon(b"one").unwrap();
         w.signon(&[SVC_CLASSINFO, 1]).unwrap();

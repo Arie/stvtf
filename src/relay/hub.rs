@@ -255,7 +255,8 @@ impl Hub {
         self.clients.values().any(|c| c.takes_full_update(&self.log))
     }
 
-    /// Every client in the game needs a full update: playback jumped ahead.
+    /// Every client in the game needs a full update: playback jumped, paused or went on, or came
+    /// to a frame they cannot follow.
     pub(super) fn all_want_keyframe(&mut self, now: Instant) {
         self.keyframe = None;
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {

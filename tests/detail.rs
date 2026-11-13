@@ -1,4 +1,5 @@
-//! Heals, blast jumps and pickups, from the same 9v9 payload demo as `tests/payload.rs`.
+//! Heals, blast jumps, pickups and buildings from the same 9v9 payload demo as
+//! `tests/payload.rs`; votes, medic defences and leavers from a `ctf_turbine` match.
 
 mod common;
 
@@ -182,15 +183,15 @@ fn teamless_projectiles(events: &[Line]) -> usize {
     of!(events, Snapshot).flat_map(|s| &s.projectiles).filter(|p| p.team == Team::Unassigned).count()
 }
 
-/// An explosion used to drop the nearest projectile within 150 units, often a live sticky beside
-/// the blast: it vanished, and came back without team or owner when it next moved.
+/// An explosion must not drop the nearest projectile within 150 units, often a live sticky beside
+/// the blast: it would vanish, and come back without team or owner when it next moved.
 #[test]
 fn projectiles_keep_their_team_through_nearby_explosions() {
     assert_eq!(teamless_projectiles(&EVENTS), 0);
     assert_eq!(teamless_projectiles(&CTF), 0);
 }
 
-/// The server keeps a leaver's slot for a while; they used to stay on the map and HUD until then.
+/// The server keeps a leaver's slot for a while; they must not stay on the map and HUD until then.
 #[test]
 fn players_who_leave_are_gone_from_the_next_snapshot() {
     let leaves: Vec<(PlayerId, u32)> = of!(CTF, PlayerLeave).map(|e| (e.player, e.tick)).collect();

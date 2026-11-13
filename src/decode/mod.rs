@@ -229,8 +229,8 @@ impl Decoder {
     /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
     /// tick): those after it, each as played if the client still has the frame it builds on, else
     /// (from a live server, a frame a few ticks back) rewritten as a delta from `key`, or failing
-    /// that the last it was sent. A game client keeps only frames with entities, and drops those older than the base of
-    /// each delta it takes.
+    /// that the last it was sent. A game client keeps only frames with entities, and drops those
+    /// older than the base of each delta it takes.
     pub(crate) fn catch_up(&self, key: u32, recent: &[(u32, BitBuf)]) -> Vec<BitBuf> {
         let Some(world) = &self.world else { return Vec::new() };
         let state = self.handler.get_parser_state();
@@ -512,7 +512,7 @@ impl Decoder {
 
     /// The last round start, win panel or game over event: what a client that skipped there
     /// (a jump, or one just in) is sent after a full update, so its HUD shows the round's end, or
-    /// hides it, as the game does. Before the demo's first, a round start of our own: one jumped
+    /// hides it, as the game does. Before the demo's first, a round start written here: one jumped
     /// back there from a win panel has it hidden.
     pub(crate) fn round_event(&self) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, TeamPlayRoundStartEvent};

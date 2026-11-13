@@ -35,12 +35,12 @@ struct InFlight {
 }
 
 impl Outgoing {
-    /// A transfer of the messages at the front of `queue`, up to `MAX_TRANSFER` bytes.
     #[cfg(test)]
     pub(super) fn data(&self) -> &[u8] {
         &self.data
     }
 
+    /// A transfer of the messages at the front of `queue`, up to `MAX_TRANSFER` bytes.
     pub(super) fn take(queue: &mut Vec<BitBuf>) -> Self {
         let mut w = BitWriter::new();
         let mut taken = 0;

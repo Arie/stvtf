@@ -91,7 +91,7 @@ impl Extractor {
         }
         let ent = u32::from(p.entity);
         let alive = alive(p);
-        // Dead: where they died, or nothing if that happened before we connected.
+        // Dead: where they died, or nothing if that was before connecting.
         let last = if alive { Some(Pose::of(p)) } else { self.ents.last_alive.get(&ent).copied() };
         let conds = self.ents.conds.get(&ent);
         let stats = self.stats.get(&ent);

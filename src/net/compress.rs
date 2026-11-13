@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn lzss_command_byte_at_end_is_an_error() {
-        // The command byte promises a literal that is not there: used to index past the end.
+        // The command byte promises a literal past the end of the block.
         assert!(lzss(&lzss_block(1, &[0x00])).is_err());
     }
 

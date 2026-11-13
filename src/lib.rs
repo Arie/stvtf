@@ -1,7 +1,7 @@
 //! A headless `SourceTV` spectator for Team Fortress 2.
 //!
 //! [`watch::watch`] connects to a `SourceTV` port and passes every event and snapshot
-//! (the JSON described in the README) to a callback, reconnecting as needed.
+//! (the JSON described in the README) to a callback, reconnecting when dropped.
 //! [`capture`] replays recorded traffic and [`decode::demo_file`] runs a `.dem`
 //! through the same extractor.
 
@@ -30,7 +30,7 @@ pub use session::{Fatal, Options, parse_snapshot_hz};
 /// [`output::Server::tick_interval`].
 pub const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
-/// The newest TF2 server build compiled in. A build we have no data for gets its tables.
+/// The newest TF2 server build compiled in. A build with no data compiled in gets its tables.
 pub const CURRENT_BUILD: &str = BUILDS[0].0;
 
 /// Known TF2 server builds (`A2S_INFO` `version`) and the demo of their data tables, newest first.

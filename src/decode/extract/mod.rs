@@ -54,7 +54,8 @@ const COND_BITS: usize = 32;
 const FULL_CHARGE: u8 = 100;
 const SECONDS_PER_MINUTE: f32 = 60.0;
 
-/// `STVTF_DEBUG`, read once: a server class, temp entity class, `ent:N` or `gameevents`.
+/// `STVTF_DEBUG`, read once: a server class, temp entity class, `ent:N`, `gameevents`,
+/// `convars` or `errors`.
 static DEBUG: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("STVTF_DEBUG").ok());
 
 /// Whether `STVTF_DEBUG` asks for this topic.

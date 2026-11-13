@@ -49,7 +49,8 @@ pub(super) struct Client {
     /// Reliable messages not yet in a transfer.
     pub(super) queue: Vec<BitBuf>,
     /// When to give it the notes again: once its HUD is up, and past a HUD reset (see
-    /// [`Hub::notes`](super::hub::Hub::notes)). Each its own, a reset must not put off or bring forward the other.
+    /// [`Hub::notes`](super::hub::Hub::notes)). Each its own: a reset must not put off or bring
+    /// forward the other.
     pub(super) notes_entered: Option<Instant>,
     pub(super) notes_reset: Option<Instant>,
     pub(super) outgoing: Option<Outgoing>,

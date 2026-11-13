@@ -128,7 +128,8 @@ pub struct PlayerLeave {
     pub reason: String,
 }
 
-/// An engineer built (`build`) or upgraded (`building_upgrade`) a building.
+/// An engineer's building built (`build`), upgraded (`building_upgrade`), removed
+/// (`building_removed`) or detonated (`building_detonated`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectChange {
     pub tick: u32,
