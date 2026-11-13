@@ -45,7 +45,7 @@ impl Player<'_> {
         }
         // The match paused or went on: the clients are told reliably too.
         if c.paused != was_paused {
-            hub.set_paused(c.paused);
+            hub.queue_pause(c.paused);
             // Going on after it, the timers redraw at once (as casters' `hud_reloadscheme` has
             // them do).
             if !c.paused

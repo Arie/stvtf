@@ -1,6 +1,6 @@
 use super::client::{Client, Phase};
 use super::hub::{Hub, Mode, Part};
-use super::server_msg::{is_reset_hud, reset_hud, set_pause, show_panel};
+use super::server_msg::{is_reset_hud, reset_hud, set_pause, vgui_menu};
 use super::*;
 use crate::decode::Span;
 use crate::net::bits::{BitReader, BitWriter};
@@ -324,7 +324,7 @@ fn a_hud_reset_is_told_from_other_messages() {
 fn the_spectators_panel_is_hidden_and_shown_as_the_game_does() {
     use tf_demo_parser::demo::message::usermessage::UserMessage;
     for show in [false, true] {
-        let m = show_panel("specgui", show);
+        let m = vgui_menu("specgui", show);
         let mut s = tf_demo_parser::Stream::from(bitbuffer::BitReadBuffer::new_owned(
             m.bytes().to_vec(),
             bitbuffer::LittleEndian,

@@ -257,7 +257,7 @@ impl Player<'_> {
             self.paused = want.paused;
             let demo_paused = self.cur.as_ref().is_some_and(|c| c.paused);
             let mut hub = self.relay.hub();
-            hub.set_paused(demo_paused);
+            hub.queue_pause(demo_paused);
             // A full update with the round timers held, or as they are going on: one that needs no
             // frame a client may lack (one just in has only its own full update).
             drop(hub);

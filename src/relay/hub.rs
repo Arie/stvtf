@@ -5,7 +5,7 @@ use super::admission::Admission;
 use super::backlog::{Backlog, Delivery};
 use super::client::{Client, Phase};
 use super::out::{Empty, Out};
-use super::server_msg::{is_table_change, set_pause, show_panel, signon_state, table_changes};
+use super::server_msg::{is_table_change, set_pause, signon_state, table_changes, vgui_menu};
 use super::{
     CLIENT_TIMEOUT, KEEPALIVE, MAX_SINCE_FULL, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS,
     TRACE, TRACE_EVERY, masked_addr,
@@ -255,7 +255,7 @@ impl Hub {
     /// The next full update sets clients' clocks back: it shows the spectator panel again, which
     /// TF2's player bar needs.
     pub(super) fn reshow_panel_with_next_keyframe(&mut self) {
-        self.with_next = vec![show_panel(SPECTATORS, false), show_panel(SPECTATORS, true)];
+        self.with_next = vec![vgui_menu(SPECTATORS, false), vgui_menu(SPECTATORS, true)];
     }
 
     /// What a client gets after every full update from now on, in place of what it got before.
@@ -289,7 +289,7 @@ impl Hub {
     }
 
     /// Tells the clients in the game that playback paused or went on, reliably.
-    pub(super) fn set_paused(&mut self, paused: bool) {
+    pub(super) fn queue_pause(&mut self, paused: bool) {
         self.mode = Mode::Play { paused };
         self.queue_to_active(&set_pause(paused));
     }

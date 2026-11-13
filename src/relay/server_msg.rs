@@ -38,14 +38,15 @@ pub(super) fn reset_hud() -> BitBuf {
     w.finish()
 }
 
-/// `VGUIMenu` user message: name, show byte, key count (0).
-pub(super) fn show_panel(name: &str, show: bool) -> BitBuf {
-    let mut data: Vec<u8> = name.bytes().chain([0, u8::from(show), 0]).collect();
+/// The user message `VGUIMenu`: a panel's name, shown or hidden, with no keys.
+pub(super) fn vgui_menu(name: &str, show: bool) -> BitBuf {
+    let data: Vec<u8> = name.bytes().chain([0, u8::from(show), 0]).collect();
+    debug_assert!(data.len() * 8 < 1 << 11, "the length of a user message's data has 11 bits");
     let mut w = BitWriter::new();
     w.write_bits(SVC_USERMESSAGE, TYPE_BITS);
     w.write_bits(USERMESSAGE_VGUIMENU, 8);
     w.write_bits(data.len() as u32 * 8, 11);
-    w.write_bytes(&std::mem::take(&mut data));
+    w.write_bytes(&data);
     w.finish()
 }
 

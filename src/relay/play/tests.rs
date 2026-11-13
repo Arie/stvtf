@@ -8,7 +8,7 @@ use crate::net::messages::{self, SVC_USERMESSAGE, Signon, TYPE_BITS};
 use crate::net::receiver::Receiver;
 use crate::relay::client::Phase;
 use crate::relay::hub::Part;
-use crate::relay::server_msg::show_panel;
+use crate::relay::server_msg::vgui_menu;
 use crate::relay::tests::Bench;
 use std::time::{Duration, Instant};
 
@@ -215,7 +215,7 @@ fn upward_with_changelevel() -> (Cursor, Vec<u8>) {
         ids.push(span.id);
         if i == 0 {
             w.write_buf(&messages::signonstate(Signon::ChangeLevel, 3));
-            w.write_buf(&show_panel(crate::relay::SPECTATORS, true));
+            w.write_buf(&vgui_menu(crate::relay::SPECTATORS, true));
             ids.push(u8::try_from(SVC_USERMESSAGE).unwrap());
         }
     }
