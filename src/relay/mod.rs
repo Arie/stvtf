@@ -37,8 +37,6 @@ use client::Client;
 use client::Phase;
 use hub::Hub;
 use std::fmt;
-#[cfg(fuzzing)]
-use std::hash::BuildHasher;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,6 +98,7 @@ pub(crate) fn whence(addr: SocketAddr) -> String {
     }
 }
 
+mod admission;
 mod backlog;
 mod client;
 mod client_msg;
@@ -309,7 +308,7 @@ impl Tap for Relay {
     }
 
     fn server_build(&self, build: &str) {
-        self.hub().build = build.to_string();
+        self.hub().admission.build = build.to_string();
     }
 }
 
@@ -330,7 +329,7 @@ impl FuzzBench {
         let config = RelayConfig { password: String::new(), ..RelayConfig::new("127.0.0.1:0") };
         let mut hub = Hub::new(sock, &config);
         let now = Instant::now();
-        let challenge = hub.challenge_key.hash_one(client) as u32;
+        let challenge = hub.admission.challenge(client);
         hub.clients.insert(client, Client::new("fuzz".to_string(), challenge, 1, now));
         FuzzBench { hub, client, challenge, now }
     }

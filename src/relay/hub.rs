@@ -1,21 +1,20 @@
 //! The hub: the clients, the backlog and the datagrams, shared by the upstream and client
 //! threads.
 
+use super::admission::Admission;
 use super::backlog::{Backlog, Delivery};
 use super::client::{Client, Phase};
 use super::out::Out;
 use super::server_msg::{is_table_change, set_pause, show_panel, signon_state, table_changes};
 use super::{
-    CLIENT_TIMEOUT, KEEPALIVE, MAX_KEYFRAME, MAX_SLOTS, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT,
-    SPECTATORS, TRACE, TRACE_EVERY, whence,
+    CLIENT_TIMEOUT, KEEPALIVE, MAX_KEYFRAME, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS,
+    TRACE, TRACE_EVERY, whence,
 };
 use crate::decode::Lifecycle;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::handshake::{self, FromClient};
 use crate::net::messages::{self, SVC_PACKETENTITIES, SVC_SERVERINFO, Signon};
 use crate::net::netchan;
 use std::collections::HashMap;
-use std::hash::{BuildHasher, RandomState};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
 
@@ -27,10 +26,7 @@ pub(super) struct Hub {
     out: Out,
     /// The port it listens on: which relay a log line is of.
     port: u16,
-    password: String,
-    slots: usize,
-    /// Keys the challenge of each address, so none need be stored before it connects.
-    pub(super) challenge_key: RandomState,
+    pub(super) admission: Admission,
     pub(super) clients: HashMap<SocketAddr, Client>,
     pub(super) backlog: Backlog,
     /// This datagram's unreliable part, and whether it holds a full update.
@@ -43,9 +39,6 @@ pub(super) struct Hub {
     pub(super) notes: Vec<BitBuf>,
     /// Sent once with the next full update.
     with_next: Vec<BitBuf>,
-    map: String,
-    pub(super) build: String,
-    seen_client: bool,
     /// When the last full update came, to space out asking for more.
     pub(super) last_full: Option<Instant>,
     /// Passing a server on, or playing a demo (see [`play`](super::play)), paused or not.
@@ -69,9 +62,7 @@ impl Hub {
         Hub {
             port: sock.local_addr().map_or(0, |a| a.port()),
             out: Out { sock, split_group: 0 },
-            password: config.password.clone(),
-            slots: config.slots.min(MAX_SLOTS),
-            challenge_key: RandomState::new(),
+            admission: Admission::new(config),
             clients: HashMap::new(),
             backlog: Backlog::new(),
             tail: None,
@@ -79,9 +70,6 @@ impl Hub {
             keyframe: None,
             notes: Vec::new(),
             with_next: Vec::new(),
-            map: String::new(),
-            build: crate::CURRENT_BUILD.to_string(),
-            seen_client: false,
             last_full: None,
             mode: Mode::Live,
             signon_held: None,
@@ -121,7 +109,7 @@ impl Hub {
     pub(super) fn upstream_stream(&mut self, bits: &BitBuf, reliable: bool, life: &Lifecycle) {
         let now = Instant::now();
         if let Some((_, map)) = &life.server_info {
-            self.map.clone_from(map);
+            self.admission.map.clone_from(map);
         }
         // The server sends the first full update after signon reliably (`net_Tick` and the
         // entities): like any entities, it goes to the clients in the datagram's unreliable
@@ -411,48 +399,7 @@ impl Hub {
             data.len(),
             String::from_utf8_lossy(&data[5.min(data.len())..data.len().min(40)])
         );
-        let expected = self.challenge_key.hash_one(from) as u32;
-        let reply = match handshake::parse_from_client(data) {
-            Some(FromClient::GetChallenge { nonce }) => handshake::build_challenge(expected, nonce),
-            Some(FromClient::Connect { protocol, challenge, nonce, name, password }) => {
-                if challenge != expected {
-                    // Not from the address that got the challenge: no reply at all.
-                    return;
-                }
-                if let Some(c) = self.clients.get(&from)
-                    && c.nonce == nonce
-                {
-                    // Our accept was lost and the client asks again.
-                    handshake::build_accept(nonce)
-                } else if protocol != handshake::PROTOCOL_VERSION {
-                    handshake::build_reject(
-                        nonce,
-                        &format!("This relay speaks protocol {}", handshake::PROTOCOL_VERSION),
-                    )
-                } else if !self.password.is_empty() && password != self.password {
-                    log!(":{} {} ({}) gave a wrong password", self.port, name.escape_debug(), whence(from));
-                    handshake::build_reject(nonce, "#GameUI_ServerRejectBadPassword")
-                } else if self.clients.len() >= self.slots && !self.clients.contains_key(&from) {
-                    handshake::build_reject(nonce, "#GameUI_ServerRejectServerFull")
-                } else {
-                    log!(":{} {} ({}) connected", self.port, name.escape_debug(), whence(from));
-                    self.clients.insert(from, Client::new(name, challenge, nonce, now));
-                    self.seen_client = true;
-                    handshake::build_accept(nonce)
-                }
-            }
-            Some(FromClient::Info { challenge }) if challenge == Some(expected) => {
-                handshake::build_info(&handshake::Info {
-                    name: "stvtf relay",
-                    map: &self.map,
-                    players: self.clients.len() as u8,
-                    max_players: self.slots as u8,
-                    build: &self.build,
-                })
-            }
-            Some(FromClient::Info { .. }) => handshake::build_info_challenge(expected),
-            None => return,
-        };
+        let Some(reply) = self.admission.reply(from, data, &mut self.clients, self.port, now) else { return };
         let _ = self.out.sock.send_to(&reply, from);
     }
 
@@ -550,6 +497,6 @@ impl Hub {
 
     /// A paced replay waits for a client, and for clients signing on.
     pub(super) fn hold(&self) -> bool {
-        !self.seen_client || self.clients.values().any(Client::signing_on)
+        !self.admission.seen_client || self.clients.values().any(Client::signing_on)
     }
 }

@@ -8,7 +8,6 @@ use crate::net::handshake;
 use crate::net::messages::{self, SVC_SETPAUSE, SVC_UPDATESTRINGTABLE, SVC_USERMESSAGE, Signon, TYPE_BITS};
 use crate::net::netchan::{self, Header, OutHeader};
 use crate::net::reliable::{Reassembler, SUBCHANNEL_BITS, SUBCHANNELS};
-use std::hash::BuildHasher;
 
 #[test]
 fn the_first_block_goes_alone_then_all_subchannels_at_once() {
@@ -213,7 +212,7 @@ impl Bench {
         let client = UdpSocket::bind("127.0.0.1:0").unwrap();
         client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let addr = client.local_addr().unwrap();
-        let challenge = hub.challenge_key.hash_one(addr) as u32;
+        let challenge = hub.admission.challenge(addr);
         Bench { hub, client, addr, challenge, nonce: 7 }
     }
 
