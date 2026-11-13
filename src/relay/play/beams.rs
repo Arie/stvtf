@@ -1,5 +1,6 @@
 //! Kept beams shown again as they run out, and the clients' clock put past them.
 
+use super::playback::Versioned;
 use super::player::Player;
 use super::{Beam, FLUSH, KEPT_BURST, KEPT_EVERY, KEPT_RATE, NAP, Playback, SET_BACK};
 use crate::net::bits::BitBuf;
@@ -94,7 +95,7 @@ impl Player<'_> {
     /// [`KEPT_RATE`] a second, in bursts of [`KEPT_BURST`], so they never crowd out the frames
     /// (a client that misses one cannot follow the next).
     pub(super) fn show_kept(&mut self, playback: &Playback) {
-        let (version, beams) = playback.kept();
+        let Versioned { version, items: beams } = playback.beams();
         // Only once a client is in the game where playback is: at a demo's start, before it skims
         // to the wanted moment, a laser loaded would be the match's slot later.
         if self.cur.as_ref().is_none_or(|c| !c.started) || self.rekeyed || !self.relay.hub().any_in_game() {

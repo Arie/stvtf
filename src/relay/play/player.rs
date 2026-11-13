@@ -102,7 +102,7 @@ impl Player<'_> {
                 std::thread::sleep(IDLE_NAP);
                 continue;
             }
-            let want = playback.get();
+            let want = playback.want();
             if self.cur.as_ref().is_none_or(|c| c.path != want.demo) {
                 // Not while a client is in a signon: a second crashes it. Nothing plays meanwhile.
                 if self.relay.hub().hold_for_signon(Instant::now()) {
@@ -137,10 +137,9 @@ impl Player<'_> {
             }
             if self.flushing.is_none() {
                 self.show_kept(playback);
-                let (version, notes) = lock(&playback.notes).clone();
-                self.show_notes(version, &notes);
+                self.show_notes(&playback.notes());
                 self.send_voice(&playback.take_voice());
-                self.show_light(*lock(&playback.light));
+                self.show_light(playback.light());
             }
             match self.step(&want) {
                 Ok(()) => playback.set_problem(self.problem.clone()),
@@ -236,7 +235,7 @@ impl Player<'_> {
         let Some(c) = &mut self.cur else { return Ok(()) };
         let interval = c.dec.tick_interval();
         let first = c.first.unwrap_or(i64::MIN);
-        let wanted = i64::from(want.now(interval));
+        let wanted = i64::from(want.tick_now(interval));
         // Not before the demo starts.
         let target = if want.from_start { first.saturating_add(wanted) } else { wanted.max(first) };
         let jump = (JUMP.as_secs_f32() / interval.max(1e-3)) as i64;

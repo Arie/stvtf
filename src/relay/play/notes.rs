@@ -2,6 +2,7 @@
 //! player, shown until hidden. A full update drops them, so the hub sends them again after every
 //! one; a note gone from the room is hidden.
 
+use super::playback::Versioned;
 use super::player::Player;
 use crate::decode::Decoder;
 use crate::net::bits::BitBuf;
@@ -61,7 +62,8 @@ impl Player<'_> {
     /// Gives the clients the room's notes when they changed, and those on players as their player
     /// comes and goes, dies and respawns: new and changed ones shown (an id is used again after a
     /// clear), gone ones hidden, all of them again after full updates and HUD resets.
-    pub(super) fn show_notes(&mut self, version: u64, notes: &[Note]) {
+    pub(super) fn show_notes(&mut self, notes: &Versioned<Note>) {
+        let (version, notes) = (notes.version, &notes.items);
         self.relay.hub().send_due_notes(Instant::now());
         let s = &mut self.shown_notes;
         let check = s.follows && s.tried.is_none_or(|t| t.elapsed() >= CHECK);

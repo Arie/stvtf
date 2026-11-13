@@ -473,7 +473,7 @@ fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     let (relay, c, want) = playing(&mut b, c, tick);
     let playback = Playback::new(want.clone());
     let beam = Beam { from: [0.0; 3], to: [1.0; 3], rgb: [255, 0, 0], life: 1.0, width: 2.0, speed: 0 };
-    playback.keep(vec![beam]);
+    playback.keep_beams(vec![beam]);
     let mut p = Player::new(&relay);
     p.start_demo(c);
     p.show_kept(&playback);

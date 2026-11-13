@@ -146,20 +146,20 @@ fn a_client_follows_a_jump_back_and_a_pause() {
     let got = watching(&playback, Duration::ZERO, |seen| {
         wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
         // Back to 5 s in.
-        playback.set(want(first + 5 * SECOND, false, false));
+        playback.set_want(want(first + 5 * SECOND, false, false));
         let jumped = Instant::now();
         wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick < first + 10 * SECOND));
         wait_for("a second after the jump", || since(seen, jumped).len() > FRAMES_A_SECOND);
         // Paused where it is: nothing new comes, but that moment's full update if it is late.
         let at = snapshots(seen).last().unwrap().1.tick;
-        playback.set(want(at, true, false));
+        playback.set_want(want(at, true, false));
         std::thread::sleep(Duration::from_millis(300));
         let paused = Instant::now();
         std::thread::sleep(Duration::from_millis(700));
         let mut late: Vec<u32> = since(seen, paused).iter().map(|s| s.tick).collect();
         late.dedup();
         assert!(late.len() <= 1, "frames while paused: {late:?}");
-        playback.set(want(at, false, false));
+        playback.set_want(want(at, false, false));
         let resumed = Instant::now();
         wait_for("frames after the pause", || since(seen, resumed).len() > 30);
         let lines = seen.lock().unwrap();
@@ -196,7 +196,7 @@ fn a_client_follows_a_jump_ahead() {
     let got = watching(&playback, Duration::ZERO, |seen| {
         wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
         let before = snapshots(seen).iter().map(|(_, s)| s.tick).max().unwrap();
-        playback.set(want(first + 100 * SECOND, false, false));
+        playback.set_want(want(first + 100 * SECOND, false, false));
         let jumped = Instant::now();
         wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick >= first + 100 * SECOND));
         wait_for("a second after it", || since(seen, jumped).len() > FRAMES_A_SECOND);
@@ -225,7 +225,7 @@ fn a_client_joining_while_paused_sees_the_moment_and_waits() {
         let waited = Instant::now();
         std::thread::sleep(Duration::from_millis(800));
         assert!(since(seen, waited).iter().all(|s| s.tick == start), "frames while paused");
-        playback.set(want(start, false, false));
+        playback.set_want(want(start, false, false));
         let resumed = Instant::now();
         wait_for("playback going on", || since(seen, resumed).iter().any(|s| s.tick > start + SECOND));
     });
@@ -242,7 +242,7 @@ fn a_jump_back_before_the_first_round_start_still_gets_one() {
         wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
         // A win panel up there would stay, without one of our own.
         let jumped = Instant::now();
-        playback.set(want(first, false, false));
+        playback.set_want(want(first, false, false));
         wait_for("a round start with the jump", || {
             seen.lock().unwrap().iter().any(|(t, l)| *t > jumped && matches!(l, Line::RoundStart(r) if r.tick < round))
         });

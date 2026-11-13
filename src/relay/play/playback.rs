@@ -39,7 +39,7 @@ pub enum Camera {
 
 impl Want {
     /// The server tick wanted now, on a server ticking every `interval` seconds.
-    pub(super) fn now(&self, interval: f32) -> u32 {
+    pub(super) fn tick_now(&self, interval: f32) -> u32 {
         if self.paused || interval <= 0.0 {
             return self.tick;
         }
@@ -48,19 +48,40 @@ impl Want {
     }
 }
 
+/// What the clients keep seeing, and how many times it was replaced: a change is told by its
+/// version.
+#[derive(Debug, Clone)]
+pub(super) struct Versioned<T> {
+    pub(super) version: u64,
+    pub(super) items: Arc<Vec<T>>,
+}
+
+impl<T> Default for Versioned<T> {
+    fn default() -> Self {
+        Versioned { version: 0, items: Arc::default() }
+    }
+}
+
+impl<T> Versioned<T> {
+    fn replace(&mut self, items: Vec<T>) {
+        self.version += 1;
+        self.items = Arc::new(items);
+    }
+}
+
 /// The moment a playing relay follows, set as playback goes.
 pub struct Playback {
     want: Mutex<Want>,
     /// Why the demo wanted cannot be played, if it cannot.
     problem: Mutex<Option<String>>,
-    /// Beams the clients in the game keep seeing, until replaced, and how many times they were.
-    kept: Mutex<(u64, Arc<Vec<Beam>>)>,
-    /// Notes they keep seeing, until replaced, and how many times they were.
-    pub(super) notes: Mutex<(u64, Arc<Vec<Note>>)>,
+    /// Beams the clients in the game keep seeing, until replaced.
+    beams: Mutex<Versioned<Beam>>,
+    /// Notes they keep seeing, until replaced.
+    notes: Mutex<Versioned<Note>>,
     /// Voice to send the clients in the game as players' own, in order.
     voice: Mutex<VecDeque<VoiceIn>>,
     /// The light they keep seeing, if any.
-    pub(super) light: Mutex<Option<Light>>,
+    light: Mutex<Option<Light>>,
 }
 
 impl Playback {
@@ -69,8 +90,8 @@ impl Playback {
         Playback {
             want: Mutex::new(want),
             problem: Mutex::new(None),
-            kept: Mutex::new((0, Arc::default())),
-            notes: Mutex::new((0, Arc::default())),
+            beams: Mutex::default(),
+            notes: Mutex::default(),
             voice: Mutex::new(VecDeque::new()),
             light: Mutex::new(None),
         }
@@ -82,9 +103,13 @@ impl Playback {
         *lock(&self.light) = light;
     }
 
+    pub(super) fn light(&self) -> Option<Light> {
+        *lock(&self.light)
+    }
+
     /// Sends `v` to the clients in the game as that player's voice, those in it now; when more
     /// waits than they could take, the oldest goes.
-    pub fn voice(&self, v: VoiceIn) {
+    pub fn push_voice(&self, v: VoiceIn) {
         let mut q = lock(&self.voice);
         if q.len() >= voice::MAX_QUEUED {
             q.pop_front();
@@ -100,27 +125,28 @@ impl Playback {
     /// again after every full update; those gone are hidden. The same ones again change nothing.
     pub fn keep_notes(&self, notes: Vec<Note>) {
         let mut kept = lock(&self.notes);
-        if *kept.1 != notes {
-            kept.0 += 1;
-            kept.1 = Arc::new(notes);
+        if *kept.items != notes {
+            kept.replace(notes);
         }
+    }
+
+    pub(super) fn notes(&self) -> Versioned<Note> {
+        lock(&self.notes).clone()
     }
 
     /// Beams the clients in the game keep seeing (a room's marker), in place of those kept before:
     /// shown again every `KEPT_EVERY`, each for as long, so the old go within that and nothing
     /// shows twice over.
-    pub fn keep(&self, beams: Vec<Beam>) {
-        let mut kept = lock(&self.kept);
-        kept.0 += 1;
-        kept.1 = Arc::new(beams);
+    pub fn keep_beams(&self, beams: Vec<Beam>) {
+        lock(&self.beams).replace(beams);
     }
 
-    pub(super) fn kept(&self) -> (u64, Arc<Vec<Beam>>) {
-        lock(&self.kept).clone()
+    pub(super) fn beams(&self) -> Versioned<Beam> {
+        lock(&self.beams).clone()
     }
 
     /// Where playback should be from now on.
-    pub fn set(&self, want: Want) {
+    pub fn set_want(&self, want: Want) {
         *lock(&self.want) = want;
     }
 
@@ -130,7 +156,7 @@ impl Playback {
         lock(&self.problem).clone()
     }
 
-    pub(super) fn get(&self) -> Want {
+    pub(super) fn want(&self) -> Want {
         lock(&self.want).clone()
     }
 
