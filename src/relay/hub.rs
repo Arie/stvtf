@@ -98,10 +98,20 @@ impl Hub {
     pub(super) fn restart_signon(&mut self, now: Instant) {
         self.forget();
         let reconnect = messages::signonstate(Signon::Connected, -1);
+        let play = matches!(self.mode, Mode::Play { .. });
         for c in self.clients.values_mut() {
+            if play && c.in_signon() && !c.reconnecting {
+                // Part-way through the last demo's, come in as the switch went: it reconnects too.
+                c.queue.clear();
+                c.queue.push(reconnect.clone());
+                c.gate = Some(Signon::Connected);
+                c.signing = false;
+                c.reconnecting = true;
+            } else {
+                c.queue.retain(|m| *m == reconnect);
+                c.gate = c.gate.filter(|g| *g == Signon::Connected);
+            }
             c.cursor = 0;
-            c.queue.retain(|m| *m == reconnect);
-            c.gate = c.gate.filter(|g| *g == Signon::Connected);
             c.set_phase(Phase::Signon, now);
         }
     }
@@ -443,7 +453,10 @@ impl Hub {
             self.clients.remove(&from);
             return;
         }
-        c.pump(&self.log);
+        // Not started on a signon the next demo waits to replace: it would not get through it.
+        if self.signon_held.is_none() || c.in_signon() || c.phase != Phase::Signon {
+            c.pump(&self.log);
+        }
         // An active client hears from us with the next server datagram. During signon its acks
         // free subchannels for more of the transfer, and its reliable data is acked at once.
         if c.phase != Phase::Active {
@@ -588,9 +601,14 @@ impl Hub {
         false
     }
 
-    /// No signon waits: a hold let go of starts over the next time.
+    /// No signon waits: a hold let go of starts over the next time, and those that came in during
+    /// it get this signon.
     pub(super) fn no_signon_waits(&mut self) {
-        self.signon_held = None;
+        if self.signon_held.take().is_some() {
+            for c in self.clients.values_mut() {
+                c.pump(&self.log);
+            }
+        }
     }
 
     /// A paced replay waits for a client, and for clients signing on.

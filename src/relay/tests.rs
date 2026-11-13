@@ -571,3 +571,51 @@ fn garbage_from_clients_never_panics_the_hub() {
         b.hub.datagram(stranger, &prefixed, now);
     }
 }
+
+/// A client that connects while the next demo waits is not started on the old one's signon: it
+/// would be dropped at the hold's end. It signs on to the next, or to this one if it stays.
+#[test]
+fn a_client_coming_in_during_a_hold_waits_for_the_next_signon() {
+    let mut b = Bench::new("", 2);
+    b.hub.mode = Mode::Play { paused: false };
+    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    let now = Instant::now();
+    let loading: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let mut c = Client::new("loading".into(), 1, 1, now);
+    c.gate = None;
+    c.cursor = 1;
+    b.hub.clients.insert(loading, c);
+    assert!(b.hub.signon_waits(now));
+    b.connect();
+    b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
+    assert_eq!(b.client_state().cursor, 0, "not on the old signon");
+    assert!(!b.hub.signon_waits(now + SIGNON_HOLD));
+    assert!(b.hub.clients.contains_key(&b.addr), "not dropped");
+    assert!(!b.hub.clients.contains_key(&loading));
+    // The same again, but the hold let go of: it gets this demo's signon.
+    b.hub.clients.insert(loading, Client::new("loading".into(), 1, 1, now));
+    b.hub.clients.get_mut(&loading).unwrap().reconnecting = true;
+    assert!(b.hub.signon_waits(now));
+    b.client_sends(2, &messages::signonstate(Signon::Connected, -1));
+    assert_eq!(b.client_state().cursor, 0);
+    b.hub.no_signon_waits();
+    assert_eq!(b.client_state().cursor, 1);
+}
+
+/// A playing relay's new signon finds a client part-way through the last one, not told to
+/// reconnect (it came in as the switch went): it is, before it gets the new one.
+#[test]
+fn a_client_part_way_through_the_last_demos_signon_is_told_to_reconnect() {
+    let mut b = Bench::new("", 1);
+    b.hub.mode = Mode::Play { paused: false };
+    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    b.connect();
+    b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
+    assert_eq!(b.client_state().cursor, 1);
+    b.hub.restart_signon(Instant::now());
+    let reconnect = messages::signonstate(Signon::Connected, -1);
+    let c = b.client_state();
+    assert!(c.reconnecting);
+    assert_eq!((c.cursor, c.gate), (0, Some(Signon::Connected)));
+    assert_eq!(c.queue, [reconnect]);
+}
