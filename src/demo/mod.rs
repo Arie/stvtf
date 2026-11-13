@@ -48,6 +48,26 @@ pub(crate) fn opens_with_classes(signon: &[u8]) -> bool {
     signon.first().is_some_and(|b| u32::from(*b) & ((1 << TYPE_BITS) - 1) == SVC_CLASSINFO)
 }
 
+/// Data tables waiting for their place in a signon: just before the packet that opens with the
+/// class list, else at its end.
+pub(crate) struct HeldTables<T>(Option<T>);
+
+impl<T> HeldTables<T> {
+    pub(crate) fn new(tables: Option<T>) -> Self {
+        HeldTables(tables)
+    }
+
+    /// The tables, if they go before signon packet `signon`.
+    pub(crate) fn before(&mut self, signon: &[u8]) -> Option<T> {
+        if opens_with_classes(signon) { self.0.take() } else { None }
+    }
+
+    /// The tables, if they are still to go: the signon ends here.
+    pub(crate) fn at_end(&mut self) -> Option<T> {
+        self.0.take()
+    }
+}
+
 /// What a demo's header says.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
@@ -371,7 +391,7 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     let mut last = 0;
     // Data tables that come before the signon (as older recordings have them) wait for their
     // place in it.
-    let (mut tables, mut signed_on): (Option<Vec<u8>>, bool) = (None, false);
+    let (mut tables, mut signed_on) = (HeldTables::<Vec<u8>>::new(None), false);
     let mut say = |out: &mut W, header: &mut Header, v: &Voiced, tick: i32| -> Result<()> {
         let seq = numbers.entry(v.slot).or_insert(0);
         for part in crate::decode::voice_runs(&v.frames) {
@@ -395,16 +415,14 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
                 header.ticks = header.ticks.max(tick.max(0) as u32);
             }
             Next::Packet(Packet::Signon { tick, data }) => {
-                if opens_with_classes(&data)
-                    && let Some(t) = tables.take()
-                {
+                if let Some(t) = tables.before(&data) {
                     put(&mut out, DATA_TABLES, tick, &t)?;
                 }
                 signed_on = true;
                 put(&mut out, SIGNON, tick, &data)?;
             }
             Next::Packet(Packet::SyncTick { tick }) => {
-                if let Some(t) = tables.take() {
+                if let Some(t) = tables.at_end() {
                     put(&mut out, DATA_TABLES, tick, &t)?;
                 }
                 // Everything before the frames is the signon, as the header counts it.
@@ -413,7 +431,7 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
             }
             Next::Packet(Packet::ConsoleCmd { tick, data }) => put(&mut out, CONSOLE_CMD, tick, &data)?,
             Next::Packet(Packet::UserCmd { tick, data }) => put(&mut out, USER_CMD, tick, &data)?,
-            Next::Packet(Packet::DataTables { data, .. }) if !signed_on => tables = Some(data),
+            Next::Packet(Packet::DataTables { data, .. }) if !signed_on => tables = HeldTables::new(Some(data)),
             Next::Packet(Packet::DataTables { tick, data }) => put(&mut out, DATA_TABLES, tick, &data)?,
             Next::Packet(Packet::StringTables { tick, data }) => put(&mut out, STRING_TABLES, tick, &data)?,
             Next::Packet(Packet::Stop) | Next::Stop | Next::More => break,

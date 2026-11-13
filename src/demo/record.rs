@@ -2,7 +2,7 @@
 //! frame per datagram, every message as the server sent it. A new connection (a reconnect, a new
 //! map) starts a new file, with the signon that connection got.
 
-use super::{Header, Writer};
+use super::{Header, HeldTables, Writer};
 use crate::decode::{Lifecycle, Tables};
 use crate::net::bits::{BitBuf, BitWriter};
 use crate::net::messages::{NET_TICK, SVC_PACKETENTITIES};
@@ -132,17 +132,16 @@ impl Recorder {
                     signon_bytes: 0,
                 };
                 let mut w = Writer::new(BufWriter::new(file), header, crate::DEFAULT_TICK_INTERVAL)?;
-                // The data tables just before the class list (else with the last of the signon):
-                // where TF2 takes them when it plays the file itself.
-                let classes = st.signon.iter().position(|s| super::opens_with_classes(s)).unwrap_or(st.signon.len());
-                for (i, s) in st.signon.iter().enumerate() {
-                    if i == classes {
-                        w.data_tables(&st.datatables)?;
+                // Where TF2 takes the data tables when it plays the file itself.
+                let mut tables = HeldTables::new(Some(&st.datatables));
+                for s in &st.signon {
+                    if let Some(t) = tables.before(s) {
+                        w.data_tables(t)?;
                     }
                     w.signon(s)?;
                 }
-                if classes == st.signon.len() {
-                    w.data_tables(&st.datatables)?;
+                if let Some(t) = tables.at_end() {
+                    w.data_tables(t)?;
                 }
                 Ok(w)
             });
