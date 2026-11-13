@@ -139,7 +139,7 @@ impl Player<'_> {
                     }
                     Err(e) => {
                         // Not written yet, or not playable: try again in a while.
-                        note!("cannot play {}: {e:#}", want.demo.display());
+                        log!("cannot play {}: {e:#}", want.demo.display());
                         playback.set_problem(Some(format!("{e:#}")));
                         std::thread::sleep(RETRY);
                         continue;
@@ -159,7 +159,7 @@ impl Player<'_> {
                 Ok(()) => playback.set_problem(self.problem.clone()),
                 Err(e) => {
                     // The file went or is corrupt: tell why, and open it again in a while.
-                    note!("playing {}: {e:#}", want.demo.display());
+                    log!("playing {}: {e:#}", want.demo.display());
                     playback.set_problem(Some(format!("{e:#}")));
                     self.cur = None;
                     std::thread::sleep(RETRY);
@@ -208,7 +208,7 @@ impl Player<'_> {
     /// back first.
     fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
-        note!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
+        log!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
         self.relay.hub().goes_back();
         // The clients keep the models loaded since.
         self.models = c.dec.models_sent(self.models);
@@ -230,7 +230,7 @@ impl Player<'_> {
                 trace!("string tables set back with {} messages", msgs.len());
                 self.relay.hub().set_tables_back(&later, &msgs);
             } else {
-                note!(":{} the string tables changed since: the clients sign on again", self.relay.port());
+                log!(":{} the string tables changed since: the clients sign on again", self.relay.port());
                 self.cur = None;
                 self.dry = false;
                 return Ok(());
@@ -288,7 +288,7 @@ impl Player<'_> {
             }
             let (decoded, dry) = skim(c, &self.relay.hub, target);
             let decoded = decoded + usize::from(mark.is_some());
-            note!(
+            log!(
                 ":{} jump ahead from {from} to {} in {} ms, {} clients",
                 self.relay.port(),
                 c.tick(),

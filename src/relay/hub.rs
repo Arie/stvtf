@@ -24,7 +24,7 @@ const SLOW_SIGNON: &str = "stv.tf: took too long to load, retry";
 /// Everything the upstream and client threads share.
 pub(super) struct Hub {
     out: Out,
-    /// The port it listens on: which relay a note is of.
+    /// The port it listens on: which relay a log line is of.
     port: u16,
     password: String,
     slots: usize,
@@ -456,7 +456,7 @@ impl Hub {
             }
         }
         if let Some(reason) = &c.gone {
-            note!(":{} {} ({}) left: {}", self.port, c.name.escape_debug(), whence(from), reason.escape_debug());
+            log!(":{} {} ({}) left: {}", self.port, c.name.escape_debug(), whence(from), reason.escape_debug());
             self.clients.remove(&from);
             return;
         }
@@ -500,12 +500,12 @@ impl Hub {
                         &format!("This relay speaks protocol {}", handshake::PROTOCOL_VERSION),
                     )
                 } else if !self.password.is_empty() && password != self.password {
-                    note!(":{} {} ({}) gave a wrong password", self.port, name.escape_debug(), whence(from));
+                    log!(":{} {} ({}) gave a wrong password", self.port, name.escape_debug(), whence(from));
                     handshake::build_reject(nonce, "#GameUI_ServerRejectBadPassword")
                 } else if self.clients.len() >= self.slots && !self.clients.contains_key(&from) {
                     handshake::build_reject(nonce, "#GameUI_ServerRejectServerFull")
                 } else {
-                    note!(":{} {} ({}) connected", self.port, name.escape_debug(), whence(from));
+                    log!(":{} {} ({}) connected", self.port, name.escape_debug(), whence(from));
                     self.clients.insert(from, Client::new(name, challenge, nonce, now));
                     self.seen_client = true;
                     handshake::build_accept(nonce)
@@ -533,7 +533,7 @@ impl Hub {
             let loading = c.phase == Phase::Signon || c.reconnecting;
             let alive = now.duration_since(c.last_heard) < if loading { SIGNON_TIMEOUT } else { CLIENT_TIMEOUT };
             if !alive {
-                note!(
+                log!(
                     ":{port} {} ({}) timed out, {:?} for {:.1} s when last heard",
                     c.name.escape_debug(),
                     whence(*addr),
@@ -596,7 +596,7 @@ impl Hub {
             if !c.in_signon() {
                 return true;
             }
-            note!(":{port} {} ({}) still in its signon: dropped", c.name.escape_debug(), whence(*addr));
+            log!(":{port} {} ({}) still in its signon: dropped", c.name.escape_debug(), whence(*addr));
             // Only the goodbye: the rest of the signon is of no use to it.
             c.queue.clear();
             c.outgoing = None;

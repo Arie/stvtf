@@ -42,7 +42,7 @@ use std::hash::BuildHasher;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 /// `STVTF_DEBUG=relay` traces handshakes, signon timing and what each client is sent.
@@ -56,18 +56,18 @@ macro_rules! trace {
     };
 }
 
-/// Where what a relay notes goes: stderr, unless a host takes it ([`notes_to`]).
-static NOTES: std::sync::OnceLock<Notes> = std::sync::OnceLock::new();
-type Notes = Box<dyn Fn(&str) + Send + Sync>;
+/// Where a relay's log goes: stderr, unless a host takes it ([`log_to`]).
+static LOG: OnceLock<LogSink> = OnceLock::new();
+type LogSink = Box<dyn Fn(&str) + Send + Sync>;
 
-/// Has `take` given what relays note from here on (clients coming and going, jumps, demos that
-/// will not play), a line each, instead of stderr. Once: a second call changes nothing.
-pub fn notes_to(take: impl Fn(&str) + Send + Sync + 'static) {
-    let _ = NOTES.set(Box::new(take));
+/// Has `take` given a relay's log from here on (clients coming and going, jumps, demos that will
+/// not play), a line each, instead of stderr. Once: a second call changes nothing.
+pub fn log_to(take: impl Fn(&str) + Send + Sync + 'static) {
+    let _ = LOG.set(Box::new(take));
 }
 
-pub(crate) fn note(line: &str) {
-    match NOTES.get() {
+pub(crate) fn log_line(line: &str) {
+    match LOG.get() {
         Some(take) => take(line),
         None => eprintln!("{line}"),
     }
@@ -75,19 +75,19 @@ pub(crate) fn note(line: &str) {
 
 #[cfg(test)]
 #[test]
-fn a_clients_address_is_noted_without_its_end() {
+fn a_clients_address_is_logged_without_its_end() {
     assert_eq!(whence("203.0.113.57:27005".parse().unwrap()), "203.0.113.x:27005");
     assert_eq!(whence("[2001:db8:1:2:3:4:5:6]:27005".parse().unwrap()), "2001:db8:1::x:27005");
 }
 
 /// What is worth keeping of a relay's life, traced or not: a line a client, a jump or a failure.
-macro_rules! note {
+macro_rules! log {
     ($($arg:tt)*) => {
-        $crate::relay::note(&format!("relay: {}", format_args!($($arg)*)))
+        $crate::relay::log_line(&format!("relay: {}", format_args!($($arg)*)))
     };
 }
 
-/// A client's address as it is noted: without the end of it, the port kept to tell two apart.
+/// A client's address as it is logged: without the end of it, the port kept to tell two apart.
 pub(crate) fn whence(addr: SocketAddr) -> String {
     match addr.ip() {
         std::net::IpAddr::V4(ip) => {
@@ -198,7 +198,7 @@ impl Relay {
         self.sock.local_addr()
     }
 
-    /// The port clients connect to: which relay a note is of.
+    /// The port clients connect to: which relay a log line is of.
     pub(crate) fn port(&self) -> u16 {
         self.sock.local_addr().map_or(0, |a| a.port())
     }

@@ -85,7 +85,7 @@ impl Player<'_> {
         if !self.cur.as_ref().is_some_and(|c| c.dec.laser_twice(self.laser)) {
             return false;
         }
-        note!(":{} the match loaded the laser too: the clients sign on again", self.relay.port());
+        log!(":{} the match loaded the laser too: the clients sign on again", self.relay.port());
         self.match_laser = self.cur.take().map(|c| c.path);
         true
     }
