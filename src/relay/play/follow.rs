@@ -39,7 +39,7 @@ impl Player<'_> {
         self.clock = Some((c.tick() as f64 * f64::from(c.dec.tick_interval()), Instant::now()));
         // The match's own HUD resets (a spawn, a new round) drop the notes too.
         if life.spans.iter().any(|s| crate::relay::server_msg::is_reset_hud(bits.bytes(), s)) {
-            hub.notes_again(Instant::now());
+            hub.reshow_notes(Instant::now());
         }
         // The match paused or went on: the clients are told reliably too.
         if c.paused != was_paused {

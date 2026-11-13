@@ -474,7 +474,7 @@ fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     let beam = Beam { from: [0.0; 3], to: [1.0; 3], rgb: [255, 0, 0], life: 1.0, width: 2.0, speed: 0 };
     playback.keep(vec![beam]);
     let mut p = player::Player::new(&relay);
-    p.opened(c);
+    p.start_demo(c);
     p.show_kept(&playback);
     assert_eq!(p.laser, None, "nobody in the game");
     let in_game = |relay: &crate::relay::Relay, phase| {
@@ -493,7 +493,7 @@ fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     p.cur.as_mut().unwrap().dec.feed(load.bytes(), load.nbits());
     p.step(&want).unwrap();
     assert!(p.cur.is_none(), "a new signon");
-    p.opened(upward_until(few_in));
+    p.start_demo(upward_until(few_in));
     p.kept.sent.clear();
     p.show_kept(&playback);
     assert_eq!(p.laser, None, "not again");

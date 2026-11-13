@@ -118,7 +118,7 @@ impl Player<'_> {
             let want = playback.get();
             if self.cur.as_ref().is_none_or(|c| c.path != want.demo) {
                 // Not while a client is in a signon: a second crashes it. Nothing plays meanwhile.
-                if self.relay.hub().signon_waits(Instant::now()) {
+                if self.relay.hub().hold_for_signon(Instant::now()) {
                     std::thread::sleep(NAP);
                     continue;
                 }
@@ -131,7 +131,7 @@ impl Player<'_> {
                 }
                 match Cursor::open(&want.demo, &self.relay.hub) {
                     Ok(c) => {
-                        self.opened(c);
+                        self.start_demo(c);
                         playback.set_problem(None);
                         if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
                             self.index = Some(Index::shared(&want.demo));
@@ -146,7 +146,7 @@ impl Player<'_> {
                     }
                 }
             } else {
-                self.relay.hub().no_signon_waits();
+                self.relay.hub().release_signon_hold();
             }
             if self.flushing.is_none() {
                 self.show_kept(playback);
@@ -168,8 +168,8 @@ impl Player<'_> {
         }
     }
 
-    /// `c` just opened: the clients sign on to its tables, the laser not among them.
-    pub(super) fn opened(&mut self, c: Cursor) {
+    /// Plays `c`, just opened: the clients sign on to its tables, the laser not among them.
+    pub(super) fn start_demo(&mut self, c: Cursor) {
         if self.match_laser.as_ref().is_some_and(|p| *p != c.path) {
             self.match_laser = None;
         }
@@ -191,13 +191,13 @@ impl Player<'_> {
             self.idle = None;
             return true;
         }
-        hub.no_signon_waits();
+        hub.release_signon_hold();
         let since = *self.idle.get_or_insert_with(Instant::now);
         if since.elapsed() > IDLE && self.cur.is_some() {
             self.cur = None;
             self.index = None;
             self.signed_on = None;
-            hub.forget();
+            hub.start_over();
         }
         false
     }
@@ -209,7 +209,7 @@ impl Player<'_> {
     fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
         log!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
-        self.relay.hub().goes_back();
+        self.relay.hub().reshow_panel_with_next_keyframe();
         // The clients keep the models loaded since.
         self.models = c.dec.models_sent(self.models);
         let rewritten = c.dec.tables_rewritten();
@@ -323,7 +323,7 @@ impl Player<'_> {
                     since.extend(c.dec.update_timer());
                     let mut hub = self.relay.hub();
                     hub.send_keyframe(&key, &since, c.paused);
-                    hub.notes_again(Instant::now());
+                    hub.reshow_notes(Instant::now());
                     drop(hub);
                     self.floor = Some(super::follow::floor_after(self.floor, &c.dec, tick, &since));
                     if std::mem::take(&mut self.rekeyed) {

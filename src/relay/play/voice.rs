@@ -75,8 +75,8 @@ impl Sequences {
         self.talking.insert(slot, who);
     }
 
-    /// Those who stopped, once each; their numbering starts over.
-    fn stopped(&mut self, now: Instant) -> Vec<Talking> {
+    /// Takes those who stopped, once each; their numbering starts over.
+    fn take_stopped(&mut self, now: Instant) -> Vec<Talking> {
         let gone: Vec<Slot> = self
             .talking
             .iter()
@@ -87,10 +87,10 @@ impl Sequences {
         gone.iter().filter_map(|s| self.talking.remove(s)).collect()
     }
 
-    /// The slot for `steamid`, who is no player, of those nobody is in now (`free`): theirs while
+    /// Claims a slot for `steamid`, who is no player, of those nobody is in now (`free`): theirs while
     /// it stays free, else the first no other voice has. A client plays a voice in such a slot
     /// as of someone unconnected. None when there is none left.
-    pub(super) fn spare_for(&mut self, steamid: &str, free: &[u8], now: Instant) -> Option<u8> {
+    pub(super) fn claim_spare(&mut self, steamid: &str, free: &[u8], now: Instant) -> Option<u8> {
         self.spare.retain(|_, (slot, last)| free.contains(slot) && now.saturating_duration_since(*last) < SPARE_HELD);
         let slot = match self.spare.get(steamid) {
             Some((slot, _)) => *slot,
@@ -100,9 +100,9 @@ impl Sequences {
         Some(slot)
     }
 
-    /// Whether `steamid`, who is no player, has `SourceTV`'s slot now: it is one voice's at a
-    /// time (two in one slot are noise), the first to talk until they fall silent.
-    pub(super) fn takes_slot(&mut self, steamid: &str, now: Instant) -> bool {
+    /// Claims `SourceTV`'s slot for `steamid`, who is no player; whether they have it. It is one
+    /// voice's at a time (two in one slot are noise), the first to talk until they fall silent.
+    pub(super) fn claim_sourcetv(&mut self, steamid: &str, now: Instant) -> bool {
         if let Some((holder, last)) = &self.sourcetv
             && holder != steamid
             && now.saturating_duration_since(*last) < SLOT_HELD
@@ -124,9 +124,9 @@ impl Player<'_> {
         for v in voice {
             let (spare, slot) = match v.user {
                 Some(user) => (None, Slot::Player(user)),
-                None => match self.voice_seq.spare_for(&v.steamid, &c.dec.extractor().spare_slots(), now) {
+                None => match self.voice_seq.claim_spare(&v.steamid, &c.dec.extractor().spare_slots(), now) {
                     Some(slot) => (Some(slot), Slot::Spare(slot)),
-                    None if self.voice_seq.takes_slot(&v.steamid, now) => (None, Slot::SourceTv),
+                    None if self.voice_seq.claim_sourcetv(&v.steamid, now) => (None, Slot::SourceTv),
                     None => continue,
                 },
             };
@@ -145,7 +145,7 @@ impl Player<'_> {
             }
         }
         // As the game ends a voice: without it a client's decoder is left mid-speech.
-        for t in self.voice_seq.stopped(now) {
+        for t in self.voice_seq.take_stopped(now) {
             if let Some(m) = c.dec.voice_end(t.user, t.spare, &t.steamid, t.rate) {
                 hub.tell_active_now(&m);
             }
@@ -171,25 +171,25 @@ mod tests {
     fn those_who_are_no_player_have_sourcetvs_slot_one_at_a_time() {
         use std::time::{Duration, Instant};
         let (mut seqs, now) = (super::Sequences::default(), Instant::now());
-        assert!(seqs.takes_slot("caster", now));
-        assert!(seqs.takes_slot("caster", now + Duration::from_millis(100)));
-        assert!(!seqs.takes_slot("other", now + Duration::from_millis(200)), "two voices in one slot are noise");
-        assert!(seqs.takes_slot("caster", now + Duration::from_millis(300)));
-        assert!(seqs.takes_slot("other", now + Duration::from_millis(700)), "once the first fell silent");
+        assert!(seqs.claim_sourcetv("caster", now));
+        assert!(seqs.claim_sourcetv("caster", now + Duration::from_millis(100)));
+        assert!(!seqs.claim_sourcetv("other", now + Duration::from_millis(200)), "two voices in one slot are noise");
+        assert!(seqs.claim_sourcetv("caster", now + Duration::from_millis(300)));
+        assert!(seqs.claim_sourcetv("other", now + Duration::from_millis(700)), "once the first fell silent");
     }
 
     #[test]
     fn those_who_are_no_player_each_have_a_slot_nobody_is_in() {
         use std::time::{Duration, Instant};
         let (mut seqs, now) = (super::Sequences::default(), Instant::now());
-        assert_eq!(seqs.spare_for("caster", &[23, 22, 21], now), Some(23));
-        assert_eq!(seqs.spare_for("other", &[23, 22, 21], now), Some(22), "talking at once, each their own");
-        assert_eq!(seqs.spare_for("caster", &[23, 22, 21], now), Some(23), "and they keep it");
-        assert_eq!(seqs.spare_for("caster", &[22, 21], now), Some(21), "a player came into theirs: another");
-        assert_eq!(seqs.spare_for("third", &[22, 21], now), None, "none left over");
+        assert_eq!(seqs.claim_spare("caster", &[23, 22, 21], now), Some(23));
+        assert_eq!(seqs.claim_spare("other", &[23, 22, 21], now), Some(22), "talking at once, each their own");
+        assert_eq!(seqs.claim_spare("caster", &[23, 22, 21], now), Some(23), "and they keep it");
+        assert_eq!(seqs.claim_spare("caster", &[22, 21], now), Some(21), "a player came into theirs: another");
+        assert_eq!(seqs.claim_spare("third", &[22, 21], now), None, "none left over");
         let later = now + Duration::from_secs(60);
-        assert_eq!(seqs.spare_for("caster", &[22, 21], later), Some(22), "one long silent is free again");
-        assert_eq!(seqs.spare_for("third", &[], later), None, "a full server has none");
+        assert_eq!(seqs.claim_spare("caster", &[22, 21], later), Some(22), "one long silent is free again");
+        assert_eq!(seqs.claim_spare("third", &[], later), None, "a full server has none");
     }
 
     #[test]
@@ -256,12 +256,12 @@ mod tests {
             5,
             super::Talking { last: now, user: Some(7), spare: None, steamid: String::new(), rate: 24000 },
         );
-        assert!(seqs.stopped(now + Duration::from_millis(150)).is_empty(), "between two posts");
+        assert!(seqs.take_stopped(now + Duration::from_millis(150)).is_empty(), "between two posts");
         assert_eq!(seqs.next.get(&slot), Some(&5));
-        let ended = seqs.stopped(now + Duration::from_millis(400));
+        let ended = seqs.take_stopped(now + Duration::from_millis(400));
         assert_eq!(ended.iter().map(|t| t.user).collect::<Vec<_>>(), [Some(7)]);
         assert_eq!(seqs.next.get(&slot), None);
-        assert!(seqs.stopped(now + Duration::from_secs(1)).is_empty(), "ended once");
+        assert!(seqs.take_stopped(now + Duration::from_secs(1)).is_empty(), "ended once");
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
         let past = super::MAX_SPEAKERS as u16;
         seqs.record(super::Slot::Player(past), 1, talking(past));
         assert_eq!(seqs.next.len(), super::MAX_SPEAKERS);
-        let ended = seqs.stopped(now + Duration::from_secs(1));
+        let ended = seqs.take_stopped(now + Duration::from_secs(1));
         assert!(ended.iter().any(|t| t.user == Some(past)), "its end goes too");
         assert_eq!(ended.len(), super::MAX_SPEAKERS + 1);
     }

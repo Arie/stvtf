@@ -125,7 +125,7 @@ fn notes_go_again_after_every_full_update() {
     hub.clients.get_mut(&active).unwrap().set_phase(Phase::WaitingFull, Instant::now());
     hub.mode = Mode::Play { paused: false };
     hub.keyframe = Some(vec![key]);
-    hub.wants_entities(active, Instant::now());
+    hub.start_entities(active, Instant::now());
     assert!(sent(&mut hub).starts_with(&expected), "and after the datagrams since one");
 }
 
@@ -146,12 +146,12 @@ fn notes_go_again_once_a_client_is_in_and_after_a_hud_reset() {
     assert_eq!(queued(&mut hub), std::slice::from_ref(&note), "once its HUD is up");
     hub.send_due_notes(now + NOTES_AFTER_ENTERING * 2);
     assert_eq!(queued(&mut hub), [], "once");
-    hub.notes_again(now);
+    hub.reshow_notes(now);
     hub.send_due_notes(now + NOTES_AFTER_RESET);
     assert_eq!(queued(&mut hub), std::slice::from_ref(&note), "past a HUD reset");
     // A reset as it goes in (a seek's full update) leaves the wait for its HUD.
     hub.clients.get_mut(&active).unwrap().enter_notes(&[], now);
-    hub.notes_again(now);
+    hub.reshow_notes(now);
     hub.send_due_notes(now + NOTES_AFTER_RESET);
     assert_eq!(queued(&mut hub), std::slice::from_ref(&note), "past the reset");
     hub.send_due_notes(now + NOTES_AFTER_ENTERING);
@@ -410,7 +410,7 @@ fn a_client_joining_soon_after_a_full_update_gets_the_datagrams_since() {
     b.hub.keyframe = Some(vec![tail.clone(), tail]);
     let seq = b.client_state().out_seq;
     let now = Instant::now();
-    b.hub.wants_entities(b.addr, now);
+    b.hub.start_entities(b.addr, now);
     assert_eq!(b.client_state().phase, Phase::Active);
     assert_eq!(b.client_state().out_seq, seq + 2);
     assert!(netchan::verify_checksum(&b.reply()));
@@ -420,7 +420,7 @@ fn a_client_joining_soon_after_a_full_update_gets_the_datagrams_since() {
 fn a_client_joining_long_after_a_full_update_waits_for_the_next() {
     let mut b = Bench::new("", 1);
     b.connect();
-    b.hub.wants_entities(b.addr, Instant::now());
+    b.hub.start_entities(b.addr, Instant::now());
     assert_eq!(b.client_state().phase, Phase::WaitingFull);
 }
 
@@ -452,7 +452,7 @@ fn a_new_signon_waits_for_the_clients_in_one() {
     b.hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
     b.connect();
     let now = Instant::now();
-    assert!(!b.hub.signon_waits(now), "a client just in, sent nothing yet");
+    assert!(!b.hub.hold_for_signon(now), "a client just in, sent nothing yet");
     // In the game, then told to reconnect for a demo.
     let c = b.client_state();
     c.gate = None;
@@ -463,16 +463,16 @@ fn a_new_signon_waits_for_the_clients_in_one() {
         hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
     };
     new_signon(&mut b.hub);
-    assert!(b.hub.signon_waits(now), "told to reconnect");
+    assert!(b.hub.hold_for_signon(now), "told to reconnect");
     b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
     assert_eq!(b.client_state().cursor, 1);
-    assert!(b.hub.signon_waits(now), "part of the signon sent");
+    assert!(b.hub.hold_for_signon(now), "part of the signon sent");
     b.client_state().set_phase(Phase::Active, now);
-    assert!(!b.hub.signon_waits(now), "through it");
+    assert!(!b.hub.hold_for_signon(now), "through it");
     new_signon(&mut b.hub);
-    assert!(b.hub.signon_waits(now));
+    assert!(b.hub.hold_for_signon(now));
     b.hub.clients.clear();
-    assert!(!b.hub.signon_waits(now), "gone");
+    assert!(!b.hub.hold_for_signon(now), "gone");
 }
 
 /// What the bench's client is sent, read as a client reads it: each stream's messages.
@@ -504,10 +504,10 @@ fn a_client_still_in_its_signon_when_the_hold_ends_is_dropped_saying_why() {
     c.gate = None;
     c.set_phase(Phase::Active, now);
     b.hub.clients.insert(active, c);
-    assert!(b.hub.signon_waits(now));
+    assert!(b.hub.hold_for_signon(now));
     sent_to(&b);
-    assert!(b.hub.signon_waits((now + SIGNON_HOLD).checked_sub(Duration::from_millis(1)).unwrap()));
-    assert!(!b.hub.signon_waits(now + SIGNON_HOLD), "not for good");
+    assert!(b.hub.hold_for_signon((now + SIGNON_HOLD).checked_sub(Duration::from_millis(1)).unwrap()));
+    assert!(!b.hub.hold_for_signon(now + SIGNON_HOLD), "not for good");
     assert!(!b.hub.clients.contains_key(&b.addr), "dropped");
     assert!(b.hub.clients.contains_key(&active), "the one in the game stays");
     let sent = sent_to(&b);
@@ -532,9 +532,9 @@ fn a_hold_let_go_of_starts_over() {
     let (mut hub, active) = hub_with_one_in();
     hub.reconnect_all();
     let now = Instant::now();
-    assert!(hub.signon_waits(now));
-    hub.no_signon_waits();
-    assert!(hub.signon_waits(now + SIGNON_HOLD), "{:?}", hub.clients[&active].phase);
+    assert!(hub.hold_for_signon(now));
+    hub.release_signon_hold();
+    assert!(hub.hold_for_signon(now + SIGNON_HOLD), "{:?}", hub.clients[&active].phase);
 }
 
 /// What anyone on the internet can send a relay: random, forged, or past the checksum.
@@ -584,20 +584,20 @@ fn a_client_coming_in_during_a_hold_waits_for_the_next_signon() {
     c.gate = None;
     c.cursor = 1;
     b.hub.clients.insert(loading, c);
-    assert!(b.hub.signon_waits(now));
+    assert!(b.hub.hold_for_signon(now));
     b.connect();
     b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
     assert_eq!(b.client_state().cursor, 0, "not on the old signon");
-    assert!(!b.hub.signon_waits(now + SIGNON_HOLD));
+    assert!(!b.hub.hold_for_signon(now + SIGNON_HOLD));
     assert!(b.hub.clients.contains_key(&b.addr), "not dropped");
     assert!(!b.hub.clients.contains_key(&loading));
     // The same again, but the hold let go of: it gets this demo's signon.
     b.hub.clients.insert(loading, Client::new("loading".into(), 1, 1, now));
     b.hub.clients.get_mut(&loading).unwrap().reconnecting = true;
-    assert!(b.hub.signon_waits(now));
+    assert!(b.hub.hold_for_signon(now));
     b.client_sends(2, &messages::signonstate(Signon::Connected, -1));
     assert_eq!(b.client_state().cursor, 0);
-    b.hub.no_signon_waits();
+    b.hub.release_signon_hold();
     assert_eq!(b.client_state().cursor, 1);
 }
 

@@ -80,7 +80,7 @@ impl Hub {
     /// The server started a signon (connected, or a new map): so does every client. A reconnect
     /// asked of a client (see [`Hub::reconnect_all`]) still goes first.
     pub(super) fn restart_signon(&mut self, now: Instant) {
-        self.forget();
+        self.start_over();
         let reconnect = messages::signonstate(Signon::Connected, -1);
         let play = matches!(self.mode, Mode::Play { .. });
         for c in self.clients.values_mut() {
@@ -239,8 +239,9 @@ impl Hub {
         }
     }
 
-    /// The next full update sets clients' clocks back.
-    pub(super) fn goes_back(&mut self) {
+    /// The next full update sets clients' clocks back: it shows the spectator panel again, which
+    /// TF2's player bar needs.
+    pub(super) fn reshow_panel_with_next_keyframe(&mut self) {
         self.with_next = vec![show_panel(SPECTATORS, false), show_panel(SPECTATORS, true)];
     }
 
@@ -251,7 +252,7 @@ impl Hub {
 
     /// The clients in the game had their HUD reset, which drops the notes: they get them again in
     /// a moment, past it (a reset in the same packet is read after its reliable part).
-    pub(super) fn notes_again(&mut self, now: Instant) {
+    pub(super) fn reshow_notes(&mut self, now: Instant) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
             c.notes_reset = Some(now + NOTES_AFTER_RESET);
         }
@@ -302,7 +303,7 @@ impl Hub {
     }
 
     /// The backlog goes: the next signon starts afresh.
-    pub(super) fn forget(&mut self) {
+    pub(super) fn start_over(&mut self) {
         self.backlog.clear();
         // Of the last demo's entities: the player gives them again.
         self.notes.clear();
@@ -344,8 +345,9 @@ impl Hub {
         }
     }
 
-    /// A client is ready for entities: from the kept datagrams if there are, or a full update.
-    pub(super) fn wants_entities(&mut self, addr: SocketAddr, now: Instant) {
+    /// Starts a client ready for entities on them: from the kept datagrams if there are, or the
+    /// next full update.
+    pub(super) fn start_entities(&mut self, addr: SocketAddr, now: Instant) {
         let Some(c) = self.clients.get_mut(&addr) else { return };
         if let Some(frames) = &self.keyframe
             && c.through_backlog(&self.backlog)
@@ -388,7 +390,7 @@ impl Hub {
             self.out.burst(from, c, pkt.header.reliable(), now);
         }
         if ready {
-            self.wants_entities(from, now);
+            self.start_entities(from, now);
         }
     }
 
@@ -454,9 +456,9 @@ impl Hub {
         self.clients.clear();
     }
 
-    /// Whether another signon waits: a client is in one. For [`SIGNON_HOLD`] at most; then those
-    /// still in one are dropped, told why, and it goes.
-    pub(super) fn signon_waits(&mut self, now: Instant) -> bool {
+    /// Holds another signon while a client is in one, for [`SIGNON_HOLD`] at most; then those still
+    /// in one are dropped, told why, and it goes. Whether it is held.
+    pub(super) fn hold_for_signon(&mut self, now: Instant) -> bool {
         if !self.clients.values().any(Client::mid_signon) {
             self.signon_held = None;
             return false;
@@ -485,9 +487,9 @@ impl Hub {
         false
     }
 
-    /// No signon waits: a hold let go of starts over the next time, and those that came in during
+    /// No signon is held: one let go of starts over the next time, and those that came in during
     /// it get this signon.
-    pub(super) fn no_signon_waits(&mut self) {
+    pub(super) fn release_signon_hold(&mut self) {
         if self.signon_held.take().is_some() {
             for c in self.clients.values_mut() {
                 c.pump(&self.backlog);
