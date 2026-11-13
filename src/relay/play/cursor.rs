@@ -53,50 +53,22 @@ impl Cursor {
         Self::open_with(path, Some(hub))
     }
 
-    /// [`Cursor::open`], giving the signon to `hub` if any: none when the clients have the demo's
-    /// already (a jump in it), or to decode it on the side.
-    pub(super) fn open_with(path: &Path, hub: Option<&Mutex<Hub>>) -> Result<Cursor> {
+    /// [`Cursor::open`], giving the signon to nobody: the clients have the demo's already (a jump
+    /// in it), or it is decoded on the side.
+    pub(super) fn open_detached(path: &Path) -> Result<Cursor> {
+        Self::open_with(path, None)
+    }
+
+    fn open_with(path: &Path, hub: Option<&Mutex<Hub>>) -> Result<Cursor> {
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
         let mut reader = demo::Reader::new(file)?;
-        let mut signon = Vec::new();
-        let mut tables = None;
-        let mut synced = false;
-        let next = loop {
-            match reader.next_packet()? {
-                Next::Packet(Packet::Signon { data, .. }) => signon.push(data),
-                Next::Packet(Packet::DataTables { .. }) => tables = Some(tables_of(path, &reader)?),
-                Next::Packet(p @ Packet::Message { .. }) => break Some(p),
-                Next::Packet(Packet::SyncTick { .. }) => synced = true,
-                Next::Packet(_) => {}
-                // A live demo can be read before its first frame is written; its signon is all
-                // there once the sync tick that ends it is.
-                Next::More if tables.is_some() && synced => break None,
-                Next::More => bail!("{} has no signon yet", path.display()),
-                Next::Stop => bail!("{} has no frames", path.display()),
-            }
-        };
-        let tables = tables.context("the demo has no data tables")?;
+        let (signon, tables, next) = read_signon(path, &mut reader)?;
         if Some(tables.sendtable_crc()) != *OUR_CRC {
             bail!("the demo is of a TF2 build with other class tables, which a game client cannot play");
         }
         let mut dec = Decoder::new(&tables, 0.0)?;
         dec.keep_world();
-        let mut spawncount = None;
-        for data in signon {
-            let bits = BitBuf::from_bytes(data);
-            let life = dec.feed(bits.bytes(), bits.nbits());
-            let Some(hub) = hub else { continue };
-            if let Some((count, _)) = &life.server_info {
-                spawncount = Some(*count);
-            }
-            let (bits, life) = match spawncount {
-                Some(count) => with_spawncount(&bits, &life, count),
-                None => (bits, life),
-            };
-            let mut h = lock(hub);
-            h.upstream_stream(&bits, Part::Reliable, &life);
-            h.upstream_flush();
-        }
+        feed_signon(&mut dec, signon, hub);
         Ok(Cursor {
             path: path.to_owned(),
             reader,
@@ -182,9 +154,59 @@ impl Cursor {
         Some((bits, life))
     }
 
+    /// Passes over the packet read ahead.
+    pub(super) fn skip_next(&mut self) {
+        self.next = None;
+    }
+
     /// Where playback is: the server tick of the last frame.
     pub(super) fn tick(&self) -> i64 {
         i64::from(self.dec.server_tick())
+    }
+}
+
+/// A demo's signon packets, read up to its first frame, its data tables, and that frame if it is
+/// written.
+fn read_signon(path: &Path, reader: &mut demo::Reader<File>) -> Result<(Vec<Vec<u8>>, Tables, Option<Packet>)> {
+    let mut signon = Vec::new();
+    let mut tables = None;
+    let mut synced = false;
+    let next = loop {
+        match reader.next_packet()? {
+            Next::Packet(Packet::Signon { data, .. }) => signon.push(data),
+            Next::Packet(Packet::DataTables { .. }) => tables = Some(tables_of(path, reader)?),
+            Next::Packet(p @ Packet::Message { .. }) => break Some(p),
+            Next::Packet(Packet::SyncTick { .. }) => synced = true,
+            Next::Packet(_) => {}
+            // A live demo can be read before its first frame is written; its signon is all
+            // there once the sync tick that ends it is.
+            Next::More if tables.is_some() && synced => break None,
+            Next::More => bail!("{} has no signon yet", path.display()),
+            Next::Stop => bail!("{} has no frames", path.display()),
+        }
+    };
+    let tables = tables.context("the demo has no data tables")?;
+    Ok((signon, tables, next))
+}
+
+/// Decodes the `signon` packets, and passes them to `hub` if any, with the spawn count a game
+/// client takes.
+fn feed_signon(dec: &mut Decoder, signon: Vec<Vec<u8>>, hub: Option<&Mutex<Hub>>) {
+    let mut spawncount = None;
+    for data in signon {
+        let bits = BitBuf::from_bytes(data);
+        let life = dec.feed(bits.bytes(), bits.nbits());
+        let Some(hub) = hub else { continue };
+        if let Some((count, _)) = &life.server_info {
+            spawncount = Some(*count);
+        }
+        let (bits, life) = match spawncount {
+            Some(count) => with_spawncount(&bits, &life, count),
+            None => (bits, life),
+        };
+        let mut h = lock(hub);
+        h.upstream_stream(&bits, Part::Reliable, &life);
+        h.upstream_flush();
     }
 }
 

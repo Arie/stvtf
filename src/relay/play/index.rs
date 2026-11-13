@@ -106,7 +106,7 @@ impl Drop for Index {
 
 /// Decodes the demo, a checkpoint every `every` ticks, until it ends or the index is dropped.
 fn index_demo(path: &Path, index: &Weak<Index>, every: u32) -> Result<()> {
-    let mut c = Cursor::open_with(path, None)?;
+    let mut c = Cursor::open_detached(path)?;
     let mut last: Option<u32> = None;
     loop {
         let Some(ix) = index.upgrade() else { return Ok(()) };
@@ -116,7 +116,7 @@ fn index_demo(path: &Path, index: &Weak<Index>, every: u32) -> Result<()> {
         match c.next_tick() {
             None if c.ended => return Ok(()),
             None => std::thread::sleep(WAIT),
-            Some(NOT_A_FRAME) => c.next = None,
+            Some(NOT_A_FRAME) => c.skip_next(),
             Some(_) => {
                 c.decode();
                 let tick = c.dec.server_tick();
@@ -155,7 +155,7 @@ impl Cursor {
 
     /// The demo at `path` decoded as far as `mark`, ready to read on from there.
     pub(super) fn restore(path: &Path, mark: &Checkpoint) -> Result<Cursor> {
-        let mut c = Cursor::open_with(path, None)?;
+        let mut c = Cursor::open_detached(path)?;
         for t in &mark.tables {
             c.dec.feed(t.bytes(), t.nbits());
         }
@@ -186,7 +186,7 @@ mod tests {
     fn read_out(mut c: Cursor) -> Cursor {
         while let Some(t) = c.next_tick() {
             if t == NOT_A_FRAME {
-                c.next = None;
+                c.skip_next();
             } else {
                 c.decode();
             }
@@ -211,12 +211,12 @@ mod tests {
         let index = Arc::new(Index { path: path.clone(), marks: Mutex::new(Vec::new()), stop: AtomicBool::new(false) });
         index_demo(&path, &Arc::downgrade(&index), 300).unwrap();
         let marks = index.marks.lock().unwrap().clone();
-        let mut whole = Cursor::open_with(&path, None).unwrap();
+        let mut whole = Cursor::open_detached(&path).unwrap();
         for mark in marks.iter().skip(1).step_by(3) {
             while whole.dec.server_tick() < mark.tick {
                 match whole.next_tick() {
                     None => panic!("the demo ended"),
-                    Some(NOT_A_FRAME) => whole.next = None,
+                    Some(NOT_A_FRAME) => whole.skip_next(),
                     Some(_) => drop(whole.decode()),
                 }
             }
@@ -239,7 +239,7 @@ mod tests {
             index_demo(&path, &Arc::downgrade(&index), 300).unwrap();
             let marks = index.marks.lock().unwrap().clone();
             assert!(marks.len() >= 3, "{}: {} checkpoints", path.display(), marks.len());
-            let whole = read_out(Cursor::open_with(&path, None).unwrap());
+            let whole = read_out(Cursor::open_detached(&path).unwrap());
             // A few, spread out: each reads to the end.
             let step = (marks.len() / 4).max(1);
             for mark in marks.iter().skip(1).step_by(step) {

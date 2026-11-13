@@ -19,11 +19,11 @@ use tf_demo_parser::demo::message::Message;
 /// `pl_upward.dem` decoded until `done`.
 pub(super) fn upward_until(done: impl Fn(&Cursor) -> bool) -> Cursor {
     let path = crate::fixture("pl_upward.dem");
-    let mut c = Cursor::open_with(&path, None).unwrap();
+    let mut c = Cursor::open_detached(&path).unwrap();
     while !done(&c) {
         match c.next_tick() {
             None => panic!("the demo ended"),
-            Some(NOT_A_FRAME) => c.next = None,
+            Some(NOT_A_FRAME) => c.skip_next(),
             Some(_) => drop(c.decode()),
         }
     }
@@ -173,13 +173,13 @@ fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
 #[test]
 fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
     let path = crate::fixture("pl_upward.dem");
-    let mut c = Cursor::open_with(&path, None).unwrap();
+    let mut c = Cursor::open_detached(&path).unwrap();
     let mut cues = 0;
     // Ten seconds in, with the players there.
     while c.dec.server_tick() < c.first.unwrap_or(i64::MAX).saturating_add(660) as u32 || c.first.is_none() {
         match c.next_tick() {
             None => panic!("the demo ended"),
-            Some(NOT_A_FRAME) => c.next = None,
+            Some(NOT_A_FRAME) => c.skip_next(),
             Some(_) => {
                 let Some((bits, life)) = c.decode() else { continue };
                 cues += life.spans.iter().filter(|s| c.dec.is_director_cue(bits.bytes(), s)).count();
@@ -340,10 +340,10 @@ fn a_live_recording_plays_on_after_a_full_update() {
     let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
     // Keyed at a few places, each its own.
     for at in [40, 41, 42, 43, 44, 45] {
-        let mut c = Cursor::open_with(&live, None).unwrap();
+        let mut c = Cursor::open_detached(&live).unwrap();
         while c.recent.len() < at {
             match c.next_tick() {
-                Some(NOT_A_FRAME) => c.next = None,
+                Some(NOT_A_FRAME) => c.skip_next(),
                 Some(_) => drop(c.decode()),
                 None => panic!("the demo ended"),
             }
@@ -399,11 +399,11 @@ fn a_full_update_in_the_demo_then_a_delta_from_before_it_reach_a_client_it_can_f
 fn the_frames_after_a_keyframe_build_only_on_frames_a_client_still_has() {
     let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
     let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
-    let mut c = Cursor::open_with(&live, None).unwrap();
+    let mut c = Cursor::open_detached(&live).unwrap();
     // On until four frames back are kept.
     let kept = loop {
         match c.next_tick() {
-            Some(NOT_A_FRAME) => c.next = None,
+            Some(NOT_A_FRAME) => c.skip_next(),
             Some(_) => drop(c.decode()),
             None => panic!("the demo ended"),
         }

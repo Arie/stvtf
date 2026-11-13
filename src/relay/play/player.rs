@@ -215,7 +215,7 @@ impl Player<'_> {
         let mark = self.index.as_ref().and_then(|i| i.before(target));
         let mut again = match &mark {
             Some(m) => Cursor::restore(&want.demo, m)?,
-            None => Cursor::open_with(&want.demo, None)?,
+            None => Cursor::open_detached(&want.demo)?,
         };
         self.dry = skim(&mut again, &self.relay.hub, target).1;
         trace!("decoded back to {target} in {} ms", took.elapsed().as_millis());
@@ -367,7 +367,7 @@ impl Player<'_> {
         let Some(c) = &mut self.cur else { return };
         match c.next_tick() {
             // Not a frame (a user command of a POV demo, say): passed over, paused or not.
-            Some(NOT_A_FRAME) => c.next = None,
+            Some(NOT_A_FRAME) => c.skip_next(),
             // The first frame, in full, is only decoded: every client starts from a keyframe of
             // wherever playback is.
             Some(_) if !c.started => {
@@ -433,7 +433,7 @@ fn skim(c: &mut Cursor, hub: &Mutex<Hub>, target: i64) -> (usize, bool) {
                     lock(hub).skim(&bits, &life);
                     decoded += 1;
                 }
-                None => c.next = None,
+                None => c.skip_next(),
             },
         }
     }
