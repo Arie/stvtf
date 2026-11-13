@@ -136,7 +136,7 @@ const READ_POLL: Duration = Duration::from_millis(5);
 /// asking for another.
 const FULL_UPDATE_GRACE: Duration = Duration::from_secs(1);
 /// Datagrams kept since the last full update, for clients that join after it.
-const MAX_KEYFRAME: usize = 64;
+const MAX_SINCE_FULL: usize = 64;
 /// After a full update, the next is asked of the server no sooner than this, however many
 /// clients want one: each costs the server a full snapshot.
 const FULL_UPDATE_GAP: Duration = Duration::from_secs(2);

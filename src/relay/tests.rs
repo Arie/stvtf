@@ -119,12 +119,12 @@ fn notes_go_again_after_every_full_update() {
     let expected = w.into_bytes();
     hub.set_notes(vec![note.clone()]);
     assert!(hub.clients[&active].queue.is_empty(), "for full updates to come; shown now by the player");
-    hub.all_want_keyframe(Instant::now());
+    hub.rekey_all(Instant::now());
     hub.send_keyframe(&key, &[], false);
     assert!(sent(&mut hub).starts_with(&expected), "after its full update");
     hub.clients.get_mut(&active).unwrap().set_phase(Phase::WaitingFull, Instant::now());
     hub.mode = Mode::Play { paused: false };
-    hub.keyframe = Some(vec![key]);
+    hub.since_full = Some(vec![key]);
     hub.start_entities(active, Instant::now());
     assert!(sent(&mut hub).starts_with(&expected), "and after the datagrams since one");
 }
@@ -407,7 +407,7 @@ fn a_client_joining_soon_after_a_full_update_gets_the_datagrams_since() {
         w.write_bits(0b101_010, TYPE_BITS);
         w.finish()
     };
-    b.hub.keyframe = Some(vec![tail.clone(), tail]);
+    b.hub.since_full = Some(vec![tail.clone(), tail]);
     let seq = b.client_state().out_seq;
     let now = Instant::now();
     b.hub.start_entities(b.addr, now);
@@ -437,9 +437,9 @@ fn a_new_map_signs_every_client_on_again() {
     c.gate = Some(Signon::Spawn);
     c.queue.push(BitBuf::default());
     b.hub.backlog.push(BitBuf::default(), None);
-    b.hub.keyframe = Some(Vec::new());
+    b.hub.since_full = Some(Vec::new());
     b.hub.restart_signon(now);
-    assert!(b.hub.backlog.len() == 0 && b.hub.keyframe.is_none() && b.hub.backlog.open);
+    assert!(b.hub.backlog.len() == 0 && b.hub.since_full.is_none() && b.hub.backlog.open);
     let c = b.client_state();
     assert_eq!((c.phase, c.cursor, c.gate, c.queue.len()), (Phase::Signon, 0, None, 0));
 }

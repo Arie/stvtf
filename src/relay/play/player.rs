@@ -297,7 +297,7 @@ impl Player<'_> {
             );
             self.dry = dry;
             if decoded > 0 {
-                self.relay.hub().all_want_keyframe(Instant::now());
+                self.relay.hub().rekey_all(Instant::now());
                 self.rekeyed = true;
                 self.floor = None;
             }
@@ -359,7 +359,7 @@ impl Player<'_> {
 impl Player<'_> {
     /// Every client gets a full update.
     pub(super) fn rekey(&mut self) {
-        self.relay.hub().all_want_keyframe(Instant::now());
+        self.relay.hub().rekey_all(Instant::now());
         self.rekeyed = true;
         self.floor = None;
     }

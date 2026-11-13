@@ -7,7 +7,7 @@ use super::client::{Client, Phase};
 use super::out::Out;
 use super::server_msg::{is_table_change, set_pause, show_panel, signon_state, table_changes};
 use super::{
-    CLIENT_TIMEOUT, KEEPALIVE, MAX_KEYFRAME, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS,
+    CLIENT_TIMEOUT, KEEPALIVE, MAX_SINCE_FULL, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS,
     TRACE, TRACE_EVERY, whence,
 };
 use crate::decode::Lifecycle;
@@ -33,7 +33,7 @@ pub(super) struct Hub {
     tail: Option<BitBuf>,
     tail_full: bool,
     /// The unreliable parts since the last full update, while there are few.
-    pub(super) keyframe: Option<Vec<BitBuf>>,
+    pub(super) since_full: Option<Vec<BitBuf>>,
     /// Messages a client gets again, reliably, after every full update: what one drops (a room's
     /// note bubbles).
     pub(super) notes: Vec<BitBuf>,
@@ -67,7 +67,7 @@ impl Hub {
             backlog: Backlog::new(),
             tail: None,
             tail_full: false,
-            keyframe: None,
+            since_full: None,
             notes: Vec::new(),
             with_next: Vec::new(),
             last_full: None,
@@ -181,7 +181,7 @@ impl Hub {
     /// String table changes passed over (a jump), into the backlog and reliably to the clients
     /// already in; those in it already are not again.
     pub(super) fn add_table_changes(&mut self, tables: &[BitBuf]) {
-        self.keyframe = None;
+        self.since_full = None;
         for msg in tables {
             self.backlog.add_table_change(msg, &mut self.clients, Delivery::Reliably);
         }
@@ -204,10 +204,10 @@ impl Hub {
         self.clients.values().any(|c| c.takes_full_update(&self.backlog))
     }
 
-    /// Every client in the game needs a full update: playback jumped, paused or went on, or came
+    /// Every client in the game waits for a keyframe: playback jumped, paused or went on, or came
     /// to a frame they cannot follow.
-    pub(super) fn all_want_keyframe(&mut self, now: Instant) {
-        self.keyframe = None;
+    pub(super) fn rekey_all(&mut self, now: Instant) {
+        self.since_full = None;
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
             c.set_phase(Phase::WaitingFull, now);
         }
@@ -219,7 +219,7 @@ impl Hub {
     pub(super) fn send_keyframe(&mut self, key: &BitBuf, since: &[BitBuf], paused: bool) {
         let now = Instant::now();
         self.backlog.open = false;
-        self.keyframe = Some(std::iter::once(key.clone()).chain(since.iter().cloned()).collect());
+        self.since_full = Some(std::iter::once(key.clone()).chain(since.iter().cloned()).collect());
         // Always: one shown "paused" before a jump may not be any more.
         let pause = set_pause(paused);
         // TF2's player bar freezes until its clock passes its last draw; re-showing resets that.
@@ -307,7 +307,7 @@ impl Hub {
         self.backlog.clear();
         // Of the last demo's entities: the player gives them again.
         self.notes.clear();
-        self.keyframe = None;
+        self.since_full = None;
     }
 
     /// Sends what the upstream datagram brought.
@@ -320,12 +320,12 @@ impl Hub {
         }
         if let Some(t) = &tail {
             if full {
-                self.keyframe = Some(vec![t.clone()]);
-            } else if let Some(k) = &mut self.keyframe {
-                if k.len() < MAX_KEYFRAME {
+                self.since_full = Some(vec![t.clone()]);
+            } else if let Some(k) = &mut self.since_full {
+                if k.len() < MAX_SINCE_FULL {
                     k.push(t.clone());
                 } else {
-                    self.keyframe = None;
+                    self.since_full = None;
                 }
             }
         }
@@ -349,7 +349,7 @@ impl Hub {
     /// next full update.
     pub(super) fn start_entities(&mut self, addr: SocketAddr, now: Instant) {
         let Some(c) = self.clients.get_mut(&addr) else { return };
-        if let Some(frames) = &self.keyframe
+        if let Some(frames) = &self.since_full
             && c.through_backlog(&self.backlog)
         {
             trace!("{addr} gets entities from the {} datagrams kept since the last full update", frames.len());
