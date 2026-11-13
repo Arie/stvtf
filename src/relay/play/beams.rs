@@ -65,7 +65,8 @@ impl Player<'_> {
     /// been (and those to come too), where they will have it.
     fn beam_messages(&mut self, beams: &[Beam]) -> Option<Vec<BitBuf>> {
         let c = self.cur.as_ref().filter(|c| c.started)?;
-        let (model, load) = c.dec.beam_model(self.laser)?;
+        self.models = c.dec.models_sent(self.models);
+        let (model, load) = c.dec.beam_model(self.laser, self.models)?;
         if let Some(msg) = load {
             self.relay.hub().log_once(&msg);
             self.laser = Some(model);

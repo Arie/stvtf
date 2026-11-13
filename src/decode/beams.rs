@@ -1,7 +1,7 @@
 //! Beams drawn in the world for the clients of a relay (`TE_BeamPoints`), as the game's own
 //! temp entities: a room's strokes, seen in TF2.
 
-use super::Decoder;
+use super::{Decoder, ModelsSent};
 use crate::net::bits::BitBuf;
 use crate::net::messages::SVC_TEMPENTITIES;
 use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage};
@@ -46,8 +46,14 @@ impl Decoder {
     /// The model index beams are drawn with: the solid laser, with the message that loads it if
     /// the match did not (to send first; see `Tables::laser` for `before`), or else a beam sprite
     /// the match loaded.
-    pub(crate) fn beam_model(&self, before: Option<u16>) -> Option<(u16, Option<BitBuf>)> {
-        self.tables.laser(self.handler.get_parser_state(), before).or_else(|| Some((self.tables.beam_sprite()?, None)))
+    pub(crate) fn beam_model(&self, before: Option<u16>, sent: ModelsSent) -> Option<(u16, Option<BitBuf>)> {
+        let laser = self.tables.laser(self.handler.get_parser_state(), before, sent);
+        laser.or_else(|| Some((self.tables.beam_sprite()?, None)))
+    }
+
+    /// `was`, with the models these tables have: what the clients were sent (see `Tables::laser`).
+    pub(crate) fn models_sent(&self, was: ModelsSent) -> ModelsSent {
+        self.tables.models_sent(was)
     }
 
     /// `beams` as `svc_TempEntities` drawn with model `sprite`, or None when the demo has no beam

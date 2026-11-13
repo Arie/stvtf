@@ -63,6 +63,14 @@ const MODEL_PRECACHE: &str = "modelprecache";
 /// Sprites a beam can be drawn with, best first, as `modelprecache` names them.
 const BEAM_SPRITES: [&str; 3] = ["sprites/laserbeam.vmt", "sprites/physbeam.vmt", "sprites/laser.vmt"];
 
+/// What the clients' `modelprecache` has had since their signon, which a jump back does not take
+/// from them: how many entries, and where the match's own laser is.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ModelsSent {
+    pub(crate) next: u16,
+    laser: Option<u16>,
+}
+
 #[derive(Default)]
 pub(crate) struct Tables {
     /// By table id.
@@ -71,6 +79,8 @@ pub(crate) struct Tables {
     rewritten: u32,
     /// The best of [`BEAM_SPRITES`] loaded: its rank there and its model index.
     beam_sprite: Option<(usize, u16)>,
+    /// One past the last entry of `modelprecache`.
+    models: u16,
 }
 
 impl Tables {
@@ -118,6 +128,7 @@ impl Tables {
     }
 
     fn note_model(&mut self, index: u16, name: Option<&str>) {
+        self.models = self.models.max(index.saturating_add(1));
         let Some(rank) = name.and_then(|n| BEAM_SPRITES.iter().position(|s| n.eq_ignore_ascii_case(s))) else { return };
         if self.beam_sprite.is_none_or(|(r, _)| rank < r) {
             self.beam_sprite = Some((rank, index));
@@ -129,22 +140,38 @@ impl Tables {
         self.beam_sprite.map(|(_, i)| i)
     }
 
+    /// The match's own laser, if it loaded it.
+    pub(crate) fn match_laser(&self) -> Option<u16> {
+        self.beam_sprite.filter(|(rank, _)| *rank == 0).map(|(_, i)| i)
+    }
+
+    /// `was`, with what these tables have: the clients were sent them too.
+    pub(crate) fn models_sent(&self, was: ModelsSent) -> ModelsSent {
+        ModelsSent { next: was.next.max(self.models), laser: was.laser.or(self.match_laser()) }
+    }
+
     /// The model index to draw beams with: the solid laser, loaded by the match or else by an
     /// `svc_UpdateStringTable` (also given) adding it to `modelprecache`. A game client adds an
-    /// entry past its last at the end, whatever its index, so it goes in the next free one.
+    /// entry past its last at the end, whatever its index, so it goes in the next free one: past
+    /// all the clients were `sent`, which after a jump back is more than these tables have.
     /// `before` is where the clients were given it: they keep it there until they sign on again,
-    /// whatever the match loads there or elsewhere later (for an index it has, a game client takes
-    /// only the data; a name it has, it does not add again), and a jump back leaves it too. None
-    /// when the table is full or unknown.
-    pub(crate) fn laser(&self, state: &ParserState, before: Option<u16>) -> Option<(u16, Option<BitBuf>)> {
+    /// whatever the match loads there later (for an index it has, a game client takes only the
+    /// data), and a jump back leaves it too. None when the table is full or unknown.
+    pub(crate) fn laser(
+        &self,
+        state: &ParserState,
+        before: Option<u16>,
+        sent: ModelsSent,
+    ) -> Option<(u16, Option<BitBuf>)> {
         if let Some(b) = before {
             return Some((b, None));
         }
-        if let Some((0, index)) = self.beam_sprite {
+        let sent = self.models_sent(sent);
+        if let Some(index) = sent.laser {
             return Some((index, None));
         }
         let (id, table) = self.by_id.iter().enumerate().find(|(_, t)| t.name == MODEL_PRECACHE)?;
-        let slot = table.entries.iter().max().map_or(0, |i| i + 1);
+        let slot = sent.next;
         if slot >= table.max {
             return None;
         }
@@ -281,17 +308,48 @@ mod tests {
         state.string_tables.push(StringTableMeta { max_entries: 2048, fixed_userdata_size: None });
         let mut t = Tables::default();
         t.note(&[models(vec![(0, model("maps/x.bsp")), (1, model("models/a.mdl"))])]);
-        let (slot, load) = t.laser(&state, None).unwrap();
+        let (slot, load) = t.laser(&state, None, ModelsSent::default()).unwrap();
         assert_eq!(slot, 2, "the next free");
         assert!(load.is_some());
         t.note(&[update(vec![(2, model("models/b.mdl"))])]);
-        assert_eq!(t.laser(&state, Some(2)).map(|(s, l)| (s, l.is_none())), Some((2, true)), "stays, no message");
+        assert_eq!(
+            t.laser(&state, Some(2), ModelsSent::default()).map(|(s, l)| (s, l.is_none())),
+            Some((2, true)),
+            "stays, no message"
+        );
         t.note(&[update(vec![(3, model(BEAM_SPRITES[0]))])]);
-        assert_eq!(t.laser(&state, Some(2)).map(|(s, l)| (s, l.is_none())), Some((2, true)), "the match's own too");
+        assert_eq!(
+            t.laser(&state, Some(2), ModelsSent::default()).map(|(s, l)| (s, l.is_none())),
+            Some((2, true)),
+            "the match's own too"
+        );
         // A new signon: the clients have the match's tables only.
         let mut fresh = Tables::default();
         fresh.note(&[models(vec![(0, model("maps/x.bsp")), (1, model("models/a.mdl")), (2, model("models/b.mdl"))])]);
-        assert_eq!(fresh.laser(&state, None).map(|(s, l)| (s, l.is_some())), Some((3, true)), "the next free again");
+        assert_eq!(
+            fresh.laser(&state, None, ModelsSent::default()).map(|(s, l)| (s, l.is_some())),
+            Some((3, true)),
+            "the next free again"
+        );
+    }
+
+    /// After a jump back the decoder's tables are of an earlier moment, the clients' are not: the
+    /// laser goes past every model they were sent, or where the match's own is for them.
+    #[test]
+    fn the_laser_after_a_jump_back_goes_past_what_the_clients_have() {
+        let mut state = ParserState::new(24, |_| true, false);
+        state.string_tables.push(StringTableMeta { max_entries: 2048, fixed_userdata_size: None });
+        let created = models(vec![(0, model("maps/x.bsp")), (1, model("models/a.mdl"))]);
+        let mut earlier = Tables::default();
+        earlier.note(std::slice::from_ref(&created));
+        let mut later = Tables::default();
+        later.note(&[created.clone(), update(vec![(2, model("models/b.mdl")), (3, model("models/c.mdl"))])]);
+        let sent = later.models_sent(ModelsSent::default());
+        assert_eq!(earlier.laser(&state, None, sent).map(|(s, l)| (s, l.is_some())), Some((4, true)));
+        later.note(&[update(vec![(4, model(BEAM_SPRITES[0]))])]);
+        let sent = later.models_sent(sent);
+        assert_eq!(earlier.laser(&state, None, sent).map(|(s, l)| (s, l.is_none())), Some((4, true)), "the match's");
+        assert_eq!(earlier.models_sent(sent).next, 5, "it only grows");
     }
 
     #[test]

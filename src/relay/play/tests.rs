@@ -1,7 +1,7 @@
 use super::beams::past_beams;
 use super::cursor::{Cursor, without_cues};
 use super::*;
-use crate::decode::Span;
+use crate::decode::{ModelsSent, Span};
 use crate::demo::Packet;
 use crate::net::bits::BitWriter;
 use crate::net::messages::{self, SVC_USERMESSAGE, Signon, TYPE_BITS};
@@ -112,7 +112,7 @@ fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
         width: 2.0,
         speed: 20,
     };
-    let (model, load) = c.dec.beam_model(None).expect("a model to draw beams with");
+    let (model, load) = c.dec.beam_model(None, ModelsSent::default()).expect("a model to draw beams with");
     let msgs = c.dec.beams(&[beam; 40], model).expect("a beam class");
     assert_eq!(msgs.len(), 3, "16 a message");
     assert!(msgs.iter().all(|m| m.nbits() / 8 < 1000), "each fits a datagram");
@@ -159,7 +159,11 @@ fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
     assert_eq!(u.entries[0].1.text.as_deref(), Some("sprites/laserbeam.vmt"));
     assert_eq!(u.entries[0].0, model);
     assert!(model < table.max_entries);
-    assert_eq!(c.dec.beam_model(Some(model)).unwrap().0, model, "where it went, while the match leaves it be");
+    assert_eq!(
+        c.dec.beam_model(Some(model), ModelsSent::default()).unwrap().0,
+        model,
+        "where it went, while the match leaves it be"
+    );
     let SendPropValue::Float(life) = get(BASE, "m_fLife") else { panic!() };
     assert!((life - 4.0).abs() < 0.2, "{life}");
 }

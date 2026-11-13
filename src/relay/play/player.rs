@@ -6,6 +6,7 @@ use super::index::Index;
 use super::{
     CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, KEPT_BURST, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice,
 };
+use crate::decode::ModelsSent;
 use crate::lock;
 use crate::output::Line;
 use crate::relay::{Hub, Relay};
@@ -37,6 +38,7 @@ impl Relay {
                 voice_seq: voice::Sequences::default(),
                 shown_light: light::Shown::default(),
                 laser: None,
+                models: ModelsSent::default(),
                 clock: None,
                 beams_until: 0.0,
                 rekeyed: false,
@@ -80,6 +82,8 @@ pub(super) struct Player<'r> {
     /// Where the clients were given the laser beams are drawn with, if they were: theirs there until
     /// the next signon.
     pub(super) laser: Option<u16>,
+    /// What the clients' `modelprecache` has had since their signon.
+    pub(super) models: ModelsSent,
     /// The clients' clock (seconds) at an instant.
     pub(super) clock: Option<(f64, Instant)>,
     /// Their clock when their last beam runs out.
@@ -118,6 +122,7 @@ impl Player<'_> {
                         self.signed_on = Some(want.demo.clone());
                         // Its own tables: the clients sign on to them, the laser not among them.
                         self.laser = None;
+                        self.models = ModelsSent::default();
                         self.shown_notes = notes::Shown::default();
                         self.shown_light = light::Shown::default();
                         self.clock = None;
@@ -184,6 +189,8 @@ impl Player<'_> {
         let Some(c) = &self.cur else { return Ok(()) };
         note!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
         self.relay.hub().goes_back();
+        // The clients keep the models loaded since.
+        self.models = c.dec.models_sent(self.models);
         let rewritten = c.dec.tables_rewritten();
         let took = Instant::now();
         // From the last checkpoint before it, or else the start.
