@@ -1,12 +1,12 @@
 //! The player: playing demos to the clients where playback wants them, jumping when off.
 
 use super::beams::Kept;
-use super::cursor::{Cursor, owned, without_cues};
+use super::cursor::{Cursor, owned};
 use super::index::Index;
 use super::{
     CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, KEPT_BURST, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice,
 };
-use crate::decode::ModelsSent;
+use crate::decode::{Entities, ModelsSent};
 use crate::lock;
 use crate::output::Line;
 use crate::relay::{Hub, Relay};
@@ -22,30 +22,7 @@ impl Relay {
         self.announce(emit)?;
         self.serving(stop, || {
             self.hub().mode = crate::relay::hub::Mode::Play { paused: false };
-            Player {
-                relay: self,
-                cur: None,
-                idle: None,
-                paused: false,
-                traced: None,
-                last_target: None,
-                dry: false,
-                problem: None,
-                index: None,
-                cued: None,
-                kept: Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: Instant::now() },
-                shown_notes: notes::Shown::default(),
-                voice_seq: voice::Sequences::default(),
-                shown_light: light::Shown::default(),
-                laser: None,
-                models: ModelsSent::default(),
-                clock: None,
-                beams_until: 0.0,
-                rekeyed: false,
-                flushing: None,
-                signed_on: None,
-            }
-            .run(playback, stop);
+            Player::new(self).run(playback, stop);
         });
         Ok(())
     }
@@ -90,10 +67,42 @@ pub(super) struct Player<'r> {
     pub(super) beams_until: f64,
     /// Every client waits for a full update.
     pub(super) rekeyed: bool,
+    /// The oldest frame the clients in the game may still have: a game client drops those older
+    /// than the base of each delta, and all on a full update.
+    pub(super) floor: Option<u32>,
     /// The full update waits until then, their clock put ahead.
     pub(super) flushing: Option<Instant>,
     /// The demo whose signon the clients have: the next makes them reconnect first.
     signed_on: Option<std::path::PathBuf>,
+}
+
+impl<'r> Player<'r> {
+    pub(super) fn new(relay: &'r Relay) -> Self {
+        Player {
+            relay,
+            cur: None,
+            idle: None,
+            paused: false,
+            traced: None,
+            last_target: None,
+            dry: false,
+            problem: None,
+            index: None,
+            cued: None,
+            kept: Kept { version: 0, sent: HashMap::new(), tokens: KEPT_BURST, refilled: Instant::now() },
+            shown_notes: notes::Shown::default(),
+            voice_seq: voice::Sequences::default(),
+            shown_light: light::Shown::default(),
+            laser: None,
+            models: ModelsSent::default(),
+            clock: None,
+            beams_until: 0.0,
+            rekeyed: false,
+            floor: None,
+            flushing: None,
+            signed_on: None,
+        }
+    }
 }
 
 impl Player<'_> {
@@ -123,6 +132,7 @@ impl Player<'_> {
                         // Its own tables: the clients sign on to them, the laser not among them.
                         self.laser = None;
                         self.models = ModelsSent::default();
+                        self.floor = None;
                         self.shown_notes = notes::Shown::default();
                         self.shown_light = light::Shown::default();
                         self.clock = None;
@@ -221,7 +231,7 @@ impl Player<'_> {
     }
 
     /// Plays on toward `want`: one frame, a jump, or a short wait.
-    fn step(&mut self, want: &Want) -> Result<()> {
+    pub(super) fn step(&mut self, want: &Want) -> Result<()> {
         let Some(c) = &mut self.cur else { return Ok(()) };
         let interval = c.dec.tick_interval();
         let first = c.first.unwrap_or(i64::MIN);
@@ -249,9 +259,8 @@ impl Player<'_> {
             hub.set_paused(demo_paused);
             // A full update with the round timers held, or as they are going on: one that needs no
             // frame a client may lack (one just in has only its own full update).
-            hub.all_want_keyframe(Instant::now());
             drop(hub);
-            self.rekeyed = true;
+            self.rekey();
         }
         let Some(c) = &mut self.cur else { return Ok(()) };
         if c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target) {
@@ -276,6 +285,7 @@ impl Player<'_> {
             if decoded > 0 {
                 self.relay.hub().all_want_keyframe(Instant::now());
                 self.rekeyed = true;
+                self.floor = None;
             }
         }
         if self.relay.hub().wants_keyframe() {
@@ -300,6 +310,15 @@ impl Player<'_> {
                     hub.send_keyframe(&key, &since, c.paused);
                     hub.notes_again(Instant::now());
                     drop(hub);
+                    // What the frames after it build on, as far as those just in go.
+                    let base = since
+                        .iter()
+                        .filter_map(|f| match c.dec.entities(f.bytes()) {
+                            Some(Entities::Delta(b)) => Some(b),
+                            _ => None,
+                        })
+                        .fold(tick, u32::max);
+                    self.floor = Some(self.floor.map_or(base, |f| f.max(base)));
                     if std::mem::take(&mut self.rekeyed) {
                         self.clock = Some((f64::from(tick) * f64::from(interval), Instant::now()));
                     }
@@ -331,39 +350,11 @@ impl Player<'_> {
 }
 
 impl Player<'_> {
-    /// Plays the next frame to the clients (without the demo's camera cues when the room has its
-    /// own `camera`).
-    fn play_frame(&mut self, camera: bool) {
-        let Some(c) = &mut self.cur else { return };
-        let was_paused = c.paused;
-        let Some((bits, life)) = c.decode() else { return };
-        // Ours, not the demo's director's.
-        let (bits, life) = if camera { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
-        let mut hub = self.relay.hub();
-        hub.upstream_stream(&bits, false, &life);
-        hub.upstream_flush();
-        self.clock = Some((c.tick() as f64 * f64::from(c.dec.tick_interval()), Instant::now()));
-        // The match's own HUD resets (a spawn, a new round) drop the notes too.
-        if life.spans.iter().any(|s| crate::relay::server_msg::is_reset_hud(bits.bytes(), s)) {
-            hub.notes_again(Instant::now());
-        }
-        // The match paused or went on: the clients are told reliably too.
-        if c.paused != was_paused {
-            hub.set_paused(c.paused);
-            // Going on after it, the timers redraw at once (as casters' `hud_reloadscheme` has
-            // them do).
-            if !c.paused
-                && let Some(m) = c.dec.update_timer()
-            {
-                hub.tell_active(&m);
-            }
-        }
-    }
-
     /// Every client gets a full update.
-    fn rekey(&mut self) {
+    pub(super) fn rekey(&mut self) {
         self.relay.hub().all_want_keyframe(Instant::now());
         self.rekeyed = true;
+        self.floor = None;
     }
 
     /// Tells the clients in the game to take `camera`, when it changed and every [`CUE_EVERY`].

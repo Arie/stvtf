@@ -182,11 +182,10 @@ impl World {
         for r in &pe.removed_entities {
             frame.remove(u32::from(*r));
         }
-        // A later delta never builds on a frame older than this one's base.
+        // A later delta never builds on a frame older than this one's base. A full update keeps
+        // them: a stream that asked for one can have deltas from before it.
         if let Some(base) = pe.delta {
             self.frames.retain(|(t, _)| *t >= u32::from(base));
-        } else {
-            self.frames.clear();
         }
         self.frames.push_back((tick, frame));
         if self.frames.len() > MAX_FRAMES {
@@ -237,8 +236,8 @@ impl World {
         self.latest().map_or(0, Frame::len)
     }
 
-    /// `net_Tick` and the entities in full of the frame at server tick `at` (the latest when it is
-    /// not kept, or not given), as one message stream: the frame the next delta builds on, so a
+    /// `net_Tick` and the entities in full of the frame at server tick `at` (the latest when not
+    /// given; None when it is not kept), as one message stream: the frame the next delta builds on, so a
     /// client that starts from it can follow. None when they cannot be trusted (see `broken`) or do
     /// not encode.
     ///
@@ -249,7 +248,11 @@ impl World {
         if self.broken || !self.seen_full {
             return None;
         }
-        let (tick, frame) = at.and_then(|at| self.kept(at)).or(self.frames.back()).map(|(t, f)| (*t, f))?;
+        let (tick, frame) = match at {
+            Some(at) => self.kept(at),
+            None => self.frames.back(),
+        }
+        .map(|(t, f)| (*t, f))?;
         let mut entities = Vec::new();
         for (index, e) in frame.iter() {
             let mut entering = enter(state, index, e)?;

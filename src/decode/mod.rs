@@ -160,6 +160,13 @@ const EVENT_ID_BITS: usize = 9;
 /// `svc_PacketEntities`: its entry count's bits (`MAX_EDICT_BITS`).
 const ENTRY_COUNT_BITS: usize = 11;
 
+/// A frame's entities: in full, or as a delta from the frame at a server tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Entities {
+    Full,
+    Delta(u32),
+}
+
 pub(crate) struct Decoder {
     handler: DemoHandler<Extractor>,
     snapshot_hz: f32,
@@ -219,26 +226,37 @@ impl Decoder {
     }
 
     /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
-    /// tick): those after it, each as played if the client has the frame it builds on, else (from
-    /// a live server, a frame a few ticks back) rewritten as a delta from `key`.
+    /// tick): those after it, each as played if the client still has the frame it builds on, else
+    /// (from a live server, a frame a few ticks back) rewritten as a delta from `key`, or failing
+    /// that the last it was sent. A game client keeps only frames with entities, and drops those older than the base of
+    /// each delta it takes.
     pub(crate) fn catch_up(&self, key: u32, recent: &[(u32, BitBuf)]) -> Vec<BitBuf> {
         let Some(world) = &self.world else { return Vec::new() };
         let state = self.handler.get_parser_state();
         let mut have = vec![key];
         let mut out = Vec::new();
         for (tick, bits) in recent.iter().filter(|(t, _)| *t > key) {
-            match self.delta_base(bits.bytes()) {
-                Some(base) if have.contains(&base) => out.push(bits.clone()),
-                // From the keyframe's frame: a client drops the frames older than a delta's base,
-                // and the stream's next frames may still build on that one.
-                _ => match world.delta(state, key, *tick) {
-                    Some(d) => out.push(d),
-                    // No entities in it: nothing builds on it.
-                    None => out.push(bits.clone()),
-                },
+            match self.entities(bits.bytes()) {
+                // No entities in it: nothing builds on it.
+                None => out.push(bits.clone()),
+                Some(Entities::Delta(base)) if have.contains(&base) => {
+                    out.push(bits.clone());
+                    have.retain(|t| *t >= base);
+                }
+                _ => {
+                    // From the keyframe's frame while the client has it: the stream's next frames
+                    // may still build on that one.
+                    let from = if have.contains(&key) { key } else { have.last().copied().unwrap_or(key) };
+                    match world.delta(state, from, *tick) {
+                        Some(d) => {
+                            out.push(d);
+                            have.retain(|t| *t >= from);
+                        }
+                        None => out.push(bits.clone()),
+                    }
+                }
             }
-            // A client keeps only frames with entities.
-            if world.has(*tick) {
+            if world.has(*tick) && !have.contains(tick) {
                 have.push(*tick);
             }
         }
@@ -249,6 +267,15 @@ impl Decoder {
     pub(crate) fn frame_tick(&self, data: &[u8]) -> Option<u32> {
         self.find_message(data, MessageType::NetTick, |stream, _| {
             tf_demo_parser::demo::message::NetTickMessage::read(stream).ok().map(|m| u32::from(m.tick))
+        })
+    }
+
+    /// The entities in message stream `data`, if any: in full, or as a delta from which frame;
+    /// read, not decoded into anything.
+    pub(crate) fn entities(&self, data: &[u8]) -> Option<Entities> {
+        self.find_message(data, MessageType::PacketEntities, |stream, state| {
+            let pe = tf_demo_parser::demo::message::packetentities::PacketEntitiesMessage::parse(stream, state).ok()?;
+            Some(pe.delta.map_or(Entities::Full, |b| Entities::Delta(u32::from(b))))
         })
     }
 
@@ -278,6 +305,24 @@ impl Decoder {
             Message::skip_type(t, &mut stream, state).ok()?;
         }
         None
+    }
+
+    /// Whether frame `tick` is kept.
+    #[cfg(test)]
+    pub(crate) fn has_frame_for_tests(&self, tick: u32) -> bool {
+        self.world.as_ref().is_some_and(|w| w.has(tick))
+    }
+
+    /// A full update of frame `at`, kept.
+    #[cfg(test)]
+    pub(crate) fn keyframe_at_for_tests(&self, at: u32) -> Option<BitBuf> {
+        Some(self.world.as_ref()?.full_update(self.handler.get_parser_state(), Some(at), None)?.1)
+    }
+
+    /// Frame `to` as a delta from frame `from`, both kept.
+    #[cfg(test)]
+    pub(crate) fn delta_for_tests(&self, from: u32, to: u32) -> Option<BitBuf> {
+        self.world.as_ref()?.delta(self.handler.get_parser_state(), from, to)
     }
 
     /// The server tick of the last frame.

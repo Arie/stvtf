@@ -1,7 +1,7 @@
 use super::beams::past_beams;
 use super::cursor::{Cursor, without_cues};
 use super::*;
-use crate::decode::{ModelsSent, Span};
+use crate::decode::{Entities, ModelsSent, Span};
 use crate::demo::Packet;
 use crate::net::bits::BitWriter;
 use crate::net::messages::{self, SVC_USERMESSAGE, Signon, TYPE_BITS};
@@ -279,4 +279,155 @@ fn the_frames_sent_with_a_full_update_are_without_the_servers_changelevel() {
     b.hub.send_keyframe(&key, &since, false);
     let sent = sent_unreliably(&b, &mut reader);
     assert_eq!(sent.last(), Some(&ids), "{sent:?}");
+}
+
+/// The frames the bench's client is sent, as a game client keeps them: it drops those older than
+/// the base of each delta, and all on a full update. Panics on a delta from a frame it lacks. How
+/// many full updates, and deltas.
+fn follow_as_a_game_client(b: &Bench, reader: &Cursor) -> (usize, usize) {
+    b.client.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+    let mut rx = Receiver::new(Some(b.challenge));
+    let mut buf = vec![0u8; crate::net::MAX_DATAGRAM];
+    let mut frames = std::collections::BTreeSet::new();
+    let (mut fulls, mut deltas) = (0, 0);
+    while let Ok(len) = b.client.recv(&mut buf) {
+        let Some(pkt) = rx.feed(&buf[..len], Instant::now()) else { continue };
+        for s in pkt.streams.iter().filter(|s| !s.reliable) {
+            let Some(tick) = reader.dec.frame_tick(s.bits.bytes()) else { continue };
+            match reader.dec.entities(s.bits.bytes()) {
+                None => continue,
+                Some(Entities::Full) => {
+                    frames.clear();
+                    fulls += 1;
+                }
+                Some(Entities::Delta(base)) => {
+                    assert!(frames.contains(&base), "a delta to {tick} from {base}, the client has {frames:?}");
+                    frames.retain(|t| *t >= base);
+                    deltas += 1;
+                }
+            }
+            frames.insert(tick);
+        }
+    }
+    (fulls, deltas)
+}
+
+/// A relay with the bench's hub, its client in the game, and a player of `c` toward `tick`.
+fn playing(b: &mut Bench, c: Cursor, tick: u32) -> (crate::relay::Relay, Cursor, Want) {
+    let config = crate::relay::RelayConfig::new("127.0.0.1:0");
+    let spare = crate::relay::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
+    let hub = std::mem::replace(&mut b.hub, spare);
+    let relay = crate::relay::Relay { sock: std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), hub: hub.into() };
+    let want = Want {
+        demo: c.path.clone(),
+        tick,
+        at: Instant::now(),
+        paused: false,
+        speed: 1.0,
+        from_start: false,
+        camera: None,
+    };
+    (relay, c, want)
+}
+
+/// A live recording's frames build on one a few back: after a full update the clients follow
+/// them as they are, not a full update each.
+#[test]
+fn a_live_recording_plays_on_after_a_full_update() {
+    let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
+    let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
+    // Keyed at a few places, each its own.
+    for at in [40, 41, 42, 43, 44, 45] {
+        let mut c = Cursor::open_with(&live, None).unwrap();
+        while c.recent.len() < at {
+            match c.next_tick() {
+                Some(NOT_A_FRAME) => c.next = None,
+                Some(_) => drop(c.decode()),
+                None => panic!("the demo ended"),
+            }
+        }
+        let mut b = bench_with_one_in();
+        b.client_state().set_phase(Phase::WaitingFull, Instant::now());
+        let tick = c.dec.server_tick() + 40;
+        let (relay, c, want) = playing(&mut b, c, tick);
+        let mut p = player::Player::new(&relay);
+        p.cur = Some(c);
+        for _ in 0..60 {
+            p.step(&want).unwrap();
+        }
+        // Read as the player's own decoder reads them.
+        let (fulls, deltas) = follow_as_a_game_client(&b, p.cur.as_ref().unwrap());
+        assert_eq!(fulls, 1, "keyed after {at}");
+        assert!(deltas >= 20, "{deltas} after {at}");
+    }
+}
+
+/// A demo with a full update, then a delta from before it (`E, F, G`): a game client given `F`
+/// has dropped `E`. The clients in the game get a full update of their own instead, and `G`
+/// only when they have what it builds on.
+#[test]
+fn a_full_update_in_the_demo_then_a_delta_from_before_it_reach_a_client_it_can_follow() {
+    let mut c = upward_until(few_in);
+    let e = c.dec.server_tick();
+    let mut copy = upward_until(few_in);
+    let Some(Packet::Message { tick: demo_tick, .. }) = copy.peek().cloned() else { panic!("a frame next") };
+    copy.decode().unwrap();
+    let (n1, full) = copy.dec.keyframe(None).unwrap();
+    let from_e = copy.dec.delta_for_tests(e, n1).unwrap();
+    c.peek();
+    c.next = Some(Packet::Message { tick: demo_tick, data: full.bytes().to_vec() });
+
+    let mut b = bench_with_one_in();
+    let (relay, c, want) = playing(&mut b, c, e + 10);
+    let mut p = player::Player::new(&relay);
+    p.cur = Some(c);
+    p.step(&want).unwrap();
+    p.cur.as_mut().unwrap().next = Some(Packet::Message { tick: demo_tick, data: from_e.bytes().to_vec() });
+    for _ in 0..4 {
+        p.step(&want).unwrap();
+    }
+    let reader = upward_until(few_in);
+    let (fulls, deltas) = follow_as_a_game_client(&b, &reader);
+    assert!(fulls >= 1 && deltas >= 2, "a full update, and frames after it: {fulls}, {deltas}");
+}
+
+/// The frames sent after a keyframe, where their bases go back: one from a frame a game client
+/// dropped (older than the base of one before it) is rewritten from one it has.
+#[test]
+fn the_frames_after_a_keyframe_build_only_on_frames_a_client_still_has() {
+    let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
+    let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
+    let mut c = Cursor::open_with(&live, None).unwrap();
+    // On until four frames back are kept.
+    let kept = loop {
+        match c.next_tick() {
+            Some(NOT_A_FRAME) => c.next = None,
+            Some(_) => drop(c.decode()),
+            None => panic!("the demo ended"),
+        }
+        let kept: Vec<u32> = c.recent.iter().map(|(t, _)| *t).filter(|t| c.dec.has_frame_for_tests(*t)).collect();
+        if kept.len() >= 4 {
+            break kept[kept.len() - 4..].to_vec();
+        }
+    };
+    let [k0, k1, k2, k3] = kept[..] else { unreachable!() };
+    let d = |from, to| (to, c.dec.delta_for_tests(from, to).unwrap());
+    let recent = [d(k0, k1), d(k1, k2), d(k0, k3)];
+    let key = c.dec.keyframe_at_for_tests(k0).unwrap();
+    let mut frames = std::collections::BTreeSet::new();
+    for s in std::iter::once(key).chain(c.dec.catch_up(k0, &recent)) {
+        let tick = c.dec.frame_tick(s.bytes()).unwrap();
+        match c.dec.entities(s.bytes()).unwrap() {
+            Entities::Full => frames.clear(),
+            Entities::Delta(base) => {
+                assert!(frames.contains(&base), "to {tick} from {base}, the client has {frames:?}");
+                frames.retain(|t| *t >= base);
+            }
+        }
+        frames.insert(tick);
+    }
+    // Frames from before the keyframe's are rewritten from it: the next builds on it.
+    for s in &c.dec.catch_up(k1, &[d(k0, k2), d(k0, k3)]) {
+        assert_eq!(c.dec.entities(s.bytes()), Some(Entities::Delta(k1)));
+    }
 }

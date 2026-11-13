@@ -16,6 +16,7 @@
 
 mod beams;
 mod cursor;
+mod follow;
 mod index;
 mod light;
 mod notes;
