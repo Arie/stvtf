@@ -194,7 +194,7 @@ impl Player<'_> {
         log!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
         self.relay.hub().reshow_panel_with_next_keyframe();
         // The clients keep the models loaded since.
-        self.models = c.dec.models_sent(self.models);
+        self.models = self.models.with(&c.dec);
         let rewritten = c.dec.tables_rewritten();
         let took = Instant::now();
         // From the last checkpoint before it, or else the start.
@@ -226,7 +226,7 @@ impl Player<'_> {
 
     /// Plays on toward `want`: one frame, a jump, or a short wait.
     pub(super) fn step(&mut self, want: &Want) -> Result<()> {
-        if self.laser_twice() {
+        if self.restart_if_laser_loaded_twice() {
             return Ok(());
         }
         let Some(c) = &mut self.cur else { return Ok(()) };

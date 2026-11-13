@@ -1,7 +1,7 @@
 //! Beams drawn in the world for the clients of a relay (`TE_BeamPoints`), as the game's own
 //! temp entities: a room's strokes, seen in TF2.
 
-use super::{Decoder, ModelsSent};
+use super::{BeamModel, Decoder, ModelsSent};
 use crate::net::bits::BitBuf;
 use crate::net::messages::SVC_TEMPENTITIES;
 use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage};
@@ -46,9 +46,9 @@ impl Decoder {
     /// The model index beams are drawn with: the solid laser, with the message that loads it if
     /// the match did not (to send first; see `Tables::laser` for `before`), or else a beam sprite
     /// the match loaded.
-    pub(crate) fn beam_model(&self, before: Option<u16>, sent: ModelsSent) -> Option<(u16, Option<BitBuf>)> {
+    pub(crate) fn beam_model(&self, before: Option<u16>, sent: ModelsSent) -> Option<BeamModel> {
         let laser = self.tables.laser(self.handler.get_parser_state(), before, sent);
-        laser.or_else(|| Some((self.tables.beam_sprite()?, None)))
+        laser.or_else(|| Some(BeamModel { index: self.tables.beam_sprite()?, load: None }))
     }
 
     /// A beam sprite the match loaded, if any.
@@ -57,14 +57,9 @@ impl Decoder {
     }
 
     /// Whether the match loaded the laser after the clients were given the relay's at `before` (see
-    /// `Tables::laser_twice`).
-    pub(crate) fn laser_twice(&self, before: Option<u16>) -> bool {
-        self.tables.laser_twice(before)
-    }
-
-    /// `was`, with the models these tables have: what the clients were sent (see `Tables::laser`).
-    pub(crate) fn models_sent(&self, was: ModelsSent) -> ModelsSent {
-        self.tables.models_sent(was)
+    /// `Tables::laser_loaded_twice`).
+    pub(crate) fn laser_loaded_twice(&self, before: Option<u16>) -> bool {
+        self.tables.laser_loaded_twice(before)
     }
 
     /// `beams` as `svc_TempEntities` drawn with model `sprite`, or None when the demo has no beam
@@ -112,6 +107,14 @@ impl Decoder {
                 super::encode_message(SVC_TEMPENTITIES, &msg, state)
             })
             .collect()
+    }
+}
+
+impl ModelsSent {
+    /// These, with the models `dec`'s tables have: the clients were sent them too (see
+    /// `Tables::laser`).
+    pub(crate) fn with(self, dec: &Decoder) -> ModelsSent {
+        self.with_tables(&dec.tables)
     }
 }
 

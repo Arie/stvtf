@@ -1,7 +1,7 @@
 use super::beams::past_beams;
 use super::cursor::{Cursor, without_cues};
 use super::*;
-use crate::decode::{Entities, ModelsSent, Span};
+use crate::decode::{BeamModel, Entities, ModelsSent, Span};
 use crate::demo::Packet;
 use crate::net::bits::BitWriter;
 use crate::net::messages::{self, SVC_USERMESSAGE, Signon, TYPE_BITS};
@@ -113,7 +113,8 @@ fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
         width: 2.0,
         speed: 20,
     };
-    let (model, load) = c.dec.beam_model(None, ModelsSent::default()).expect("a model to draw beams with");
+    let BeamModel { index: model, load } =
+        c.dec.beam_model(None, ModelsSent::default()).expect("a model to draw beams with");
     let msgs = c.dec.beams(&[beam; 40], model).expect("a beam class");
     assert_eq!(msgs.len(), 3, "16 a message");
     assert!(msgs.iter().all(|m| m.nbits() / 8 < 1000), "each fits a datagram");
@@ -161,7 +162,7 @@ fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
     assert_eq!(u.entries[0].0, model);
     assert!(model < table.max_entries);
     assert_eq!(
-        c.dec.beam_model(Some(model), ModelsSent::default()).unwrap().0,
+        c.dec.beam_model(Some(model), ModelsSent::default()).unwrap().index,
         model,
         "where it went, while the match leaves it be"
     );
@@ -438,11 +439,10 @@ fn the_frames_after_a_keyframe_build_only_on_frames_a_client_still_has() {
 #[test]
 fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
     let c = upward_until(few_in);
-    let (ours, _) = c.dec.beam_model(None, ModelsSent::default()).unwrap();
-    let mut past = ModelsSent::default();
-    past.next = ours + 1;
-    let (theirs, load) = c.dec.beam_model(None, past).unwrap();
-    let load = load.unwrap();
+    let ours = c.dec.beam_model(None, ModelsSent::default()).unwrap().index;
+    let past = ModelsSent::next_for_tests(ours + 1);
+    let theirs = c.dec.beam_model(None, past).unwrap();
+    let (theirs, load) = (theirs.index, theirs.load.unwrap());
     let mut b = bench_with_one_in();
     let tick = c.dec.server_tick();
     let (relay, c, want) = playing(&mut b, c, tick);
@@ -452,7 +452,7 @@ fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
     p.step(&want).unwrap();
     assert!(p.cur.is_some(), "the match has not loaded it yet");
     p.cur.as_mut().unwrap().dec.feed(load.bytes(), load.nbits());
-    assert_eq!(p.cur.as_ref().unwrap().dec.beam_model(None, ModelsSent::default()).unwrap().0, theirs);
+    assert_eq!(p.cur.as_ref().unwrap().dec.beam_model(None, ModelsSent::default()).unwrap().index, theirs);
     p.step(&want).unwrap();
     assert!(p.cur.is_none(), "a new signon");
 }
@@ -463,10 +463,8 @@ fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
 #[test]
 fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     let c = upward_until(few_in);
-    let (ours, _) = c.dec.beam_model(None, ModelsSent::default()).unwrap();
-    let mut past = ModelsSent::default();
-    past.next = ours + 1;
-    let load = c.dec.beam_model(None, past).unwrap().1.unwrap();
+    let ours = c.dec.beam_model(None, ModelsSent::default()).unwrap().index;
+    let load = c.dec.beam_model(None, ModelsSent::next_for_tests(ours + 1)).unwrap().load.unwrap();
     let mut b = bench_with_one_in();
     b.client_state().set_phase(Phase::Signon, Instant::now());
     let tick = c.dec.server_tick();

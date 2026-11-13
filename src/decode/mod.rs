@@ -16,7 +16,7 @@ mod notes;
 mod props;
 mod tables;
 mod voice_out;
-pub(crate) use tables::ModelsSent;
+pub(crate) use tables::{BeamModel, ModelsSent};
 pub(crate) use voice_out::{packs, steam_voice};
 mod world;
 

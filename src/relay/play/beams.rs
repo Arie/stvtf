@@ -3,6 +3,7 @@
 use super::playback::Versioned;
 use super::player::Player;
 use super::{Beam, FLUSH, KEPT_BURST, KEPT_EVERY, KEPT_RATE, NAP, Playback, SET_BACK};
+use crate::decode::BeamModel;
 use crate::net::bits::BitBuf;
 use crate::net::messages;
 use std::collections::{HashMap, HashSet};
@@ -113,24 +114,24 @@ impl Player<'_> {
     /// been (and those to come too), where they will have it.
     fn beam_messages(&mut self, beams: &[Beam]) -> Option<Vec<BitBuf>> {
         let c = self.cur.as_ref().filter(|c| c.started)?;
-        self.models = c.dec.models_sent(self.models);
-        let (mut model, mut load) = c.dec.beam_model(self.laser, self.models)?;
-        if load.is_some() && self.match_laser.as_ref() == Some(&c.path) {
+        self.models = self.models.with(&c.dec);
+        let mut model = c.dec.beam_model(self.laser, self.models)?;
+        if model.load.is_some() && self.match_laser.as_ref() == Some(&c.path) {
             // Its own comes later: until the clients have it, a sprite of the match's or none.
-            (model, load) = (c.dec.beam_sprite()?, None);
+            model = BeamModel { index: c.dec.beam_sprite()?, load: None };
         }
-        if let Some(msg) = load {
-            self.relay.hub().add_table_change_once(&msg);
-            self.laser = Some(model);
+        if let Some(msg) = &model.load {
+            self.relay.hub().add_table_change_once(msg);
+            self.laser = Some(model.index);
         }
-        c.dec.beams(beams, model)
+        c.dec.beams(beams, model.index)
     }
 
     /// Whether the match loaded the laser after the clients were given the relay's: every model of
     /// the match's after it is one off for them, so they sign on again (the demo opened afresh),
     /// after which its own is used.
-    pub(super) fn laser_twice(&mut self) -> bool {
-        if !self.cur.as_ref().is_some_and(|c| c.dec.laser_twice(self.laser)) {
+    pub(super) fn restart_if_laser_loaded_twice(&mut self) -> bool {
+        if !self.cur.as_ref().is_some_and(|c| c.dec.laser_loaded_twice(self.laser)) {
             return false;
         }
         log!(":{} the match loaded the laser too: the clients sign on again", self.relay.port());
