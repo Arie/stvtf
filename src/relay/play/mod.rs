@@ -28,8 +28,14 @@ pub use crate::decode::beams::Beam;
 pub use light::Light;
 pub use notes::Note;
 pub use playback::{Camera, Playback, Want};
-use std::time::Duration;
 pub use voice::VoiceIn;
+
+use crate::output::Line;
+use crate::relay::Relay;
+use anyhow::Result;
+use player::Player;
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 /// Off from the wanted moment by more than this, playback jumps instead of catching up.
 const JUMP: Duration = Duration::from_secs(1);
@@ -59,6 +65,18 @@ const KEPT_BURST: f64 = 48.0;
 const SET_BACK: f64 = 0.5;
 /// How long the clients get to draw a frame with their clock ahead.
 const FLUSH: Duration = Duration::from_millis(150);
+
+impl Relay {
+    /// Plays demos to the clients, where `playback` wants them, until `stop`.
+    pub fn play(&self, playback: &Playback, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<()> {
+        self.announce(emit)?;
+        self.serving(stop, || {
+            self.hub().start_playing();
+            Player::new(self).run(playback, stop);
+        });
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests;

@@ -283,6 +283,11 @@ impl Hub {
         }
     }
 
+    /// Plays a demo from here on, not paused.
+    pub(super) fn start_playing(&mut self) {
+        self.mode = Mode::Play { paused: false };
+    }
+
     /// Tells the clients in the game that playback paused or went on, reliably.
     pub(super) fn set_paused(&mut self, paused: bool) {
         self.mode = Mode::Play { paused };

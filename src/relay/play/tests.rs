@@ -314,12 +314,11 @@ fn follow_as_a_game_client(b: &Bench, reader: &Cursor) -> (usize, usize) {
 }
 
 /// A relay with the bench's hub, its client in the game, and a player of `c` toward `tick`.
-fn playing(b: &mut Bench, c: Cursor, tick: u32) -> (crate::relay::Relay, Cursor, Want) {
+fn playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
     let config = crate::relay::RelayConfig::new("127.0.0.1:0");
     let spare = crate::relay::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
     let hub = std::mem::replace(&mut b.hub, spare);
-    let relay =
-        crate::relay::Relay { sock: std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), port: 0, hub: hub.into() };
+    let relay = Relay { sock: std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), port: 0, hub: hub.into() };
     let want = Want {
         demo: c.path.clone(),
         tick,
@@ -352,7 +351,7 @@ fn a_live_recording_plays_on_after_a_full_update() {
         b.client_state().set_phase(Phase::WaitingFull, Instant::now());
         let tick = c.dec.server_tick() + 40;
         let (relay, c, want) = playing(&mut b, c, tick);
-        let mut p = player::Player::new(&relay);
+        let mut p = Player::new(&relay);
         p.cur = Some(c);
         for _ in 0..60 {
             p.step(&want).unwrap();
@@ -381,7 +380,7 @@ fn a_full_update_in_the_demo_then_a_delta_from_before_it_reach_a_client_it_can_f
 
     let mut b = bench_with_one_in();
     let (relay, c, want) = playing(&mut b, c, e + 10);
-    let mut p = player::Player::new(&relay);
+    let mut p = Player::new(&relay);
     p.cur = Some(c);
     p.step(&want).unwrap();
     p.cur.as_mut().unwrap().next = Some(Packet::Message { tick: demo_tick, data: from_e.bytes().to_vec() });
@@ -447,7 +446,7 @@ fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
     let mut b = bench_with_one_in();
     let tick = c.dec.server_tick();
     let (relay, c, want) = playing(&mut b, c, tick);
-    let mut p = player::Player::new(&relay);
+    let mut p = Player::new(&relay);
     p.laser = Some(ours);
     p.cur = Some(c);
     p.step(&want).unwrap();
@@ -475,11 +474,11 @@ fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     let playback = Playback::new(want.clone());
     let beam = Beam { from: [0.0; 3], to: [1.0; 3], rgb: [255, 0, 0], life: 1.0, width: 2.0, speed: 0 };
     playback.keep(vec![beam]);
-    let mut p = player::Player::new(&relay);
+    let mut p = Player::new(&relay);
     p.start_demo(c);
     p.show_kept(&playback);
     assert_eq!(p.laser, None, "nobody in the game");
-    let in_game = |relay: &crate::relay::Relay, phase| {
+    let in_game = |relay: &Relay, phase| {
         for c in relay.hub().clients.values_mut() {
             c.set_phase(phase, Instant::now());
         }

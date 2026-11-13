@@ -8,25 +8,12 @@ use super::{
 };
 use crate::decode::ModelsSent;
 use crate::lock;
-use crate::output::Line;
 use crate::relay::{Hub, Relay};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-
-impl Relay {
-    /// Plays demos to the clients, where `playback` wants them, until `stop`.
-    pub fn play(&self, playback: &Playback, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<()> {
-        self.announce(emit)?;
-        self.serving(stop, || {
-            self.hub().mode = crate::relay::hub::Mode::Play { paused: false };
-            Player::new(self).run(playback, stop);
-        });
-        Ok(())
-    }
-}
 
 pub(super) struct Player<'r> {
     pub(super) relay: &'r Relay,
@@ -109,7 +96,7 @@ impl<'r> Player<'r> {
 }
 
 impl Player<'_> {
-    fn run(mut self, playback: &Playback, stop: &AtomicBool) {
+    pub(super) fn run(mut self, playback: &Playback, stop: &AtomicBool) {
         while !stop.load(Ordering::Relaxed) {
             if !self.anyone_in() {
                 std::thread::sleep(IDLE_NAP);
