@@ -182,6 +182,8 @@ pub fn random_password() -> String {
 /// A relay: a socket clients connect to, fed by one upstream session.
 pub struct Relay {
     sock: UdpSocket,
+    /// The port clients connect to: which relay a log line is of.
+    port: u16,
     hub: Mutex<Hub>,
 }
 
@@ -189,8 +191,9 @@ impl Relay {
     /// Listens for clients as `config` says.
     pub fn bind(config: &RelayConfig) -> Result<Relay> {
         let sock = UdpSocket::bind(&config.listen).with_context(|| format!("binding {}", config.listen))?;
+        let port = sock.local_addr().map_or(0, |a| a.port());
         let hub = Mutex::new(Hub::new(sock.try_clone()?, config));
-        Ok(Relay { sock, hub })
+        Ok(Relay { sock, port, hub })
     }
 
     /// The address clients connect to.
@@ -198,9 +201,8 @@ impl Relay {
         self.sock.local_addr()
     }
 
-    /// The port clients connect to: which relay a log line is of.
     pub(crate) fn port(&self) -> u16 {
-        self.sock.local_addr().map_or(0, |a| a.port())
+        self.port
     }
 
     /// How many clients are in.

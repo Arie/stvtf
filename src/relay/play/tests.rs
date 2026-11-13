@@ -318,7 +318,8 @@ fn playing(b: &mut Bench, c: Cursor, tick: u32) -> (crate::relay::Relay, Cursor,
     let config = crate::relay::RelayConfig::new("127.0.0.1:0");
     let spare = crate::relay::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
     let hub = std::mem::replace(&mut b.hub, spare);
-    let relay = crate::relay::Relay { sock: std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), hub: hub.into() };
+    let relay =
+        crate::relay::Relay { sock: std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), port: 0, hub: hub.into() };
     let want = Want {
         demo: c.path.clone(),
         tick,

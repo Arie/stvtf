@@ -384,7 +384,7 @@ fn a_client_asks_for_another_full_update_only_after_the_grace() {
 #[test]
 fn the_server_is_asked_for_a_full_update_when_needed_and_not_too_often() {
     let mut b = Bench::new("", 1);
-    let relay = |hub: Hub| Relay { sock: UdpSocket::bind("127.0.0.1:0").unwrap(), hub: Mutex::new(hub) };
+    let relay = |hub: Hub| Relay { sock: UdpSocket::bind("127.0.0.1:0").unwrap(), port: 0, hub: Mutex::new(hub) };
     b.connect();
     let now = Instant::now();
     b.client_state().set_phase(Phase::Active, now);
