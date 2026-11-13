@@ -8,7 +8,7 @@ use super::out::{Empty, Out};
 use super::server_msg::{is_table_change, set_pause, show_panel, signon_state, table_changes};
 use super::{
     CLIENT_TIMEOUT, KEEPALIVE, MAX_SINCE_FULL, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS,
-    TRACE, TRACE_EVERY, whence,
+    TRACE, TRACE_EVERY, masked_addr,
 };
 use crate::decode::Lifecycle;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
@@ -389,7 +389,7 @@ impl Hub {
         let Some(pkt) = c.rx.feed(data, now) else { return };
         let ready = c.read_packet(from, &pkt, now);
         if let Some(reason) = &c.gone {
-            log!(":{} {} ({}) left: {}", self.port, c.name.escape_debug(), whence(from), reason.escape_debug());
+            log!(":{} {} ({}) left: {}", self.port, c.name.escape_debug(), masked_addr(from), reason.escape_debug());
             self.clients.remove(&from);
             return;
         }
@@ -428,7 +428,7 @@ impl Hub {
                 log!(
                     ":{port} {} ({}) timed out, {:?} for {:.1} s when last heard",
                     c.name.escape_debug(),
-                    whence(*addr),
+                    masked_addr(*addr),
                     c.phase,
                     c.last_heard.saturating_duration_since(c.since).as_secs_f32()
                 );
@@ -488,7 +488,7 @@ impl Hub {
             if !c.mid_signon() {
                 return true;
             }
-            log!(":{port} {} ({}) still in its signon: dropped", c.name.escape_debug(), whence(*addr));
+            log!(":{port} {} ({}) still in its signon: dropped", c.name.escape_debug(), masked_addr(*addr));
             // Only the goodbye: the rest of the signon is of no use to it.
             c.queue.clear();
             c.outgoing = None;

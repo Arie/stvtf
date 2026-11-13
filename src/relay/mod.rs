@@ -71,13 +71,6 @@ pub(crate) fn log_line(line: &str) {
     }
 }
 
-#[cfg(test)]
-#[test]
-fn a_clients_address_is_logged_without_its_end() {
-    assert_eq!(whence("203.0.113.57:27005".parse().unwrap()), "203.0.113.x:27005");
-    assert_eq!(whence("[2001:db8:1:2:3:4:5:6]:27005".parse().unwrap()), "2001:db8:1::x:27005");
-}
-
 /// What is worth keeping of a relay's life, traced or not: a line a client, a jump or a failure.
 macro_rules! log {
     ($($arg:tt)*) => {
@@ -86,7 +79,7 @@ macro_rules! log {
 }
 
 /// A client's address as it is logged: without the end of it, the port kept to tell two apart.
-pub(crate) fn whence(addr: SocketAddr) -> String {
+pub(crate) fn masked_addr(addr: SocketAddr) -> String {
     match addr.ip() {
         std::net::IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();

@@ -1,7 +1,7 @@
 //! Who is let in: challenges, connects and `A2S_INFO`, the packets outside a connection.
 
 use super::client::Client;
-use super::{MAX_SLOTS, RelayConfig, whence};
+use super::{MAX_SLOTS, RelayConfig, masked_addr};
 use crate::net::handshake::{self, FromClient};
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
@@ -66,12 +66,12 @@ impl Admission {
                         &format!("This relay speaks protocol {}", handshake::PROTOCOL_VERSION),
                     )
                 } else if !self.password.is_empty() && password != self.password {
-                    log!(":{port} {} ({}) gave a wrong password", name.escape_debug(), whence(from));
+                    log!(":{port} {} ({}) gave a wrong password", name.escape_debug(), masked_addr(from));
                     handshake::build_reject(nonce, "#GameUI_ServerRejectBadPassword")
                 } else if clients.len() >= self.slots && !clients.contains_key(&from) {
                     handshake::build_reject(nonce, "#GameUI_ServerRejectServerFull")
                 } else {
-                    log!(":{port} {} ({}) connected", name.escape_debug(), whence(from));
+                    log!(":{port} {} ({}) connected", name.escape_debug(), masked_addr(from));
                     clients.insert(from, Client::new(name, challenge, nonce, now));
                     self.seen_client = true;
                     handshake::build_accept(nonce)

@@ -618,3 +618,9 @@ fn a_client_part_way_through_the_last_demos_signon_is_told_to_reconnect() {
     assert_eq!((c.cursor, c.gate), (0, Some(Signon::Connected)));
     assert_eq!(c.queue, [reconnect]);
 }
+
+#[test]
+fn a_clients_address_is_logged_without_its_end() {
+    assert_eq!(masked_addr("203.0.113.57:27005".parse().unwrap()), "203.0.113.x:27005");
+    assert_eq!(masked_addr("[2001:db8:1:2:3:4:5:6]:27005".parse().unwrap()), "2001:db8:1::x:27005");
+}
