@@ -7,6 +7,7 @@ use crate::lock;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::messages::{self, NET_SIGNONSTATE, TYPE_BITS};
 use crate::relay::Hub;
+use crate::relay::hub::Part;
 use anyhow::{Context, Result, bail};
 use std::collections::VecDeque;
 use std::fs::File;
@@ -93,7 +94,7 @@ impl Cursor {
                 None => (bits, life),
             };
             let mut h = lock(hub);
-            h.upstream_stream(&bits, true, &life);
+            h.upstream_stream(&bits, Part::Reliable, &life);
             h.upstream_flush();
         }
         Ok(Cursor {

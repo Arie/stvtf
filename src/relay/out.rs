@@ -8,6 +8,20 @@ use crate::net::{compress, split};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
 
+/// Whether a client gets a packet that would carry nothing: a keepalive, or an ack of its
+/// reliable data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Empty {
+    Send,
+    Skip,
+}
+
+impl Empty {
+    pub(super) fn send_if(send: bool) -> Self {
+        if send { Empty::Send } else { Empty::Skip }
+    }
+}
+
 /// The socket the clients are sent from, and the id of the last split packet sent on it.
 pub(super) struct Out {
     pub(super) sock: UdpSocket,
@@ -16,17 +30,17 @@ pub(super) struct Out {
 
 impl Out {
     /// Sends a client a packet: `tail` and a transfer block if one can go, or nothing when
-    /// neither is there and `always` is not set. Whether it sent one.
+    /// neither is there and `empty` says to skip it. Whether it sent one.
     pub(super) fn send(
         &mut self,
         addr: SocketAddr,
         c: &mut Client,
         tail: Option<&BitBuf>,
-        always: bool,
+        empty: Empty,
         now: Instant,
     ) -> bool {
         let region = c.next_region(c.out_seq);
-        if region.is_none() && tail.is_none() && !always {
+        if region.is_none() && tail.is_none() && empty == Empty::Skip {
             return false;
         }
         if tail.is_some() {
@@ -58,15 +72,15 @@ impl Out {
         true
     }
 
-    /// Sends a client every transfer block that can go now, one packet each; at least one packet
-    /// when `always` is set.
-    pub(super) fn burst(&mut self, addr: SocketAddr, c: &mut Client, always: bool, now: Instant) {
-        let mut always = always;
+    /// Sends a client every transfer block that can go now, one packet each; one with none if
+    /// `empty` says to send it.
+    pub(super) fn burst(&mut self, addr: SocketAddr, c: &mut Client, empty: Empty, now: Instant) {
+        let mut empty = empty;
         for _ in 0..SUBCHANNELS {
-            if !self.send(addr, c, None, always, now) {
+            if !self.send(addr, c, None, empty, now) {
                 break;
             }
-            always = false;
+            empty = Empty::Skip;
         }
     }
 }

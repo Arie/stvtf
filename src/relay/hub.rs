@@ -4,7 +4,7 @@
 use super::admission::Admission;
 use super::backlog::{Backlog, Delivery};
 use super::client::{Client, Phase};
-use super::out::Out;
+use super::out::{Empty, Out};
 use super::server_msg::{is_table_change, set_pause, show_panel, signon_state, table_changes};
 use super::{
     CLIENT_TIMEOUT, KEEPALIVE, MAX_SINCE_FULL, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS,
@@ -46,6 +46,13 @@ pub(super) struct Hub {
     /// Since when another signon waits for the clients in one.
     signon_held: Option<Instant>,
     traced: Instant,
+}
+
+/// Which part of a datagram a stream is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Part {
+    Reliable,
+    Unreliable,
 }
 
 /// What feeds a hub.
@@ -106,7 +113,7 @@ impl Hub {
         }
     }
 
-    pub(super) fn upstream_stream(&mut self, bits: &BitBuf, reliable: bool, life: &Lifecycle) {
+    pub(super) fn upstream_stream(&mut self, bits: &BitBuf, part: Part, life: &Lifecycle) {
         let now = Instant::now();
         if let Some((_, map)) = &life.server_info {
             self.admission.map.clone_from(map);
@@ -115,7 +122,7 @@ impl Hub {
         // entities): like any entities, it goes to the clients in the datagram's unreliable
         // part, so it is never in the backlog and reaches a client in order with the deltas after it.
         let entities = life.spans.iter().any(|s| u32::from(s.id) == SVC_PACKETENTITIES);
-        if !reliable || entities {
+        if part == Part::Unreliable || entities {
             if entities {
                 self.backlog.open = false;
             }
@@ -231,9 +238,9 @@ impl Hub {
                 c.queue.push(pause.clone());
                 c.queue.extend(again.iter().cloned());
                 c.enter_notes(&self.notes, now);
-                self.out.send(*addr, c, Some(key), true, now);
+                self.out.send(*addr, c, Some(key), Empty::Send, now);
                 for f in since {
-                    self.out.send(*addr, c, Some(f), true, now);
+                    self.out.send(*addr, c, Some(f), Empty::Send, now);
                 }
             }
         }
@@ -281,7 +288,7 @@ impl Hub {
     pub(super) fn send_to_active(&mut self, msg: &BitBuf) {
         let now = Instant::now();
         for (addr, c) in self.clients.iter_mut().filter(|(_, c)| c.phase == Phase::Active) {
-            self.out.send(*addr, c, Some(msg), false, now);
+            self.out.send(*addr, c, Some(msg), Empty::Skip, now);
         }
     }
 
@@ -290,7 +297,7 @@ impl Hub {
         let now = Instant::now();
         for (addr, c) in &mut self.clients {
             if c.takes_full_update(&self.backlog) {
-                self.out.send(*addr, c, Some(msg), false, now);
+                self.out.send(*addr, c, Some(msg), Empty::Skip, now);
             }
         }
     }
@@ -338,9 +345,9 @@ impl Hub {
             if c.phase == Phase::Active {
                 // One packet per server datagram, as the server sends: a packet of our own
                 // would show in a client's net_graph as one without entities.
-                self.out.send(*addr, c, tail.as_ref(), true, now);
+                self.out.send(*addr, c, tail.as_ref(), Empty::Send, now);
             } else {
-                self.out.burst(*addr, c, false, now);
+                self.out.burst(*addr, c, Empty::Skip, now);
             }
         }
     }
@@ -359,7 +366,7 @@ impl Hub {
             }
             c.enter_notes(&self.notes, now);
             for t in frames {
-                self.out.send(addr, c, Some(t), false, now);
+                self.out.send(addr, c, Some(t), Empty::Skip, now);
             }
         } else {
             trace!("{addr} waits for a full update");
@@ -387,7 +394,7 @@ impl Hub {
         // An active client hears from us with the next server datagram. During signon its acks
         // free subchannels for more of the transfer, and its reliable data is acked at once.
         if c.phase != Phase::Active {
-            self.out.burst(from, c, pkt.header.reliable(), now);
+            self.out.burst(from, c, Empty::send_if(pkt.header.reliable()), now);
         }
         if ready {
             self.start_entities(from, now);
@@ -426,10 +433,10 @@ impl Hub {
             let keepalive = now.duration_since(c.last_sent) > KEEPALIVE;
             if c.phase == Phase::Active {
                 if keepalive {
-                    self.out.send(*addr, c, None, true, now);
+                    self.out.send(*addr, c, None, Empty::Send, now);
                 }
             } else {
-                self.out.burst(*addr, c, keepalive, now);
+                self.out.burst(*addr, c, Empty::send_if(keepalive), now);
             }
         }
         if *TRACE && now.duration_since(self.traced) > TRACE_EVERY {
@@ -450,7 +457,7 @@ impl Hub {
         let now = Instant::now();
         for (addr, c) in &mut self.clients {
             for _ in 0..2 {
-                self.out.send(*addr, c, Some(&bye), true, now);
+                self.out.send(*addr, c, Some(&bye), Empty::Send, now);
             }
         }
         self.clients.clear();
@@ -480,7 +487,7 @@ impl Hub {
             c.queue.clear();
             c.outgoing = None;
             for _ in 0..2 {
-                out.send(*addr, c, Some(&bye), true, now);
+                out.send(*addr, c, Some(&bye), Empty::Send, now);
             }
             false
         });

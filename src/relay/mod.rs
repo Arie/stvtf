@@ -294,7 +294,8 @@ impl Relay {
 
 impl Tap for Relay {
     fn stream(&self, bits: &BitBuf, reliable: bool, life: &Lifecycle) {
-        self.hub().upstream_stream(bits, reliable, life);
+        let part = if reliable { hub::Part::Reliable } else { hub::Part::Unreliable };
+        self.hub().upstream_stream(bits, part, life);
     }
 
     fn flush(&self) {

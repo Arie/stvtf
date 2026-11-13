@@ -349,7 +349,7 @@ impl Player<'_> {
                     self.relay.hub().skim(&bits, &life);
                 }
             }
-            Some(next) if !want.paused && next <= target => self.play_frame(want.camera.is_some()),
+            Some(next) if !want.paused && next <= target => self.play_frame(want.camera),
             _ => std::thread::sleep(NAP),
         }
         Ok(())

@@ -1,16 +1,18 @@
 //! Frames played to the clients in the game, as they are where a game client can follow them.
 
+use super::Camera;
 use super::cursor::without_cues;
 use super::player::Player;
 use crate::decode::{Decoder, Entities};
 use crate::net::bits::BitBuf;
+use crate::relay::hub::Part;
 use std::time::Instant;
 
 impl Player<'_> {
     /// Plays the next frame to the clients (without the demo's camera cues when the room has its
     /// own `camera`). One they cannot follow as it is (see [`follows`]) is passed over, and they
     /// get a full update of their own instead.
-    pub(super) fn play_frame(&mut self, camera: bool) {
+    pub(super) fn play_frame(&mut self, camera: Option<Camera>) {
         let Some(c) = &mut self.cur else { return };
         let base = c.next_frame().and_then(|d| c.dec.entities(d));
         if !follows(self.floor, base) {
@@ -32,9 +34,9 @@ impl Player<'_> {
         let was_paused = c.paused;
         let Some((bits, life)) = c.decode() else { return };
         // Ours, not the demo's director's.
-        let (bits, life) = if camera { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
+        let (bits, life) = if camera.is_some() { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
         let mut hub = self.relay.hub();
-        hub.upstream_stream(&bits, false, &life);
+        hub.upstream_stream(&bits, Part::Unreliable, &life);
         hub.upstream_flush();
         self.clock = Some((c.tick() as f64 * f64::from(c.dec.tick_interval()), Instant::now()));
         // The match's own HUD resets (a spawn, a new round) drop the notes too.

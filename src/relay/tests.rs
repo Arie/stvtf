@@ -1,5 +1,5 @@
 use super::client::{Client, Phase};
-use super::hub::{Hub, Mode};
+use super::hub::{Hub, Mode, Part};
 use super::server_msg::{is_reset_hud, reset_hud, set_pause, show_panel};
 use super::*;
 use crate::decode::Span;
@@ -164,7 +164,7 @@ fn a_late_client_gets_the_table_changes_once_and_one_in_the_game_skips_them() {
     let now = Instant::now();
     let (bits, life) = datagram_with_table_change();
     for _ in 0..3 {
-        hub.upstream_stream(&bits, false, &life);
+        hub.upstream_stream(&bits, Part::Unreliable, &life);
         hub.upstream_flush();
     }
     assert_eq!(hub.backlog.len(), 1, "logged once, however often it comes");
@@ -187,7 +187,7 @@ fn tables_set_back_go_again_on_every_jump_back() {
     let back = w.finish();
     // Back from past the change, on to it again, and back again: the same set-back each time.
     for round in 1..=2 {
-        hub.upstream_stream(&later, false, &life);
+        hub.upstream_stream(&later, Part::Unreliable, &life);
         hub.upstream_flush();
         hub.clients.get_mut(&active).unwrap().queue.clear();
         hub.set_tables_back(std::slice::from_ref(&later), std::slice::from_ref(&back));

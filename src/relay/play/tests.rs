@@ -7,6 +7,7 @@ use crate::net::bits::BitWriter;
 use crate::net::messages::{self, SVC_USERMESSAGE, Signon, TYPE_BITS};
 use crate::net::receiver::Receiver;
 use crate::relay::client::Phase;
+use crate::relay::hub::Part;
 use crate::relay::server_msg::show_panel;
 use crate::relay::tests::Bench;
 use std::time::{Duration, Instant};
@@ -259,7 +260,7 @@ fn a_played_frame_reaches_a_client_without_the_servers_changelevel() {
     let mut reader = upward_until(few_in);
     let (bits, life) = c.decode().unwrap();
     let mut b = bench_with_one_in();
-    b.hub.upstream_stream(&bits, false, &life);
+    b.hub.upstream_stream(&bits, Part::Unreliable, &life);
     b.hub.upstream_flush();
     assert_eq!(sent_unreliably(&b, &mut reader), [ids]);
 }
