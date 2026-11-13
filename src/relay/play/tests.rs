@@ -206,7 +206,7 @@ fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
 /// have it: `net_SignonState(CHANGELEVEL)` and a panel shown put in after its first message.
 /// What the frame's message types are without the changelevel, too.
 fn upward_with_changelevel() -> (Cursor, Vec<u8>) {
-    let (mut c, mut copy) = (upward_until(few_in), upward_until(few_in));
+    let (mut c, mut copy) = (upward_until(four_frames_kept), upward_until(four_frames_kept));
     let Some(Packet::Message { tick, .. }) = copy.peek().cloned() else { panic!("a frame next") };
     let (bits, life) = copy.decode().unwrap();
     let mut w = BitWriter::new();
@@ -225,7 +225,7 @@ fn upward_with_changelevel() -> (Cursor, Vec<u8>) {
     (c, ids)
 }
 
-fn few_in(c: &Cursor) -> bool {
+fn four_frames_kept(c: &Cursor) -> bool {
     c.recent.len() >= 4
 }
 
@@ -258,7 +258,7 @@ fn bench_with_one_in() -> Bench {
 #[test]
 fn a_played_frame_reaches_a_client_without_the_servers_changelevel() {
     let (mut c, ids) = upward_with_changelevel();
-    let mut reader = upward_until(few_in);
+    let mut reader = upward_until(four_frames_kept);
     let (bits, life) = c.decode().unwrap();
     let mut b = bench_with_one_in();
     b.hub.upstream_stream(&bits, Part::Unreliable, &life);
@@ -269,7 +269,7 @@ fn a_played_frame_reaches_a_client_without_the_servers_changelevel() {
 #[test]
 fn the_frames_sent_with_a_full_update_are_without_the_servers_changelevel() {
     let (mut c, ids) = upward_with_changelevel();
-    let mut reader = upward_until(few_in);
+    let mut reader = upward_until(four_frames_kept);
     c.decode().unwrap();
     c.peek();
     let (_, key) = c.dec.keyframe(c.next_frame()).unwrap();
@@ -315,7 +315,7 @@ fn follow_as_a_game_client(b: &Bench, reader: &Cursor) -> (usize, usize) {
 }
 
 /// A relay with the bench's hub, its client in the game, and a player of `c` toward `tick`.
-fn playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
+fn relay_playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
     let config = crate::relay::RelayConfig::new("127.0.0.1:0");
     let spare = crate::relay::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
     let hub = std::mem::replace(&mut b.hub, spare);
@@ -351,7 +351,7 @@ fn a_live_recording_plays_on_after_a_full_update() {
         let mut b = bench_with_one_in();
         b.client_state().set_phase(Phase::WaitingFull, Instant::now());
         let tick = c.dec.server_tick() + 40;
-        let (relay, c, want) = playing(&mut b, c, tick);
+        let (relay, c, want) = relay_playing(&mut b, c, tick);
         let mut p = Player::new(&relay);
         p.cur = Some(c);
         for _ in 0..60 {
@@ -369,9 +369,9 @@ fn a_live_recording_plays_on_after_a_full_update() {
 /// only when they have what it builds on.
 #[test]
 fn a_full_update_in_the_demo_then_a_delta_from_before_it_reach_a_client_it_can_follow() {
-    let mut c = upward_until(few_in);
+    let mut c = upward_until(four_frames_kept);
     let e = c.dec.server_tick();
-    let mut copy = upward_until(few_in);
+    let mut copy = upward_until(four_frames_kept);
     let Some(Packet::Message { tick: demo_tick, .. }) = copy.peek().cloned() else { panic!("a frame next") };
     copy.decode().unwrap();
     let (n1, full) = copy.dec.keyframe(None).unwrap();
@@ -380,7 +380,7 @@ fn a_full_update_in_the_demo_then_a_delta_from_before_it_reach_a_client_it_can_f
     c.next = Some(Packet::Message { tick: demo_tick, data: full.bytes().to_vec() });
 
     let mut b = bench_with_one_in();
-    let (relay, c, want) = playing(&mut b, c, e + 10);
+    let (relay, c, want) = relay_playing(&mut b, c, e + 10);
     let mut p = Player::new(&relay);
     p.cur = Some(c);
     p.step(&want).unwrap();
@@ -388,7 +388,7 @@ fn a_full_update_in_the_demo_then_a_delta_from_before_it_reach_a_client_it_can_f
     for _ in 0..4 {
         p.step(&want).unwrap();
     }
-    let reader = upward_until(few_in);
+    let reader = upward_until(four_frames_kept);
     let (fulls, deltas) = follow_as_a_game_client(&b, &reader);
     assert!(fulls >= 1 && deltas >= 2, "a full update, and frames after it: {fulls}, {deltas}");
 }
@@ -438,14 +438,14 @@ fn the_frames_after_a_keyframe_build_only_on_frames_a_client_still_has() {
 /// which the match's own is used.
 #[test]
 fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
-    let c = upward_until(few_in);
+    let c = upward_until(four_frames_kept);
     let ours = c.dec.beam_model(None, ModelsSent::default()).unwrap().index;
     let past = ModelsSent::next_for_tests(ours + 1);
     let theirs = c.dec.beam_model(None, past).unwrap();
     let (theirs, load) = (theirs.index, theirs.load.unwrap());
     let mut b = bench_with_one_in();
     let tick = c.dec.server_tick();
-    let (relay, c, want) = playing(&mut b, c, tick);
+    let (relay, c, want) = relay_playing(&mut b, c, tick);
     let mut p = Player::new(&relay);
     p.laser = Some(ours);
     p.cur = Some(c);
@@ -462,13 +462,13 @@ fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
 /// match loaded its own after the relay's, the relay's is not loaded again for that demo.
 #[test]
 fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
-    let c = upward_until(few_in);
+    let c = upward_until(four_frames_kept);
     let ours = c.dec.beam_model(None, ModelsSent::default()).unwrap().index;
     let load = c.dec.beam_model(None, ModelsSent::next_for_tests(ours + 1)).unwrap().load.unwrap();
     let mut b = bench_with_one_in();
     b.client_state().set_phase(Phase::Signon, Instant::now());
     let tick = c.dec.server_tick();
-    let (relay, c, want) = playing(&mut b, c, tick);
+    let (relay, c, want) = relay_playing(&mut b, c, tick);
     let playback = Playback::new(want.clone());
     let beam = Beam { from: [0.0; 3], to: [1.0; 3], rgb: [255, 0, 0], life: 1.0, width: 2.0, speed: 0 };
     playback.keep_beams(vec![beam]);
@@ -492,7 +492,7 @@ fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     p.cur.as_mut().unwrap().dec.feed(load.bytes(), load.nbits());
     p.step(&want).unwrap();
     assert!(p.cur.is_none(), "a new signon");
-    p.start_demo(upward_until(few_in));
+    p.start_demo(upward_until(four_frames_kept));
     p.kept.clear();
     p.show_kept(&playback);
     assert_eq!(p.laser, None, "not again");
