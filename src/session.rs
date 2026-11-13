@@ -50,7 +50,6 @@ impl Default for Options {
 pub(crate) const DEFAULT_NAME: &str = "stv.tf";
 const DEFAULT_SILENCE: Duration = Duration::from_secs(15);
 
-const RESEND_AFTER: Duration = Duration::from_millis(500);
 /// Snapshots per second unless asked otherwise.
 pub const DEFAULT_SNAPSHOT_HZ: f32 = 20.0;
 
@@ -69,7 +68,8 @@ const TICK_ACK_EVERY: Duration = Duration::from_millis(100);
 struct Pending {
     region: BitBuf,
     subchannel: u8,
-    sent_at: Instant,
+    /// The sequence of the packet that last carried it.
+    seq: i32,
 }
 
 /// Rejections that reconnecting cannot fix.
@@ -242,14 +242,14 @@ impl<'o> Session<'o> {
         });
         let region = messages::reliable_region(body, sub);
         self.out_reliable_state ^= 1 << sub;
-        self.pending = Some(Pending { region, subchannel: sub, sent_at: Instant::now() });
+        self.pending = Some(Pending { region, subchannel: sub, seq: 0 });
         self.transmit_pending();
     }
 
     fn transmit_pending(&mut self) {
         if let Some(p) = self.pending.take() {
             self.send(Some(&p.region), None);
-            self.pending = Some(Pending { sent_at: Instant::now(), ..p });
+            self.pending = Some(Pending { seq: self.out_seq - 1, ..p });
         }
     }
 
@@ -368,6 +368,9 @@ impl<'o> Session<'o> {
             if (pkt.header.reliable_state >> p.subchannel) & 1 == want {
                 self.pending = None;
                 self.echo(self.state);
+            } else if pkt.header.ack >= p.seq {
+                // The server takes every copy it gets: one goes only once this one is lost.
+                self.transmit_pending();
             }
         }
         if self.sock.is_none() {
@@ -381,9 +384,6 @@ impl<'o> Session<'o> {
         if now.duration_since(self.last_inbound) > self.opt.silence {
             self.break_with(format!("no data for {:?}", self.opt.silence), None);
             return;
-        }
-        if self.pending.as_ref().is_some_and(|p| now.duration_since(p.sent_at) > RESEND_AFTER) {
-            self.transmit_pending();
         }
         self.promote(emit);
         if self.state >= Signon::Spawn && now.duration_since(self.last_tick_ack) > TICK_ACK_EVERY {
@@ -643,9 +643,10 @@ const PACE_POLL: Duration = Duration::from_millis(2);
 
 #[cfg(test)]
 mod tests {
-    use super::{End, Fatal, Next, Options, RESEND_AFTER, Session, drive, finish, replay};
+    use super::{End, Fatal, Next, Options, Session, drive, finish, replay};
     use crate::decode::Lifecycle;
     use crate::net::messages::{self, Signon};
+    use crate::net::netchan::{self, OutHeader};
     use crate::output::{Line, Status};
     use std::time::Duration;
 
@@ -682,17 +683,41 @@ mod tests {
         assert!(s.broke.is_some_and(|(why, fatal)| why.starts_with("no data") && fatal.is_none()));
     }
 
+    /// While a map loads the server answers seconds apart. It takes every copy of a reliable
+    /// message it gets, and flips the subchannel's bit for each: a copy sent on a timer is one
+    /// more `net_SignonState`, which forces a reconnect, or past `sv_signon_dos_disconnect` (20)
+    /// drops us ("Connection error"). As in the engine, a copy goes only once it is lost.
     #[test]
-    fn a_reliable_message_goes_again_until_acked() {
+    fn a_reliable_message_goes_again_only_once_the_server_shows_it_lost() {
         let opt = Options::default();
-        let mut s = Session::new(None, 0, &opt);
-        s.send_reliable(&messages::tick(1), Some(0));
+        let challenge = 7;
+        let mut s = Session::new(None, challenge, &opt);
+        let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
+        let mut dec = crate::decode::Decoder::new(&tables, opt.snapshot_hz).unwrap();
+        let mut server_seq = 0;
+        let mut from_server = |s: &mut Session<'_>, ack: i32, reliable_state: u8| {
+            server_seq += 1;
+            let header = OutHeader { sequence: server_seq, ack, challenge, reliable_state };
+            s.datagram(&netchan::build_packet(&header, None, None), &mut dec, &mut |_| {});
+        };
+        s.send_reliable(&messages::signonstate(Signon::Spawn, 8), Some(0));
+        let carried = s.out_seq - 1;
+
+        std::thread::sleep(Duration::from_millis(600));
         let sent = s.out_seq;
         s.poll(&mut |_| {});
-        assert_eq!(s.out_seq, sent, "not yet");
-        s.pending.as_mut().unwrap().sent_at -= RESEND_AFTER * 2;
-        s.poll(&mut |_| {});
-        assert_eq!(s.out_seq, sent + 1);
+        assert_eq!(s.out_seq, sent, "a slow server is no reason to send it again");
+        from_server(&mut s, carried - 1, 0);
+        assert_eq!(s.out_seq, sent + 1, "only the reply: the server has not had the packet yet");
+
+        let sent = s.out_seq;
+        from_server(&mut s, carried + 1, 0);
+        assert_eq!(s.out_seq, sent + 2, "lost: sent again, then the reply");
+        assert!(s.pending.is_some());
+
+        let last = s.out_seq - 1;
+        from_server(&mut s, last, 1);
+        assert!(s.pending.is_none(), "acked");
     }
 
     #[test]
