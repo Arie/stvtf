@@ -145,6 +145,13 @@ impl Tables {
         self.beam_sprite.filter(|(rank, _)| *rank == 0).map(|(_, i)| i)
     }
 
+    /// Whether the match loaded the laser after the clients were given the relay's at `before`: a
+    /// game client has the name already and adds nothing, so every model the match loads after it
+    /// is one index off for them until they sign on again.
+    pub(crate) fn laser_twice(&self, before: Option<u16>) -> bool {
+        before.is_some_and(|b| self.match_laser().is_some_and(|m| m != b))
+    }
+
     /// `was`, with what these tables have: the clients were sent them too.
     pub(crate) fn models_sent(&self, was: ModelsSent) -> ModelsSent {
         ModelsSent { next: was.next.max(self.models), laser: was.laser.or(self.match_laser()) }
@@ -350,6 +357,20 @@ mod tests {
         let sent = later.models_sent(sent);
         assert_eq!(earlier.laser(&state, None, sent).map(|(s, l)| (s, l.is_none())), Some((4, true)), "the match's");
         assert_eq!(earlier.models_sent(sent).next, 5, "it only grows");
+    }
+
+    /// The match loading the laser after the clients were given the relay's: a game client has the
+    /// name, adds nothing, and every model after it is one off for it.
+    #[test]
+    fn the_match_loading_the_laser_after_the_relays_is_told() {
+        let mut t = Tables::default();
+        t.note(&[models(vec![(0, model("maps/x.bsp")), (1, model("models/a.mdl"))])]);
+        assert!(!t.laser_twice(Some(2)));
+        assert!(!t.laser_twice(None));
+        t.note(&[update(vec![(2, model("models/b.mdl")), (3, model(BEAM_SPRITES[0]))])]);
+        assert!(t.laser_twice(Some(2)));
+        assert!(!t.laser_twice(None), "the clients have only the match's");
+        assert!(!t.laser_twice(Some(3)), "where the clients have it");
     }
 
     #[test]

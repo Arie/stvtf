@@ -51,6 +51,12 @@ impl Decoder {
         laser.or_else(|| Some((self.tables.beam_sprite()?, None)))
     }
 
+    /// Whether the match loaded the laser after the clients were given the relay's at `before` (see
+    /// `Tables::laser_twice`).
+    pub(crate) fn laser_twice(&self, before: Option<u16>) -> bool {
+        self.tables.laser_twice(before)
+    }
+
     /// `was`, with the models these tables have: what the clients were sent (see `Tables::laser`).
     pub(crate) fn models_sent(&self, was: ModelsSent) -> ModelsSent {
         self.tables.models_sent(was)

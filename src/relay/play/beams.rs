@@ -74,6 +74,18 @@ impl Player<'_> {
         c.dec.beams(beams, model)
     }
 
+    /// Whether the match loaded the laser after the clients were given the relay's: every model of
+    /// the match's after it is one off for them, so they sign on again (the demo opened afresh),
+    /// after which its own is used.
+    pub(super) fn laser_twice(&mut self) -> bool {
+        if !self.cur.as_ref().is_some_and(|c| c.dec.laser_twice(self.laser)) {
+            return false;
+        }
+        note!(":{} the match loaded the laser too: the clients sign on again", self.relay.port());
+        self.cur = None;
+        true
+    }
+
     /// Shows each kept beam again as it runs out, for [`KEPT_EVERY`], new ones at once: at most
     /// [`KEPT_RATE`] a second, in bursts of [`KEPT_BURST`], so they never crowd out the frames
     /// (a client that misses one cannot follow the next).

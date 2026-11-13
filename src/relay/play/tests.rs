@@ -431,3 +431,27 @@ fn the_frames_after_a_keyframe_build_only_on_frames_a_client_still_has() {
         assert_eq!(c.dec.entities(s.bytes()), Some(Entities::Delta(k1)));
     }
 }
+
+/// The match loads the laser after the clients were given the relay's: they sign on again, after
+/// which the match's own is used.
+#[test]
+fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
+    let c = upward_until(few_in);
+    let (ours, _) = c.dec.beam_model(None, ModelsSent::default()).unwrap();
+    let mut past = ModelsSent::default();
+    past.next = ours + 1;
+    let (theirs, load) = c.dec.beam_model(None, past).unwrap();
+    let load = load.unwrap();
+    let mut b = bench_with_one_in();
+    let tick = c.dec.server_tick();
+    let (relay, c, want) = playing(&mut b, c, tick);
+    let mut p = player::Player::new(&relay);
+    p.laser = Some(ours);
+    p.cur = Some(c);
+    p.step(&want).unwrap();
+    assert!(p.cur.is_some(), "the match has not loaded it yet");
+    p.cur.as_mut().unwrap().dec.feed(load.bytes(), load.nbits());
+    assert_eq!(p.cur.as_ref().unwrap().dec.beam_model(None, ModelsSent::default()).unwrap().0, theirs);
+    p.step(&want).unwrap();
+    assert!(p.cur.is_none(), "a new signon");
+}

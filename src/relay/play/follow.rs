@@ -2,7 +2,8 @@
 
 use super::cursor::without_cues;
 use super::player::Player;
-use crate::decode::Entities;
+use crate::decode::{Decoder, Entities};
+use crate::net::bits::BitBuf;
 use std::time::Instant;
 
 impl Player<'_> {
@@ -62,4 +63,17 @@ pub(super) fn follows(floor: Option<u32>, base: Option<Entities>) -> bool {
         Some(Entities::Full) => false,
         Some(Entities::Delta(b)) => floor.is_none_or(|f| b >= f),
     }
+}
+
+/// The oldest frame the clients in the game may have, from `floor`, once those just in got a full
+/// update of frame `key` and the frames `since`: what the latest of them builds on.
+pub(super) fn floor_after(floor: Option<u32>, dec: &Decoder, key: u32, since: &[BitBuf]) -> u32 {
+    let base = since
+        .iter()
+        .filter_map(|f| match dec.entities(f.bytes()) {
+            Some(Entities::Delta(b)) => Some(b),
+            _ => None,
+        })
+        .fold(key, u32::max);
+    floor.map_or(base, |f| f.max(base))
 }

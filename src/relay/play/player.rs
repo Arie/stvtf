@@ -6,7 +6,7 @@ use super::index::Index;
 use super::{
     CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, KEPT_BURST, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice,
 };
-use crate::decode::{Entities, ModelsSent};
+use crate::decode::ModelsSent;
 use crate::lock;
 use crate::output::Line;
 use crate::relay::{Hub, Relay};
@@ -232,6 +232,9 @@ impl Player<'_> {
 
     /// Plays on toward `want`: one frame, a jump, or a short wait.
     pub(super) fn step(&mut self, want: &Want) -> Result<()> {
+        if self.laser_twice() {
+            return Ok(());
+        }
         let Some(c) = &mut self.cur else { return Ok(()) };
         let interval = c.dec.tick_interval();
         let first = c.first.unwrap_or(i64::MIN);
@@ -310,15 +313,7 @@ impl Player<'_> {
                     hub.send_keyframe(&key, &since, c.paused);
                     hub.notes_again(Instant::now());
                     drop(hub);
-                    // What the frames after it build on, as far as those just in go.
-                    let base = since
-                        .iter()
-                        .filter_map(|f| match c.dec.entities(f.bytes()) {
-                            Some(Entities::Delta(b)) => Some(b),
-                            _ => None,
-                        })
-                        .fold(tick, u32::max);
-                    self.floor = Some(self.floor.map_or(base, |f| f.max(base)));
+                    self.floor = Some(super::follow::floor_after(self.floor, &c.dec, tick, &since));
                     if std::mem::take(&mut self.rekeyed) {
                         self.clock = Some((f64::from(tick) * f64::from(interval), Instant::now()));
                     }
