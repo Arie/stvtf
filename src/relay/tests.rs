@@ -1,4 +1,4 @@
-use super::client::{Client, Logged, Phase};
+use super::client::{Client, Phase};
 use super::hub::{Hub, Mode};
 use super::server_msg::{is_reset_hud, reset_hud, set_pause, show_panel};
 use super::*;
@@ -168,14 +168,14 @@ fn a_late_client_gets_the_table_changes_once_and_one_in_the_game_skips_them() {
         hub.upstream_stream(&bits, false, &life);
         hub.upstream_flush();
     }
-    assert_eq!(hub.log.len(), 1, "logged once, however often it comes");
+    assert_eq!(hub.backlog.len(), 1, "logged once, however often it comes");
     let c = &hub.clients[&active];
     assert_eq!((c.cursor, c.queue.len()), (1, 0), "a client in the game has it from the datagram");
     let mut late = Client::new("late".into(), 2, 2, now);
     late.gate = None;
-    late.pump(&hub.log);
+    late.pump(&hub.backlog);
     assert_eq!(late.queue, [bits]);
-    assert!(!late.has_log(&hub.log), "no entities before the change is acked");
+    assert!(!late.through_backlog(&hub.backlog), "no entities before the change is acked");
 }
 
 #[test]
@@ -437,10 +437,10 @@ fn a_new_map_signs_every_client_on_again() {
     c.cursor = 5;
     c.gate = Some(Signon::Spawn);
     c.queue.push(BitBuf::default());
-    b.hub.log.push(Logged { bits: BitBuf::default(), gate: None });
+    b.hub.backlog.push(BitBuf::default(), None);
     b.hub.keyframe = Some(Vec::new());
     b.hub.restart_signon(now);
-    assert!(b.hub.log.is_empty() && b.hub.keyframe.is_none() && b.hub.signon_open);
+    assert!(b.hub.backlog.len() == 0 && b.hub.keyframe.is_none() && b.hub.backlog.open);
     let c = b.client_state();
     assert_eq!((c.phase, c.cursor, c.gate, c.queue.len()), (Phase::Signon, 0, None, 0));
 }
@@ -450,7 +450,7 @@ fn a_new_map_signs_every_client_on_again() {
 #[test]
 fn a_new_signon_waits_for_the_clients_in_one() {
     let mut b = Bench::new("", 1);
-    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    b.hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
     b.connect();
     let now = Instant::now();
     assert!(!b.hub.signon_waits(now), "a client just in, sent nothing yet");
@@ -461,7 +461,7 @@ fn a_new_signon_waits_for_the_clients_in_one() {
     let new_signon = |hub: &mut Hub| {
         hub.reconnect_all();
         hub.restart_signon(Instant::now());
-        hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+        hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
     };
     new_signon(&mut b.hub);
     assert!(b.hub.signon_waits(now), "told to reconnect");
@@ -496,7 +496,7 @@ fn sent_to(b: &Bench) -> Vec<ClientMsg> {
 #[test]
 fn a_client_still_in_its_signon_when_the_hold_ends_is_dropped_saying_why() {
     let mut b = Bench::new("", 2);
-    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    b.hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
     b.connect();
     let now = Instant::now();
     b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
@@ -519,9 +519,9 @@ fn a_client_still_in_its_signon_when_the_hold_ends_is_dropped_saying_why() {
     // The next signon: nothing of it reaches the client dropped.
     b.hub.reconnect_all();
     b.hub.restart_signon(now);
-    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    b.hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
     for c in b.hub.clients.values_mut() {
-        c.pump(&b.hub.log);
+        c.pump(&b.hub.backlog);
     }
     b.hub.service(now);
     assert_eq!(sent_to(&b), [], "nothing more");
@@ -578,7 +578,7 @@ fn garbage_from_clients_never_panics_the_hub() {
 fn a_client_coming_in_during_a_hold_waits_for_the_next_signon() {
     let mut b = Bench::new("", 2);
     b.hub.mode = Mode::Play { paused: false };
-    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    b.hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
     let now = Instant::now();
     let loading: SocketAddr = "127.0.0.1:1".parse().unwrap();
     let mut c = Client::new("loading".into(), 1, 1, now);
@@ -608,7 +608,7 @@ fn a_client_coming_in_during_a_hold_waits_for_the_next_signon() {
 fn a_client_part_way_through_the_last_demos_signon_is_told_to_reconnect() {
     let mut b = Bench::new("", 1);
     b.hub.mode = Mode::Play { paused: false };
-    b.hub.log.push(Logged { bits: BitBuf::from_bytes(vec![1]), gate: None });
+    b.hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
     b.connect();
     b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
     assert_eq!(b.client_state().cursor, 1);

@@ -1,7 +1,8 @@
-//! The hub: the clients, the signon log and the datagrams, shared by the upstream and client
+//! The hub: the clients, the backlog and the datagrams, shared by the upstream and client
 //! threads.
 
-use super::client::{Client, Logged, Phase};
+use super::backlog::{Backlog, Delivery};
+use super::client::{Client, Phase};
 use super::out::Out;
 use super::server_msg::{is_table_change, set_pause, show_panel, signon_state, table_changes};
 use super::{
@@ -13,7 +14,7 @@ use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::handshake::{self, FromClient};
 use crate::net::messages::{self, SVC_PACKETENTITIES, SVC_SERVERINFO, Signon};
 use crate::net::netchan;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
@@ -31,11 +32,7 @@ pub(super) struct Hub {
     /// Keys the challenge of each address, so none need be stored before it connects.
     pub(super) challenge_key: RandomState,
     pub(super) clients: HashMap<SocketAddr, Client>,
-    pub(super) log: Vec<Logged>,
-    /// The string table messages logged from unreliable parts, which come again until acked.
-    logged_unreliable: HashSet<BitBuf>,
-    /// Every reliable message joins the log until the first entities after a signon starts.
-    pub(super) signon_open: bool,
+    pub(super) backlog: Backlog,
     /// This datagram's unreliable part, and whether it holds a full update.
     tail: Option<BitBuf>,
     tail_full: bool,
@@ -76,9 +73,7 @@ impl Hub {
             slots: config.slots.min(MAX_SLOTS),
             challenge_key: RandomState::new(),
             clients: HashMap::new(),
-            log: Vec::new(),
-            logged_unreliable: HashSet::new(),
-            signon_open: true,
+            backlog: Backlog::new(),
             tail: None,
             tail_full: false,
             keyframe: None,
@@ -130,11 +125,11 @@ impl Hub {
         }
         // The server sends the first full update after signon reliably (`net_Tick` and the
         // entities): like any entities, it goes to the clients in the datagram's unreliable
-        // part, so it is never in the log and reaches a client in order with the deltas after it.
+        // part, so it is never in the backlog and reaches a client in order with the deltas after it.
         let entities = life.spans.iter().any(|s| u32::from(s.id) == SVC_PACKETENTITIES);
         if !reliable || entities {
             if entities {
-                self.signon_open = false;
+                self.backlog.open = false;
             }
             self.tail_full |= life.full_update;
             let mut w = BitWriter::new();
@@ -148,7 +143,7 @@ impl Hub {
             // needs them: without an entity class's baseline, a game client stops with
             // "GetDynamicBaseline: FindStringIndex failed".
             for msg in table_changes(bits, life) {
-                self.log_unreliable(&msg);
+                self.add_unreliable_table_change(&msg);
             }
             return;
         }
@@ -157,84 +152,57 @@ impl Hub {
             if u32::from(span.id) == SVC_SERVERINFO {
                 self.restart_signon(now);
             }
-            if self.signon_open || is_table_change(span.id) {
+            if self.backlog.open || is_table_change(span.id) {
                 let gate =
                     signon_state(span.id, &msg).filter(|s| matches!(s, Signon::New | Signon::PreSpawn | Signon::Spawn));
-                self.log.push(Logged { bits: msg, gate });
+                self.backlog.push(msg, gate);
                 for c in self.clients.values_mut() {
-                    c.pump(&self.log);
+                    c.pump(&self.backlog);
                 }
             } else {
-                for c in self.clients.values_mut().filter(|c| c.caught_up(&self.log)) {
+                for c in self.clients.values_mut().filter(|c| c.caught_up(&self.backlog)) {
                     c.queue.push(msg.clone());
                 }
             }
         }
     }
 
-    /// Logs a string table message from a datagram's unreliable part, once. A client already
-    /// getting every datagram has it from there, so its cursor only moves past it.
-    fn log_unreliable(&mut self, msg: &BitBuf) {
-        if !self.logged_unreliable.insert(msg.clone()) {
-            return;
-        }
-        trace!("logged a string table change of {} bits from a datagram", msg.nbits());
-        self.log.push(Logged { bits: msg.clone(), gate: None });
-        let play = matches!(self.mode, Mode::Play { .. });
-        for c in self.clients.values_mut() {
-            if c.phase == Phase::Active && c.cursor + 1 == self.log.len() {
-                c.cursor += 1;
-                // A demo has it once: a lost datagram would lose it for good.
-                if play {
-                    c.queue.push(msg.clone());
-                }
-            } else {
-                c.pump(&self.log);
-            }
+    /// Adds a string table change from a datagram's unreliable part to the backlog, once.
+    fn add_unreliable_table_change(&mut self, msg: &BitBuf) {
+        let queue = matches!(self.mode, Mode::Play { .. });
+        if self.backlog.add_table_change(msg, &mut self.clients, Delivery::InDatagrams { queue }) {
+            trace!("a string table change of {} bits from a datagram into the backlog", msg.nbits());
         }
     }
 
     /// A stream passed over on a jump: only its string table changes count, which every client
-    /// needs, so they go into the log and reliably to the clients already in.
+    /// needs, so they go into the backlog and reliably to the clients already in.
     pub(super) fn skim(&mut self, bits: &BitBuf, life: &Lifecycle) {
         let tables: Vec<BitBuf> = table_changes(bits, life).collect();
-        self.log_tables(&tables);
+        self.add_table_changes(&tables);
     }
 
-    /// Playback went back past the string table changes `later`: they are logged again when it
+    /// Playback went back past the string table changes `later`: they are added again when it
     /// comes to them, and `back` (what sets the clients' tables back) goes to every client, even
     /// if an earlier jump back sent the same.
     pub(super) fn set_tables_back(&mut self, later: &[BitBuf], back: &[BitBuf]) {
-        for t in later.iter().chain(back) {
-            self.logged_unreliable.remove(t);
-        }
-        self.log_tables(back);
+        self.backlog.forget_table_changes(later.iter().chain(back));
+        self.add_table_changes(back);
     }
 
-    /// String table changes passed over (a jump), into the log and reliably to the clients
-    /// already in; those logged already are not again.
-    pub(super) fn log_tables(&mut self, tables: &[BitBuf]) {
+    /// String table changes passed over (a jump), into the backlog and reliably to the clients
+    /// already in; those in it already are not again.
+    pub(super) fn add_table_changes(&mut self, tables: &[BitBuf]) {
         self.keyframe = None;
         for msg in tables {
-            if !self.logged_unreliable.insert(msg.clone()) {
-                continue;
-            }
-            self.log.push(Logged { bits: msg.clone(), gate: None });
-            for c in self.clients.values_mut() {
-                if c.phase != Phase::Signon && c.cursor + 1 == self.log.len() {
-                    c.queue.push(msg.clone());
-                    c.cursor += 1;
-                } else {
-                    c.pump(&self.log);
-                }
-            }
+            self.backlog.add_table_change(msg, &mut self.clients, Delivery::Reliably);
         }
     }
 
-    /// Logs `msg` for every client, those in and those to come, unless it is already.
-    pub(super) fn log_once(&mut self, msg: &BitBuf) {
-        if !self.logged_unreliable.contains(msg) {
-            self.log_tables(std::slice::from_ref(msg));
+    /// Adds `msg` for every client, those in and those to come, unless it is already.
+    pub(super) fn add_table_change_once(&mut self, msg: &BitBuf) {
+        if !self.backlog.has_table_change(msg) {
+            self.add_table_changes(std::slice::from_ref(msg));
         }
     }
 
@@ -245,7 +213,7 @@ impl Hub {
 
     /// Whether a client is ready for entities and waits for a full update.
     pub(super) fn wants_keyframe(&self) -> bool {
-        self.clients.values().any(|c| c.takes_full_update(&self.log))
+        self.clients.values().any(|c| c.takes_full_update(&self.backlog))
     }
 
     /// Every client in the game needs a full update: playback jumped, paused or went on, or came
@@ -262,14 +230,14 @@ impl Hub {
     /// the frames after, for clients that come soon after.
     pub(super) fn send_keyframe(&mut self, key: &BitBuf, since: &[BitBuf], paused: bool) {
         let now = Instant::now();
-        self.signon_open = false;
+        self.backlog.open = false;
         self.keyframe = Some(std::iter::once(key.clone()).chain(since.iter().cloned()).collect());
         // Always: one shown "paused" before a jump may not be any more.
         let pause = set_pause(paused);
         // TF2's player bar freezes until its clock passes its last draw; re-showing resets that.
         let again = std::mem::take(&mut self.with_next);
         for (addr, c) in &mut self.clients {
-            if c.takes_full_update(&self.log) {
+            if c.takes_full_update(&self.backlog) {
                 trace!("{addr} gets a keyframe of {} bits", key.nbits());
                 c.set_phase(Phase::Active, now);
                 c.queue.push(pause.clone());
@@ -332,7 +300,7 @@ impl Hub {
     pub(super) fn tell_waiting_now(&mut self, msg: &BitBuf) {
         let now = Instant::now();
         for (addr, c) in &mut self.clients {
-            if c.takes_full_update(&self.log) {
+            if c.takes_full_update(&self.backlog) {
                 self.out.send(*addr, c, Some(msg), false, now);
             }
         }
@@ -345,13 +313,11 @@ impl Hub {
         }
     }
 
-    /// What was logged goes: the next signon starts afresh.
+    /// The backlog goes: the next signon starts afresh.
     pub(super) fn forget(&mut self) {
-        self.log.clear();
-        self.logged_unreliable.clear();
+        self.backlog.clear();
         // Of the last demo's entities: the player gives them again.
         self.notes.clear();
-        self.signon_open = true;
         self.keyframe = None;
     }
 
@@ -375,7 +341,7 @@ impl Hub {
             }
         }
         for (addr, c) in &mut self.clients {
-            if full && c.takes_full_update(&self.log) {
+            if full && c.takes_full_update(&self.backlog) {
                 trace!("{addr} gets a full update of {} bits", tail.as_ref().map_or(0, BitBuf::nbits));
                 c.set_phase(Phase::Active, now);
                 c.enter_notes(&self.notes, now);
@@ -394,7 +360,7 @@ impl Hub {
     pub(super) fn wants_entities(&mut self, addr: SocketAddr, now: Instant) {
         let Some(c) = self.clients.get_mut(&addr) else { return };
         if let Some(frames) = &self.keyframe
-            && c.has_log(&self.log)
+            && c.through_backlog(&self.backlog)
         {
             trace!("{addr} gets entities from the {} datagrams kept since the last full update", frames.len());
             c.set_phase(Phase::Active, now);
@@ -426,7 +392,7 @@ impl Hub {
         }
         // Not started on a signon the next demo waits to replace: it would not get through it.
         if self.signon_held.is_none() || c.in_signon() || c.phase != Phase::Signon {
-            c.pump(&self.log);
+            c.pump(&self.backlog);
         }
         // An active client hears from us with the next server datagram. During signon its acks
         // free subchannels for more of the transfer, and its reliable data is acked at once.
@@ -577,7 +543,7 @@ impl Hub {
     pub(super) fn no_signon_waits(&mut self) {
         if self.signon_held.take().is_some() {
             for c in self.clients.values_mut() {
-                c.pump(&self.log);
+                c.pump(&self.backlog);
             }
         }
     }

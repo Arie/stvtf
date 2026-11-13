@@ -1,5 +1,6 @@
 //! A client of the relay: where it is in signon and what it is still to be sent.
 
+use super::backlog::Backlog;
 use super::transfer::Outgoing;
 use super::{ClientMsg, FULL_UPDATE_GRACE, NOTES_AFTER_ENTERING, client_messages};
 use crate::net::bits::BitBuf;
@@ -9,15 +10,9 @@ use crate::net::receiver::{Received, Receiver};
 use std::net::SocketAddr;
 use std::time::Instant;
 
-/// A reliable message a client signing on needs, and the signon state it waits for after it.
-pub(super) struct Logged {
-    pub(super) bits: BitBuf,
-    pub(super) gate: Option<Signon>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Phase {
-    /// Still taking the signon log.
+    /// Still taking the backlog's signon.
     Signon,
     /// Ready for entities, waiting for a full update.
     WaitingFull,
@@ -43,9 +38,9 @@ pub(super) struct Client {
     pub(super) phase: Phase,
     /// When `phase` last changed.
     pub(super) since: Instant,
-    /// The next log entry to send.
+    /// The next backlog entry to send.
     pub(super) cursor: usize,
-    /// The signon state the client must echo before it gets more of the log.
+    /// The signon state the client must echo before it gets more of the backlog.
     pub(super) gate: Option<Signon>,
     /// Reliable messages not yet in a transfer.
     pub(super) queue: Vec<BitBuf>,
@@ -81,7 +76,7 @@ impl Client {
             phase: Phase::Signon,
             since: now,
             cursor: 0,
-            // The client opens with net_SignonState(CONNECTED); then the log starts.
+            // The client opens with net_SignonState(CONNECTED); then the backlog starts.
             gate: Some(Signon::Connected),
             queue: Vec::new(),
             notes_entered: None,
@@ -100,10 +95,10 @@ impl Client {
         self.since = now;
     }
 
-    /// Queues the log from the cursor up to the next signon state the client must echo.
-    pub(super) fn pump(&mut self, log: &[Logged]) {
+    /// Queues the backlog from the cursor up to the next signon state the client must echo.
+    pub(super) fn pump(&mut self, backlog: &Backlog) {
         while self.gate.is_none()
-            && let Some(m) = log.get(self.cursor)
+            && let Some(m) = backlog.get(self.cursor)
         {
             self.queue.push(m.bits.clone());
             self.cursor += 1;
@@ -111,15 +106,15 @@ impl Client {
         }
     }
 
-    /// Whether the client is through the log and gets messages as they come.
-    pub(super) fn caught_up(&self, log: &[Logged]) -> bool {
-        self.phase != Phase::Signon && self.cursor == log.len()
+    /// Whether the client is through the backlog and gets messages as they come.
+    pub(super) fn caught_up(&self, backlog: &Backlog) -> bool {
+        self.phase != Phase::Signon && self.cursor == backlog.len()
     }
 
-    /// Whether the client has acked the whole log. Only then can it take entities: those of a
+    /// Whether the client has acked the whole backlog. Only then can it take entities: those of a
     /// class whose baseline it lacks stop a game client.
-    pub(super) fn has_log(&self, log: &[Logged]) -> bool {
-        self.cursor == log.len() && self.queue.is_empty() && self.outgoing.is_none()
+    pub(super) fn through_backlog(&self, backlog: &Backlog) -> bool {
+        self.cursor == backlog.len() && self.queue.is_empty() && self.outgoing.is_none()
     }
 
     /// The client goes into the game: it gets `notes`, and again once its HUD is up (sent with its
@@ -130,8 +125,8 @@ impl Client {
     }
 
     /// Whether the client waits for a full update and can take one.
-    pub(super) fn takes_full_update(&self, log: &[Logged]) -> bool {
-        self.phase == Phase::WaitingFull && self.has_log(log)
+    pub(super) fn takes_full_update(&self, backlog: &Backlog) -> bool {
+        self.phase == Phase::WaitingFull && self.through_backlog(backlog)
     }
 
     /// The region to send in the packet of sequence `seq`, if a transfer block can go.
@@ -188,7 +183,7 @@ impl Client {
     }
 
     /// Tells the client to reconnect with `reconnect` (`net_SignonState(CONNECTED)`) in place of
-    /// whatever it was still to be sent; it gets no more of the log until it says it has.
+    /// whatever it was still to be sent; it gets no more of the backlog until it says it has.
     pub(super) fn ask_to_reconnect(&mut self, reconnect: &BitBuf) {
         self.queue.clear();
         self.queue.push(reconnect.clone());

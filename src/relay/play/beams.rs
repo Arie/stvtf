@@ -72,7 +72,7 @@ impl Player<'_> {
             (model, load) = (c.dec.beam_sprite()?, None);
         }
         if let Some(msg) = load {
-            self.relay.hub().log_once(&msg);
+            self.relay.hub().add_table_change_once(&msg);
             self.laser = Some(model);
         }
         c.dec.beams(beams, model)

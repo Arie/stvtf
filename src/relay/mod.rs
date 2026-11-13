@@ -3,9 +3,9 @@
 //!
 //! Nothing is re-encoded: every client gets the server's own message bits.
 //!
-//! - Signon: the reliable messages of the server's signon are logged and replayed to each
+//! - Signon: the reliable messages of the server's signon go into a backlog replayed to each
 //!   client, stopping after each `net_SignonState` until the client echoes it, as a server
-//!   waits. After signon only string table messages join the log, so a late client still gets
+//!   waits. After signon only string table messages join it, so a late client still gets
 //!   the tables as they are now; other reliable messages go to the clients already in.
 //! - Entities: the server deltas each frame from the one we last acked, so a client can only
 //!   follow from a full update on. The datagrams since the last full update are kept while
@@ -13,7 +13,7 @@
 //!   us ask the server for a full update (tick ack -1). From then on every datagram's
 //!   unreliable part goes to the client unchanged. A client that loses a frame asks for a full
 //!   update, and we ask the server.
-//! - A map change re-runs the server's signon on our connection: the log starts again, and
+//! - A map change re-runs the server's signon on our connection: the backlog starts again, and
 //!   every client signs on again with it.
 //! - A client in the game gets one packet per server datagram, as from the server itself.
 //! - Reliable messages go one transfer at a time, the next when the last is acked, so they can
@@ -100,6 +100,7 @@ pub(crate) fn whence(addr: SocketAddr) -> String {
     }
 }
 
+mod backlog;
 mod client;
 mod client_msg;
 mod hub;
