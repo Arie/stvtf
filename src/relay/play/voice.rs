@@ -66,7 +66,12 @@ const SLOT_HELD: Duration = Duration::from_millis(400);
 const SPARE_HELD: Duration = Duration::from_secs(30);
 
 impl Sequences {
-    fn talks(&mut self, slot: Slot, who: Talking) {
+    /// `who` was sent in `slot`, numbered up to `seq`: ended once they stop. Their numbering is
+    /// kept for at most [`MAX_SPEAKERS`].
+    fn record(&mut self, slot: Slot, seq: u16, who: Talking) {
+        if self.next.len() < MAX_SPEAKERS || self.next.contains_key(&slot) {
+            self.next.insert(slot, seq);
+        }
         self.talking.insert(slot, who);
     }
 
@@ -134,10 +139,9 @@ impl Player<'_> {
                     sent = true;
                 }
             }
-            if sent && (self.voice_seq.next.len() < MAX_SPEAKERS || self.voice_seq.next.contains_key(&slot)) {
-                self.voice_seq.next.insert(slot, seq);
+            if sent {
                 let who = Talking { last: now, user: v.user, spare, steamid: v.steamid.clone(), rate: v.rate };
-                self.voice_seq.talks(slot, who);
+                self.voice_seq.record(slot, seq, who);
             }
         }
         // As the game ends a voice: without it a client's decoder is left mid-speech.
@@ -247,14 +251,34 @@ mod tests {
         use std::time::{Duration, Instant};
         let (mut seqs, now) = (super::Sequences::default(), Instant::now());
         let slot = super::Slot::Player(7);
-        seqs.next.insert(slot, 5);
-        seqs.talks(slot, super::Talking { last: now, user: Some(7), spare: None, steamid: String::new(), rate: 24000 });
+        seqs.record(
+            slot,
+            5,
+            super::Talking { last: now, user: Some(7), spare: None, steamid: String::new(), rate: 24000 },
+        );
         assert!(seqs.stopped(now + Duration::from_millis(150)).is_empty(), "between two posts");
         assert_eq!(seqs.next.get(&slot), Some(&5));
         let ended = seqs.stopped(now + Duration::from_millis(400));
         assert_eq!(ended.iter().map(|t| t.user).collect::<Vec<_>>(), [Some(7)]);
         assert_eq!(seqs.next.get(&slot), None);
         assert!(seqs.stopped(now + Duration::from_secs(1)).is_empty(), "ended once");
+    }
+
+    #[test]
+    fn a_speaker_past_those_numbered_is_still_ended() {
+        use std::time::{Duration, Instant};
+        let (mut seqs, now) = (super::Sequences::default(), Instant::now());
+        let talking =
+            |user| super::Talking { last: now, user: Some(user), spare: None, steamid: String::new(), rate: 24000 };
+        for user in 0..super::MAX_SPEAKERS as u16 {
+            seqs.record(super::Slot::Player(user), 1, talking(user));
+        }
+        let past = super::MAX_SPEAKERS as u16;
+        seqs.record(super::Slot::Player(past), 1, talking(past));
+        assert_eq!(seqs.next.len(), super::MAX_SPEAKERS);
+        let ended = seqs.stopped(now + Duration::from_secs(1));
+        assert!(ended.iter().any(|t| t.user == Some(past)), "its end goes too");
+        assert_eq!(ended.len(), super::MAX_SPEAKERS + 1);
     }
 
     #[test]
