@@ -298,7 +298,13 @@ impl Player<'_> {
         if want.paused == self.paused {
             return;
         }
-        trace!("paused: {}", want.paused);
+        let what = if want.paused { "paused" } else { "plays on" };
+        log!(
+            ":{} {what} at {}, {} clients",
+            self.relay.port(),
+            self.cur.as_ref().map_or(0, Cursor::tick),
+            self.relay.clients()
+        );
         self.paused = want.paused;
         let demo_paused = self.cur.as_ref().is_some_and(|c| c.paused);
         self.relay.hub().queue_pause(demo_paused);

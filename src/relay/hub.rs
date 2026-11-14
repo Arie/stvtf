@@ -434,11 +434,12 @@ impl Hub {
             let alive = now.duration_since(c.last_heard) < if loading { SIGNON_TIMEOUT } else { CLIENT_TIMEOUT };
             if !alive {
                 log!(
-                    ":{port} {} ({}) timed out, {:?} for {:.1} s when last heard",
+                    ":{port} {} ({}) timed out, silent for {:.0} s, {:?} for {:.1} s",
                     c.name.escape_debug(),
                     masked_addr(*addr),
+                    now.duration_since(c.last_heard).as_secs_f32(),
                     c.phase,
-                    c.last_heard.saturating_duration_since(c.since).as_secs_f32()
+                    now.duration_since(c.since).as_secs_f32()
                 );
             }
             alive
