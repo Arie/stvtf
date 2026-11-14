@@ -461,9 +461,6 @@ impl Hub {
         {
             trace!("{addr} gets entities from the {} datagrams kept since the last full update", frames.len());
             c.set_phase(Phase::Active, now);
-            if let Mode::Play { paused } = self.mode {
-                c.queue.push(set_pause(paused));
-            }
             c.enter_notes(&self.notes, now);
             for t in frames {
                 self.out.send(addr, c, Some(t), Empty::Skip, now);
