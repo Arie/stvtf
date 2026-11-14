@@ -4,8 +4,8 @@ use super::beams::Kept;
 use super::cursor::{Cursor, owned};
 use super::index::Index;
 use super::{
-    CUE_EVERY, Camera, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes,
-    voice,
+    CUE_EVERY, Camera, FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, Want,
+    light, notes, voice,
 };
 use crate::decode::{BeamModel, ModelsSent};
 use crate::lock;
@@ -71,6 +71,8 @@ pub(super) struct Player<'r> {
     pub(super) flushing: Option<Instant>,
     /// The demo whose signon the clients have: the next makes them reconnect first.
     signed_on: Option<std::path::PathBuf>,
+    /// Since when a full update waits for the frame after it.
+    frame_waited: Option<Instant>,
 }
 
 impl<'r> Player<'r> {
@@ -102,6 +104,7 @@ impl<'r> Player<'r> {
             floor: None,
             flushing: None,
             signed_on: None,
+            frame_waited: None,
         }
     }
 }
@@ -432,7 +435,9 @@ impl Player<'_> {
         }
         self.follow_pause(want);
         self.jump_ahead(want, target, jump)?;
-        if self.relay.hub().wants_keyframe() && self.send_keyframe(interval).is_break() {
+        if !self.relay.hub().wants_keyframe() {
+            self.frame_waited = None;
+        } else if self.send_keyframe(interval).is_break() {
             return Ok(());
         }
         self.cue(want.camera);
@@ -515,12 +520,14 @@ impl Player<'_> {
         }
         let Some(c) = &mut self.cur else { return ControlFlow::Continue(()) };
         // Of the frame the next one builds on, which from a live server is often a few ticks
-        // back: at the end of what is written so far, it waits for that frame.
+        // back: at the end of what is written so far, it waits for that frame, for a while. A
+        // recording that stopped with no end has none, nor a paused match: the last frame then.
         c.peek();
         let next = c.next_frame();
-        if next.is_none() && !c.ended {
+        if next.is_none() && !c.ended && self.frame_waited.get_or_insert_with(Instant::now).elapsed() < FRAME_WAIT {
             return ControlFlow::Continue(());
         }
+        self.frame_waited = None;
         let key = if self.paused { c.dec.keyframe_held(next) } else { c.dec.keyframe(next) };
         let Some((tick, key)) = key else {
             if c.started {

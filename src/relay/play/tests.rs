@@ -379,6 +379,41 @@ fn a_live_recording_plays_on_after_a_full_update() {
     }
 }
 
+/// A recording that stopped with no end written (its server gone for good): a client coming in
+/// at its last frame gets a full update of that one, once no frame came after it for a while.
+#[test]
+fn a_client_coming_in_at_the_end_of_a_recording_cut_short_gets_a_full_update() {
+    let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
+    let whole = std::fs::read(crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1).unwrap();
+    let dir = std::env::temp_dir().join(format!("stvtf-cut-short-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cut = dir.join("cut.dem");
+    // Without the end: the stop and its tick.
+    std::fs::write(&cut, &whole[..whole.len() - 5]).unwrap();
+    let mut c = Cursor::open_detached(&cut).unwrap();
+    loop {
+        match c.next_tick() {
+            Some(NOT_A_FRAME) => c.skip_next(),
+            Some(_) => drop(c.decode()),
+            None => break,
+        }
+    }
+    assert!(c.started && !c.ended, "no more written, and no end");
+    let mut b = bench_with_one_in();
+    b.client_state().set_phase(Phase::WaitingFull, Instant::now());
+    let tick = c.dec.server_tick();
+    let (relay, c, want) = relay_playing(&mut b, c, tick);
+    let mut p = Player::new(&relay);
+    p.cur = Some(c);
+    let phase = || relay.hub().clients.values().next().unwrap().phase;
+    p.step(&want).unwrap();
+    assert_eq!(phase(), Phase::WaitingFull, "the next frame may be on its way");
+    std::thread::sleep(FRAME_WAIT * 2);
+    p.step(&want).unwrap();
+    assert_eq!(phase(), Phase::Active);
+    assert_eq!(follow_as_a_game_client(&b, p.cur.as_ref().unwrap()).0, 1);
+}
+
 /// A demo with a full update, then a delta from before it (`E, F, G`): a game client given `F`
 /// has dropped `E`. The clients in the game get a full update of their own instead, and `G`
 /// only when they have what it builds on.

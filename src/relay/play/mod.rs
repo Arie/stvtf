@@ -46,6 +46,9 @@ const JUMP: Duration = Duration::from_secs(1);
 const NOT_A_FRAME: i64 = i64::MIN;
 /// How long the player waits for a frame that is not due, or not written yet.
 const NAP: Duration = Duration::from_millis(5);
+/// How long a full update waits for the frame after it, at the end of what is written: a recording
+/// that stopped, or a match paused, has none coming.
+const FRAME_WAIT: Duration = Duration::from_millis(if cfg!(test) { 30 } else { 1000 });
 /// How long the player waits for a client while nobody is in.
 const IDLE_NAP: Duration = Duration::from_millis(20);
 /// With nobody in for this long, the decoded demo is dropped.
