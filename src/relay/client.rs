@@ -58,6 +58,11 @@ pub(super) struct Client {
     pub(super) past_connected: bool,
     /// Told to reconnect, and not yet said it has.
     pub(super) reconnecting: bool,
+    /// It keeps what it has while the backlog is made anew (see [`Hub::hold_in_game`]): none of
+    /// that is for it.
+    ///
+    /// [`Hub::hold_in_game`]: super::hub::Hub::hold_in_game
+    pub(super) held: bool,
 }
 
 impl Client {
@@ -87,6 +92,7 @@ impl Client {
             gone: None,
             past_connected: false,
             reconnecting: false,
+            held: false,
         }
     }
 
@@ -105,7 +111,8 @@ impl Client {
 
     /// Queues the backlog from the cursor up to the next signon state the client must echo.
     pub(super) fn pump(&mut self, backlog: &Backlog) {
-        while self.gate.is_none()
+        while !self.held
+            && self.gate.is_none()
             && let Some(m) = backlog.get(self.cursor)
         {
             self.queue.push(m.bits.clone());

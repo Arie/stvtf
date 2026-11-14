@@ -687,3 +687,80 @@ fn clients_handed_over_sign_on_again_when_the_room_is_on_another_demo() {
     let c = hub.clients.values().next().unwrap();
     assert_eq!((c.phase, c.reconnecting), (Phase::Signon, true));
 }
+
+/// A relay playing `pl_upward.dem` some way in to its one client, in the game with all it was
+/// sent acked; its player and what it wants.
+fn upward_playing_to_a_client(b: &mut Bench) -> (Relay, Want) {
+    let first = upward_until(|c| c.started);
+    let from = i64::from(first.dec.server_tick());
+    let (relay, _, mut want) = relay_playing(b, first, 0);
+    relay.hub().start_playing();
+    want.paused = true;
+    want.tick = u32::try_from(from + 5000).unwrap();
+    (relay, want)
+}
+
+/// The demo the next process records of the same map load goes on from the one playing: the
+/// clients keep what they have and get a full update, and its signon is what one coming in later
+/// is given. A demo of another load signs them on again.
+#[test]
+fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
+    let mut b = bench_with_one_in();
+    let (relay, mut want) = upward_playing_to_a_client(&mut b);
+    let mut p = Player::new(&relay);
+    p.start_demo(Cursor::open(&want.demo, &relay.hub).unwrap());
+    let acks = |relay: &Relay| {
+        let mut hub = relay.hub();
+        let end = hub.backlog.len();
+        for c in hub.clients.values_mut() {
+            (c.cursor, c.gate, c.outgoing) = (end, None, None);
+            c.queue.clear();
+            if c.phase == Phase::Signon {
+                c.set_phase(Phase::WaitingFull, Instant::now());
+            }
+        }
+    };
+    for _ in 0..20 {
+        p.step(&want).unwrap();
+        acks(&relay);
+    }
+    assert_eq!(relay.hub().clients.values().next().unwrap().phase, Phase::Active);
+    let dir = std::env::temp_dir().join(format!("stvtf-goes-on-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let playback = Playback::new(want.clone());
+    // The same server and load, begun before where playback is.
+    want.demo = dir.join("next.dem");
+    std::fs::copy(crate::fixture("pl_upward.dem"), &want.demo).unwrap();
+    let at = p.cur.as_ref().unwrap().tick();
+    assert!(p.open_wanted(&want, &playback).is_continue());
+    {
+        let hub = relay.hub();
+        let c = hub.clients.values().next().unwrap();
+        assert_eq!(
+            (c.phase, c.reconnecting, c.cursor, c.queue.len()),
+            (Phase::WaitingFull, false, hub.backlog.len(), 0)
+        );
+        assert_eq!((p.cur.as_ref().unwrap().path.clone(), p.cur.as_ref().unwrap().tick()), (want.demo.clone(), at));
+    }
+    for _ in 0..5 {
+        p.step(&want).unwrap();
+        acks(&relay);
+    }
+    assert_eq!(relay.hub().clients.values().next().unwrap().phase, Phase::Active);
+    // With the relay's laser where one coming in later gets it too; not with it elsewhere.
+    let laser = p.cur.as_ref().unwrap().dec.beam_model(None, ModelsSent::default()).unwrap();
+    let again = dir.join("again.dem");
+    std::fs::copy(crate::fixture("pl_upward.dem"), &again).unwrap();
+    p.laser = Some(laser.index + 1);
+    assert!(!p.goes_on_into(&again), "the laser elsewhere");
+    p.laser = Some(laser.index);
+    assert!(p.goes_on_into(&again));
+    assert_eq!(p.laser, Some(laser.index));
+    assert!(relay.hub().backlog.has_table_change(&laser.load.unwrap()), "for those to come");
+    // Another map: not the same load.
+    assert!(!p.goes_on_into(&crate::fixture("pass_stadium.dem")));
+    want.demo = crate::fixture("pass_stadium.dem");
+    assert!(p.open_wanted(&want, &playback).is_continue());
+    assert!(relay.hub().clients.values().next().unwrap().reconnecting);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

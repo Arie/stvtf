@@ -98,7 +98,7 @@ impl Backlog {
         self.last_table = Some(msg.clone());
         self.tables.insert(msg.clone());
         self.push(msg.clone(), None);
-        for c in clients.values_mut() {
+        for c in clients.values_mut().filter(|c| !c.held) {
             let at_end = c.cursor + 1 == self.len();
             match delivery {
                 Delivery::InDatagrams { queue } if c.phase == Phase::Active && at_end => {

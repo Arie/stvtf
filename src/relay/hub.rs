@@ -99,7 +99,7 @@ impl Hub {
         self.start_over();
         let reconnect = messages::signonstate(Signon::Connected, -1);
         let play = self.mode.is_play();
-        for c in self.clients.values_mut() {
+        for c in self.clients.values_mut().filter(|c| !c.held) {
             if play && c.mid_signon() && !c.reconnecting {
                 // Part-way through the last demo's, come in as the switch went: it reconnects too.
                 c.ask_to_reconnect(&reconnect);
@@ -109,6 +109,24 @@ impl Hub {
             }
             c.cursor = 0;
             c.set_phase(Phase::Signon, now);
+        }
+    }
+
+    /// The clients past their signon keep what they have while the next demo's signon makes the
+    /// backlog anew: it is one of the same map load, so they have all of it already.
+    pub(super) fn hold_in_game(&mut self) {
+        for c in self.clients.values_mut().filter(|c| c.phase != Phase::Signon && !c.reconnecting) {
+            c.held = true;
+        }
+    }
+
+    /// Those held have the backlog as it is now, and wait for a full update.
+    pub(super) fn release_held(&mut self, now: Instant) {
+        let end = self.backlog.len();
+        for c in self.clients.values_mut().filter(|c| c.held) {
+            c.held = false;
+            c.cursor = end;
+            c.set_phase(Phase::WaitingFull, now);
         }
     }
 

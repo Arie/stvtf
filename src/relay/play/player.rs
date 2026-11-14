@@ -7,7 +7,7 @@ use super::{
     CUE_EVERY, Camera, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes,
     voice,
 };
-use crate::decode::ModelsSent;
+use crate::decode::{BeamModel, ModelsSent};
 use crate::lock;
 use crate::relay::handover::{Played, TakenOver};
 use crate::relay::{Handover, Hub, Relay};
@@ -154,6 +154,9 @@ impl Player<'_> {
             std::thread::sleep(NAP);
             return ControlFlow::Break(());
         }
+        if self.goes_on_into(&want.demo) {
+            return ControlFlow::Continue(());
+        }
         if let Some(TakenOver(played)) = self.taken_over.take() {
             match played.filter(|p| p.demo == want.demo).map(|p| self.go_on_from(p)) {
                 Some(Ok(())) => return ControlFlow::Continue(()),
@@ -220,6 +223,74 @@ impl Player<'_> {
         let h = self.relay.hub().hand_over(played);
         log!(":{} {} clients handed over", self.relay.port(), h.clients());
         h
+    }
+
+    /// Whether `demo` goes on from the one playing, and playback now does: both are of one map load
+    /// of one server (a match recorded again by the next process), and the one playing has a frame
+    /// at or past where `demo` begins, which it is first played up to. The clients keep what they
+    /// have and get a full update; `demo`'s signon is for those to come. With a laser of the
+    /// relay's, only if one coming in later gets it where they have it.
+    pub(super) fn goes_on_into(&mut self, demo: &std::path::Path) -> bool {
+        let laser = self.laser;
+        let Some(c) = self.cur.as_mut().filter(|c| c.started && c.server.is_some()) else { return false };
+        let Ok(mut next) = Cursor::open_detached(demo) else { return false };
+        while !next.started && next.next_tick().is_some() {
+            if next.decode().is_none() {
+                next.skip_next();
+            }
+        }
+        let Some(begins) = next.first.filter(|_| next.server == c.server) else { return false };
+        // Up to there on the one playing, its string table changes given: no further than it has.
+        // Frames passed over so: the clients need a full update either way.
+        let mut passed = false;
+        while c.tick() < begins {
+            match c.next_tick() {
+                None => break,
+                Some(NOT_A_FRAME) => c.skip_next(),
+                Some(_) => {
+                    if let Some((bits, life)) = c.decode() {
+                        self.relay.hub().skim(&bits, &life);
+                        passed = true;
+                    }
+                }
+            }
+        }
+        let at = c.tick();
+        // Its laser's message there, for those to come: where the clients have it.
+        let laser_there = |next: &Cursor| match (laser, next.dec.beam_model(None, ModelsSent::default())) {
+            (None, _) => Some(None),
+            (Some(has), Some(BeamModel { index, load: Some(load) })) if index == has => Some(Some(load)),
+            _ => None,
+        };
+        skim(&mut next, None, at);
+        if at < begins || laser_there(&next).is_none() {
+            if passed {
+                self.rekey();
+            }
+            return false;
+        }
+        self.relay.hub().hold_in_game();
+        let opened = Cursor::open(demo, &self.relay.hub).ok().and_then(|mut next| {
+            skim(&mut next, Some(&self.relay.hub), at);
+            if let Some(load) = laser_there(&next)? {
+                self.relay.hub().add_table_change_once(&load);
+            }
+            Some(next)
+        });
+        self.relay.hub().release_held(Instant::now());
+        let Some(next) = opened else { return false };
+        log!(
+            ":{} goes on into {} at {}, {} clients",
+            self.relay.port(),
+            demo.display(),
+            next.tick(),
+            self.relay.clients()
+        );
+        self.start_demo(next);
+        self.laser = laser;
+        self.index = Some(Index::shared(demo));
+        self.relay.hub().reshow_panel_with_next_keyframe();
+        true
     }
 
     /// Goes on where the process before `played`: its demo decoded up to there, giving the

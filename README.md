@@ -356,6 +356,12 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   has the string tables of later on: where an entry of `userinfo` (a player left or joined) or
   `instancebaseline` changed value since, it is first sent those entries as they were
   (`svc_UpdateStringTable`), and the stream's own changes again when playback comes to them.
+- Another demo of the same map load of the same server (its ServerInfo says so: a match
+  recorded again, by the next process) goes on from the one playing with no signon, once that one
+  was played up to where the other begins: the clients keep what they have and get a full
+  update, and the new demo's signon is what a client coming in later is given. Not when the one
+  playing ends before the other begins, nor when a later client would get the relay's laser
+  elsewhere than they have it: then they sign on again.
 - A playing relay hands its clients to the process after it (`Playback::hand_over`, then
   `Relay::take_over` on a relay bound to the same address): each client's connection (sequence
   numbers, reliable state, challenge), all they were sent since their signon, and where the demo

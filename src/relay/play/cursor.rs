@@ -24,6 +24,9 @@ static OUR_CRC: LazyLock<Option<u32>> = LazyLock::new(|| {
 /// A demo being played: where in the file, and its decoded state.
 pub(super) struct Cursor {
     pub(super) path: PathBuf,
+    /// The server's count of map loads and the map, from the signon: two demos with the same are
+    /// of one load of one server.
+    pub(super) server: Option<(i32, String)>,
     pub(super) reader: demo::Reader<File>,
     pub(super) dec: Decoder,
     /// The next packet, read but not played.
@@ -89,9 +92,10 @@ impl Cursor {
         }
         let mut dec = Decoder::new(&tables, 0.0)?;
         dec.keep_world();
-        feed_signon(&mut dec, signon, hub);
+        let server = feed_signon(&mut dec, signon, hub);
         Ok(Cursor {
             path: path.to_owned(),
+            server,
             reader,
             dec,
             next,
@@ -212,11 +216,15 @@ fn read_signon(path: &Path, reader: &mut demo::Reader<File>) -> Result<(Vec<Vec<
 
 /// Decodes the `signon` packets, and passes them to `hub` if any, with the spawn count a game
 /// client takes.
-fn feed_signon(dec: &mut Decoder, signon: Vec<Vec<u8>>, hub: Option<&Mutex<Hub>>) {
+fn feed_signon(dec: &mut Decoder, signon: Vec<Vec<u8>>, hub: Option<&Mutex<Hub>>) -> Option<(i32, String)> {
     let mut spawncount = None;
+    let mut server = None;
     for data in signon {
         let bits = BitBuf::from_bytes(data);
         let life = dec.feed(bits.bytes(), bits.nbits());
+        if let Some(info) = &life.server_info {
+            server = Some(info.clone());
+        }
         let Some(hub) = hub else { continue };
         if let Some((count, _)) = &life.server_info {
             spawncount = Some(*count);
@@ -229,6 +237,7 @@ fn feed_signon(dec: &mut Decoder, signon: Vec<Vec<u8>>, hub: Option<&Mutex<Hub>>
         h.upstream_stream(&bits, Part::Reliable, &life);
         h.upstream_flush();
     }
+    server
 }
 
 /// A signon stream with its `net_SignonState`s at `count`, the `ServerInfo`'s: a game client
