@@ -29,6 +29,8 @@ pub(super) struct Player<'r> {
     dry: bool,
     /// Why the clients get nothing, if they do not.
     problem: Option<String>,
+    /// The demo that could not be opened, and why, as last logged: said once, not every try.
+    refused: Option<(std::path::PathBuf, String)>,
     /// Checkpoints through the demo playing, made on the side.
     pub(super) index: Option<Arc<Index>>,
     /// The camera the clients were last told to take, and when.
@@ -74,6 +76,7 @@ impl<'r> Player<'r> {
             last_target: None,
             dry: false,
             problem: None,
+            refused: None,
             index: None,
             cued: None,
             kept: Kept::new(Instant::now()),
@@ -141,6 +144,7 @@ impl Player<'_> {
         match Cursor::open(&want.demo, &self.relay.hub) {
             Ok(c) => {
                 self.start_demo(c);
+                self.refused = None;
                 playback.set_problem(None);
                 if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
                     self.index = Some(Index::shared(&want.demo));
@@ -149,12 +153,24 @@ impl Player<'_> {
             }
             Err(e) => {
                 // Not written yet, or not playable: try again in a while.
-                log!("cannot play {}: {e:#}", want.demo.display());
-                playback.set_problem(Some(format!("{e:#}")));
+                let why = format!("{e:#}");
+                if self.refuses_anew(&want.demo, &why) {
+                    log!("cannot play {}: {why}", want.demo.display());
+                }
+                playback.set_problem(Some(why));
                 std::thread::sleep(RETRY);
                 ControlFlow::Break(())
             }
         }
+    }
+
+    /// Whether `demo` not opening for `why` is news: it is tried again every [`RETRY`].
+    pub(super) fn refuses_anew(&mut self, demo: &std::path::Path, why: &str) -> bool {
+        if self.refused.as_ref().is_some_and(|(d, w)| d == demo && w == why) {
+            return false;
+        }
+        self.refused = Some((demo.to_owned(), why.to_owned()));
+        true
     }
 
     /// What the room shows besides the demo: kept beams, notes, voice and light.

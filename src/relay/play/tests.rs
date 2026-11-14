@@ -554,3 +554,16 @@ fn a_jump_ahead_from_a_checkpoint_gives_the_clients_only_the_table_changes_passe
     let passed = p.cur.as_ref().unwrap().tables.len() - had;
     assert!(relay.hub().backlog.len() - sent <= passed, "none of those before");
 }
+
+/// A demo that does not open is tried again five times a second: the log says why once.
+#[test]
+fn a_demo_that_cannot_be_played_is_logged_once_until_the_reason_changes() {
+    let mut b = bench_with_one_in();
+    let (relay, c, want) = relay_playing(&mut b, upward_until(|c| c.started), 0);
+    drop(c);
+    let mut p = Player::new(&relay);
+    assert!(p.refuses_anew(&want.demo, "other class tables"));
+    assert!(!p.refuses_anew(&want.demo, "other class tables"), "the next try");
+    assert!(p.refuses_anew(&want.demo, "not written yet"), "another reason");
+    assert!(p.refuses_anew(std::path::Path::new("next.dem"), "not written yet"), "another demo");
+}
