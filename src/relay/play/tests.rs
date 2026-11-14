@@ -567,3 +567,29 @@ fn a_demo_that_cannot_be_played_is_logged_once_until_the_reason_changes() {
     assert!(p.refuses_anew(&want.demo, "not written yet"), "another reason");
     assert!(p.refuses_anew(std::path::Path::new("next.dem"), "not written yet"), "another demo");
 }
+
+/// A demo not there yet is tried again; one that is no demo, never.
+#[test]
+fn a_demo_that_will_never_open_is_not_tried_again() {
+    let mut b = bench_with_one_in();
+    let (relay, c, mut want) = relay_playing(&mut b, upward_until(|c| c.started), 0);
+    drop(c);
+    let dir = std::env::temp_dir().join(format!("stvtf-never-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let playback = Playback::new(want.clone());
+    let mut p = Player::new(&relay);
+    want.demo = dir.join("later.dem");
+    assert!(p.open_wanted(&want, &playback).is_break());
+    assert_eq!(p.given_up, None, "not written yet");
+    std::fs::write(&want.demo, [0u8; 16]).unwrap();
+    assert!(p.open_wanted(&want, &playback).is_break());
+    assert_eq!(p.given_up, None, "its header is not all there");
+    want.demo = dir.join("no.dem");
+    std::fs::write(&want.demo, vec![7u8; 4096]).unwrap();
+    assert!(p.open_wanted(&want, &playback).is_break());
+    assert_eq!(p.given_up.as_ref(), Some(&want.demo));
+    std::fs::remove_file(&want.demo).unwrap();
+    assert!(p.open_wanted(&want, &playback).is_break());
+    assert_eq!(p.given_up.as_ref(), Some(&want.demo), "not opened again: gone, it would be one not there yet");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

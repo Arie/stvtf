@@ -47,6 +47,27 @@ pub(super) struct Cursor {
     pub(super) tables: Vec<Arc<BitBuf>>,
 }
 
+/// The demo's signon is not all written yet.
+#[derive(Debug)]
+struct NotYet(PathBuf);
+
+impl std::fmt::Display for NotYet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} has no signon yet", self.0.display())
+    }
+}
+
+impl std::error::Error for NotYet {}
+
+/// Whether a demo that did not open for `e` may yet: it is not there, or not written far enough.
+pub(super) fn may_open_yet(e: &anyhow::Error) -> bool {
+    use std::io::ErrorKind::{NotFound, UnexpectedEof};
+    e.chain().any(|c| {
+        c.is::<NotYet>()
+            || c.downcast_ref::<std::io::Error>().is_some_and(|e| matches!(e.kind(), NotFound | UnexpectedEof))
+    })
+}
+
 impl Cursor {
     /// Opens a demo and reads it up to its first frame, passing its signon to `hub`.
     pub(super) fn open(path: &Path, hub: &Mutex<Hub>) -> Result<Cursor> {
@@ -181,7 +202,7 @@ fn read_signon(path: &Path, reader: &mut demo::Reader<File>) -> Result<(Vec<Vec<
             // A live demo can be read before its first frame is written; its signon is all
             // there once the sync tick that ends it is.
             Next::More if tables.is_some() && synced => break None,
-            Next::More => bail!("{} has no signon yet", path.display()),
+            Next::More => return Err(NotYet(path.to_owned()).into()),
             Next::Stop => bail!("{} has no frames", path.display()),
         }
     };

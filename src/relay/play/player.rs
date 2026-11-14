@@ -31,6 +31,8 @@ pub(super) struct Player<'r> {
     problem: Option<String>,
     /// The demo that could not be opened, and why, as last logged: said once, not every try.
     refused: Option<(std::path::PathBuf, String)>,
+    /// A demo that will never open (another TF2 build's, say): not tried again.
+    pub(super) given_up: Option<std::path::PathBuf>,
     /// Checkpoints through the demo playing, made on the side.
     pub(super) index: Option<Arc<Index>>,
     /// The camera the clients were last told to take, and when.
@@ -77,6 +79,7 @@ impl<'r> Player<'r> {
             dry: false,
             problem: None,
             refused: None,
+            given_up: None,
             index: None,
             cued: None,
             kept: Kept::new(Instant::now()),
@@ -124,11 +127,16 @@ impl Player<'_> {
     }
 
     /// Opens the demo `want` names unless it is playing, once no signon is held: break while it is,
-    /// or the demo cannot be opened.
-    fn open_wanted(&mut self, want: &Want, playback: &Playback) -> ControlFlow<()> {
+    /// or the demo cannot be opened. One not written yet is tried again every [`RETRY`]; one that
+    /// will never open, not again.
+    pub(super) fn open_wanted(&mut self, want: &Want, playback: &Playback) -> ControlFlow<()> {
         if self.cur.as_ref().is_some_and(|c| c.path == want.demo) {
             self.relay.hub().release_signon_hold();
             return ControlFlow::Continue(());
+        }
+        if self.given_up.as_ref() == Some(&want.demo) {
+            std::thread::sleep(RETRY);
+            return ControlFlow::Break(());
         }
         // Not while a client is in a signon: a second crashes it. Nothing plays meanwhile.
         if self.relay.hub().hold_for_signon(Instant::now()) {
@@ -152,8 +160,10 @@ impl Player<'_> {
                 ControlFlow::Continue(())
             }
             Err(e) => {
-                // Not written yet, or not playable: try again in a while.
                 let why = format!("{e:#}");
+                if !super::cursor::may_open_yet(&e) {
+                    self.given_up = Some(want.demo.clone());
+                }
                 if self.refuses_anew(&want.demo, &why) {
                     log!("cannot play {}: {why}", want.demo.display());
                 }
@@ -164,7 +174,7 @@ impl Player<'_> {
         }
     }
 
-    /// Whether `demo` not opening for `why` is news: it is tried again every [`RETRY`].
+    /// Whether `demo` not opening for `why` is news.
     pub(super) fn refuses_anew(&mut self, demo: &std::path::Path, why: &str) -> bool {
         if self.refused.as_ref().is_some_and(|(d, w)| d == demo && w == why) {
             return false;
@@ -210,6 +220,7 @@ impl Player<'_> {
             self.cur = None;
             self.index = None;
             self.signed_on = None;
+            self.given_up = None;
             hub.start_over();
         }
         false
