@@ -231,7 +231,7 @@ impl Player<'_> {
     /// have and get a full update; `demo`'s signon is for those to come. With a laser of the
     /// relay's, only if one coming in later gets it where they have it.
     pub(super) fn goes_on_into(&mut self, demo: &std::path::Path) -> bool {
-        let laser = self.laser;
+        let (laser, port) = (self.laser, self.relay.port());
         let Some(c) = self.cur.as_mut().filter(|c| c.started && c.server.is_some()) else { return false };
         let Ok(mut next) = Cursor::open_detached(demo) else { return false };
         while !next.started && next.next_tick().is_some() {
@@ -239,7 +239,15 @@ impl Player<'_> {
                 next.skip_next();
             }
         }
-        let Some(begins) = next.first.filter(|_| next.server == c.server) else { return false };
+        let Some(begins) = next.first.filter(|_| next.server == c.server) else {
+            log!(
+                ":{port} {} is of another map load ({:?}, playing {:?}): a signon",
+                demo.display(),
+                next.server,
+                c.server
+            );
+            return false;
+        };
         // Up to there on the one playing, its string table changes given: no further than it has.
         // Frames passed over so: the clients need a full update either way.
         let mut passed = false;
@@ -264,6 +272,9 @@ impl Player<'_> {
         };
         skim(&mut next, None, at);
         if at < begins || laser_there(&next).is_none() {
+            let why =
+                if at < begins { "the one playing ends before it begins" } else { "the laser is elsewhere in it" };
+            log!(":{port} {} at {begins}, playing at {at}: {why}: a signon", demo.display());
             if passed {
                 self.rekey();
             }
