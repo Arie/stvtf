@@ -7,8 +7,8 @@ use super::client::{Client, Phase};
 use super::out::{Empty, Out};
 use super::server_msg::{is_table_change, set_pause, signon_state, table_changes, vgui_menu};
 use super::{
-    CLIENT_TIMEOUT, KEEPALIVE, MAX_SINCE_FULL, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS,
-    TRACE, TRACE_EVERY, masked_addr,
+    CLIENT_TIMEOUT, KEEPALIVE, KEY_WAIT, MAX_SINCE_FULL, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT,
+    SPECTATORS, TRACE, TRACE_EVERY, masked_addr,
 };
 use crate::decode::Lifecycle;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
@@ -48,6 +48,46 @@ pub(super) struct Hub {
     traced: Instant,
     /// The clients were handed over: nothing more is sent or read.
     pub(super) silent: bool,
+    /// The frame played in this datagram, as each client can take it.
+    frame: Option<Played>,
+}
+
+/// A frame played, for clients that acked different frames: a game client sent a delta from a
+/// frame it lacks crashes, and any datagram may be lost.
+pub(super) struct Played {
+    pub(super) tick: u32,
+    /// The frame its entities build on; none for entities in full.
+    pub(super) base: Option<u32>,
+    /// Its stream with the entities as a delta from another frame, by that frame's tick.
+    pub(super) from: HashMap<u32, BitBuf>,
+    /// Its stream without the entities, for a client that can take none of those.
+    pub(super) bare: BitBuf,
+}
+
+impl Played {
+    /// The frame as `c` can take it: its entities from the frame `c` acked. With none it acked,
+    /// or none written from it, without them: one not waiting for its full update's ack any more
+    /// (see [`KEY_WAIT`]) waits for another.
+    fn for_client<'a>(&'a self, c: &mut Client, played: Option<&'a BitBuf>, now: Instant) -> Option<&'a BitBuf> {
+        let stream = match (self.base, c.acked) {
+            (None, _) => {
+                c.keyed_at(self.tick, now);
+                return played;
+            }
+            (Some(base), Some(acked)) if base == acked => played,
+            (Some(_), Some(acked)) => self.from.get(&acked),
+            (Some(_), None) => None,
+        };
+        if stream.is_some() {
+            c.sent_frame(self.tick);
+            return stream;
+        }
+        if c.keyed.is_none_or(|at| now.duration_since(at) > KEY_WAIT) {
+            trace!("{} cannot take frame {} from {:?}: a full update", c.name.escape_debug(), self.tick, c.acked);
+            c.set_phase(Phase::WaitingFull, now);
+        }
+        Some(&self.bare)
+    }
 }
 
 /// Which part of a datagram a stream is.
@@ -90,6 +130,7 @@ impl Hub {
             signon_held: None,
             traced: Instant::now(),
             silent: false,
+            frame: None,
         }
     }
 
@@ -253,10 +294,13 @@ impl Hub {
     /// A full update (`net_Tick` and the entities) and the frames played since the one it is of,
     /// for the clients waiting for one, who are told if playback is `paused`. They are kept, with
     /// the frames after, for clients that come soon after.
-    pub(super) fn send_keyframe(&mut self, key: &BitBuf, since: &[BitBuf], paused: bool) {
+    pub(super) fn send_keyframe(&mut self, tick: u32, key: &BitBuf, since: &[BitBuf], paused: bool) {
         let now = Instant::now();
         self.backlog.open = false;
-        self.since_full = Some(std::iter::once(key.clone()).chain(since.iter().cloned()).collect());
+        // While a demo plays, a client coming in gets a full update of its own, which it acks
+        // before any delta.
+        let kept = || std::iter::once(key.clone()).chain(since.iter().cloned()).collect();
+        self.since_full = (!self.mode.is_play()).then(kept);
         // Always: one shown "paused" before a jump may not be any more.
         let pause = set_pause(paused);
         // TF2's player bar freezes until its clock passes its last draw; re-showing resets that.
@@ -268,12 +312,27 @@ impl Hub {
                 c.queue.push(pause.clone());
                 c.queue.extend(again.iter().cloned());
                 c.enter_notes(&self.notes, now);
+                c.keyed_at(tick, now);
                 self.out.send(*addr, c, Some(key), Empty::Send, now);
                 for f in since {
                     self.out.send(*addr, c, Some(f), Empty::Send, now);
                 }
             }
         }
+    }
+
+    /// The frames the clients in the game acked: what a played frame's entities are written from.
+    pub(super) fn acked(&self) -> Vec<u32> {
+        let mut acked: Vec<u32> =
+            self.clients.values().filter(|c| c.phase == Phase::Active).filter_map(|c| c.acked).collect();
+        acked.sort_unstable();
+        acked.dedup();
+        acked
+    }
+
+    /// The datagram about to be flushed is a frame played, with entities.
+    pub(super) fn play(&mut self, frame: Played) {
+        self.frame = Some(frame);
     }
 
     /// The next full update sets clients' clocks back: it shows the spectator panel again, which
@@ -371,6 +430,7 @@ impl Hub {
                 }
             }
         }
+        let frame = self.frame.take();
         for (addr, c) in &mut self.clients {
             if full && c.takes_full_update(&self.backlog) {
                 trace!("{addr} gets a full update of {} bits", tail.as_ref().map_or(0, BitBuf::nbits));
@@ -380,7 +440,11 @@ impl Hub {
             if c.phase == Phase::Active {
                 // One packet per server datagram, as the server sends: a packet of our own
                 // would show in a client's net_graph as one without entities.
-                self.out.send(*addr, c, tail.as_ref(), Empty::Send, now);
+                let tail = match &frame {
+                    Some(f) => f.for_client(c, tail.as_ref(), now),
+                    None => tail.as_ref(),
+                };
+                self.out.send(*addr, c, tail, Empty::Send, now);
             } else {
                 self.out.burst(*addr, c, Empty::Skip, now);
             }
@@ -392,6 +456,7 @@ impl Hub {
     pub(super) fn start_entities(&mut self, addr: SocketAddr, now: Instant) {
         let Some(c) = self.clients.get_mut(&addr) else { return };
         if let Some(frames) = &self.since_full
+            && !self.mode.is_play()
             && c.through_backlog(&self.backlog)
         {
             trace!("{addr} gets entities from the {} datagrams kept since the last full update", frames.len());

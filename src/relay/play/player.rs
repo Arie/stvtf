@@ -508,7 +508,7 @@ impl Player<'_> {
 
     /// A keyframe for the clients waiting for one: of the frame the next one builds on, with the
     /// frames since. Break while their clock is first put past their beams.
-    fn send_keyframe(&mut self, interval: f32) -> ControlFlow<()> {
+    pub(super) fn send_keyframe(&mut self, interval: f32) -> ControlFlow<()> {
         let Some(at) = self.cur.as_ref().map(Cursor::tick) else { return ControlFlow::Continue(()) };
         if self.flush(at, interval) {
             return ControlFlow::Break(());
@@ -528,13 +528,14 @@ impl Player<'_> {
             }
             return ControlFlow::Continue(());
         };
-        let mut since = c.dec.catch_up(tick, c.recent.make_contiguous());
+        // No frames since: a client acks the full update first, and gets the next frame from it.
+        let mut since = Vec::new();
         // The round's end shown, or hidden, as at this moment.
         since.extend(c.dec.round_event());
         // Its clock may have gone back: the timers, waiting for a time it passed, redraw.
         since.extend(c.dec.update_timer());
         let mut hub = self.relay.hub();
-        hub.send_keyframe(&key, &since, c.paused);
+        hub.send_keyframe(tick, &key, &since, c.paused);
         hub.reshow_notes(Instant::now());
         drop(hub);
         self.floor = Some(super::follow::floor_after(self.floor, &c.dec, tick, &since));

@@ -120,13 +120,16 @@ fn notes_go_again_after_every_full_update() {
     hub.set_notes(vec![note.clone()]);
     assert!(hub.clients[&active].queue.is_empty(), "for full updates to come; shown now by the player");
     hub.rekey_all(Instant::now());
-    hub.send_keyframe(&key, &[], false);
+    hub.send_keyframe(1, &key, &[], false);
     assert!(sent(&mut hub).starts_with(&expected), "after its full update");
-    hub.clients.get_mut(&active).unwrap().set_phase(Phase::WaitingFull, Instant::now());
+    // One coming in while a demo plays gets a full update of its own, not the datagrams since.
+    hub.clients.get_mut(&active).unwrap().set_phase(Phase::Signon, Instant::now());
     hub.mode = Mode::Play { paused: false };
-    hub.since_full = Some(vec![key]);
+    hub.since_full = Some(vec![key.clone()]);
     hub.start_entities(active, Instant::now());
-    assert!(sent(&mut hub).starts_with(&expected), "and after the datagrams since one");
+    assert_eq!(hub.clients[&active].phase, Phase::WaitingFull);
+    hub.send_keyframe(2, &key, &[], false);
+    assert!(sent(&mut hub).starts_with(&expected), "and after that one");
 }
 
 #[test]

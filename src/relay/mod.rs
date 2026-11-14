@@ -130,6 +130,9 @@ const READ_POLL: Duration = Duration::from_millis(5);
 /// A client acks -1 until the full update it asked for arrives; only after this long is it
 /// asking for another.
 const FULL_UPDATE_GRACE: Duration = Duration::from_secs(1);
+/// How long a client has to ack a full update before it is sent another: no delta goes to it
+/// until it has, as it would crash on one from a frame it lacks.
+const KEY_WAIT: Duration = Duration::from_millis(if cfg!(test) { 30 } else { 600 });
 /// Datagrams kept since the last full update, for clients that join after it.
 const MAX_SINCE_FULL: usize = 64;
 /// After a full update, the next is asked of the server no sooner than this, however many

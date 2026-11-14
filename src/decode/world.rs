@@ -21,6 +21,9 @@ use tf_demo_parser::demo::message::packetentities::{BaselineIndex, PacketEntitie
 use tf_demo_parser::demo::packet::datatable::ClassId;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
+/// Ticks of frames kept for a delta to a client to build on: 3 s of a 66.67-tick server's, more
+/// than a client's ack takes to come.
+const KEEP_TICKS: u32 = 200;
 /// Frames kept for later deltas to build on, at most.
 const MAX_FRAMES: usize = 128;
 
@@ -182,10 +185,12 @@ impl World {
         for r in &pe.removed_entities {
             frame.remove(u32::from(*r));
         }
-        // A later delta never builds on a frame older than this one's base. A full update keeps
-        // them: a stream that asked for one can have deltas from before it.
+        // A later delta of the stream never builds on a frame older than this one's base, but one
+        // written for a client does, on the frame it acked: those of the last [`KEEP_TICKS`] stay.
+        // A full update keeps them: a stream that asked for one can have deltas from before it.
         if let Some(base) = pe.delta {
-            self.frames.retain(|(t, _)| *t >= u32::from(base));
+            let from = u32::from(base).min(tick.saturating_sub(KEEP_TICKS));
+            self.frames.retain(|(t, _)| *t >= from);
         }
         self.frames.push_back((tick, frame));
         if self.frames.len() > MAX_FRAMES {
@@ -291,23 +296,84 @@ impl World {
         encode(state, &msg, to)
     }
 
+    /// The entities of frame `to` as a delta from frame `from`, both kept, as the one message: to
+    /// put in a frame's stream in place of its own, for a client that has `from` and not the frame
+    /// those build on.
+    pub(crate) fn delta_message(&self, state: &ParserState, from: u32, to: u32) -> Option<BitBuf> {
+        let entities = self.delta_entities(state, from, to)?;
+        let msg = PacketEntitiesMessage {
+            entities: entities.into_values().collect(),
+            removed_entities: Vec::new(),
+            max_entries: self.max_entries,
+            delta: Some(from.into()),
+            base_line: BaselineIndex::First,
+            updated_base_line: false,
+        };
+        super::encode_message(SVC_PACKETENTITIES, &msg, state)
+    }
+
+    /// By entity index, the props that changed from one kept frame to the next between `from` and
+    /// `to`; none (the entity enters anew) for one that was gone, or another, in a frame between.
+    fn changed_between(&self, from: u32, to: u32) -> BTreeMap<u32, Option<std::collections::BTreeSet<u32>>> {
+        let mut changed: BTreeMap<u32, Option<std::collections::BTreeSet<u32>>> = BTreeMap::new();
+        let way: Vec<&Frame> = self.frames.iter().filter(|(t, _)| (from..=to).contains(t)).map(|(_, f)| f).collect();
+        for pair in way.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            for index in 0..a.0.len().max(b.0.len()) as u32 {
+                match (a.get(index), b.get(index)) {
+                    (None, None) => {}
+                    (Some(x), Some(y)) if Arc::ptr_eq(x, y) => {}
+                    (Some(x), Some(y)) if x.class == y.class && x.serial == y.serial => {
+                        let Some(set) = changed.entry(index).or_insert_with(|| Some(std::collections::BTreeSet::new()))
+                        else {
+                            continue;
+                        };
+                        for (i, page) in y.props.0.iter().enumerate() {
+                            let Some(page) = page else { continue };
+                            let before = x.props.0.get(i).and_then(Option::as_ref);
+                            if before.is_some_and(|p| Arc::ptr_eq(p, page)) {
+                                continue;
+                            }
+                            set.extend(
+                                page.iter()
+                                    .filter(|p| !x.props.get(p.index).is_some_and(|q| same(&q.value, &p.value)))
+                                    .map(|p| p.index),
+                            );
+                        }
+                    }
+                    _ => {
+                        changed.insert(index, None);
+                    }
+                }
+            }
+        }
+        changed
+    }
+
     /// What frame `to` changed from frame `from`, by entity index, as a delta lists it.
     fn delta_entities(&self, state: &ParserState, from: u32, to: u32) -> Option<BTreeMap<u32, PacketEntity>> {
         if self.broken {
             return None;
         }
         let (old, new) = (&self.kept(from)?.1, &self.kept(to)?.1);
+        let changed = self.changed_between(from, to);
         // By index, as the message lists them: what changed or entered, and what is gone. A game
         // client keeps every entity a delta does not name, so one gone is named, leaving and
         // deleted, as a server does (the message's own deletion list only frees what is left).
         let mut entities: BTreeMap<u32, PacketEntity> = BTreeMap::new();
         for (index, e) in new.iter() {
             match old.get(index) {
-                Some(o) if o.class == e.class && o.serial == e.serial => {
+                Some(o) if o.class == e.class && o.serial == e.serial && changed.get(&index) != Some(&None) => {
+                    // Every prop that changed on the way, as a server lists them: one back at
+                    // its value in `from` is not at it for a client that took a frame between.
+                    let on_the_way = changed.get(&index).and_then(Option::as_ref);
                     let props: Vec<SendProp> = e
                         .props
                         .values()
-                        .filter(|p| !o.props.get(p.index).is_some_and(|q| same(&q.value, &p.value)))
+                        .filter(|p| {
+                            on_the_way.is_some_and(|c| c.contains(&p.index))
+                                || !o.props.get(p.index).is_some_and(|q| same(&q.value, &p.value))
+                        })
                         .cloned()
                         .collect();
                     if !props.is_empty() {

@@ -1,11 +1,11 @@
 //! Frames played to the clients in the game, as they are where a game client can follow them.
 
 use super::Camera;
-use super::cursor::without_cues;
+use super::cursor::{with_entities, without_cues, without_entities};
 use super::player::Player;
 use crate::decode::{Decoder, Entities};
 use crate::net::bits::BitBuf;
-use crate::relay::hub::Part;
+use crate::relay::hub::{Part, Played};
 use std::time::Instant;
 
 impl Player<'_> {
@@ -36,6 +36,17 @@ impl Player<'_> {
         // Ours, not the demo's director's.
         let (bits, life) = if camera.is_some() { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
         let mut hub = self.relay.hub();
+        if let Some(entities) = c.dec.entities(bits.bytes()) {
+            let base = match entities {
+                Entities::Full => None,
+                Entities::Delta(base) => Some(base),
+            };
+            // From each frame a client acked: it has that one for sure.
+            let from = hub.acked().into_iter().filter(|a| base.is_some_and(|b| b != *a));
+            let from = from.filter_map(|a| Some((a, with_entities(&bits, &life, &c.dec.entities_from(a)?)))).collect();
+            let stripped = without_entities(&bits, &life);
+            hub.play(Played { tick: c.dec.server_tick(), base, from, bare: stripped });
+        }
         hub.upstream_stream(&bits, Part::Unreliable, &life);
         hub.upstream_flush();
         self.clock = Some((c.tick() as f64 * f64::from(c.dec.tick_interval()), Instant::now()));

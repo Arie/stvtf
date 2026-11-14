@@ -226,6 +226,12 @@ impl Decoder {
         self.world.as_ref()?.full_update(self.handler.get_parser_state(), base, Some(self.tick_interval()))
     }
 
+    /// The entities of the last frame decoded as a delta from frame `from`, the one message: for a
+    /// client that acked `from`. None when either is not kept, or it does not encode.
+    pub(crate) fn entities_from(&self, from: u32) -> Option<BitBuf> {
+        self.world.as_ref()?.delta_message(self.handler.get_parser_state(), from, self.server_tick())
+    }
+
     /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
     /// tick): those after it, each as played if the client still has the frame it builds on, else
     /// (from a live server, a frame a few ticks back) rewritten as a delta from `key`, or failing

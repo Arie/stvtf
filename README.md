@@ -362,6 +362,11 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   update, and the new demo's signon is what a client coming in later is given. Not when the one
   playing ends before the other begins, nor when a later client would get the relay's laser
   elsewhere than they have it: then they sign on again.
+- A game client sent a delta from a frame it lacks crashes, and any datagram may be lost, so a
+  playing relay does as a server: each client's entities are a delta from the frame that client
+  last acked (the demo's own when that is the one it builds on, else written anew, listing every
+  prop that changed on the way), a full update comes first and is acked before any delta, and a
+  client whose acked frame is no longer kept (3 s of ticks are) gets a full update again.
 - A playing relay hands its clients to the process after it (`Playback::hand_over`, then
   `Relay::take_over` on a relay bound to the same address): each client's connection (sequence
   numbers, reliable state, challenge), all they were sent since their signon, and where the demo

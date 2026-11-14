@@ -279,6 +279,25 @@ pub(super) fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (B
     without(bits, life, |s| dec.is_director_cue(bits.bytes(), s))
 }
 
+/// A frame's stream with `entities` in place of its own entity message.
+pub(super) fn with_entities(bits: &BitBuf, life: &Lifecycle, entities: &BitBuf) -> BitBuf {
+    let mut w = BitWriter::new();
+    for span in &life.spans {
+        if u32::from(span.id) == messages::SVC_PACKETENTITIES {
+            w.write_buf(entities);
+        } else {
+            w.write_range(bits.bytes(), span.bits.clone());
+        }
+    }
+    w.finish()
+}
+
+/// A frame's stream without its entity message, nor its tick: for a client that stays at the
+/// frame it has.
+pub(super) fn without_entities(bits: &BitBuf, life: &Lifecycle) -> BitBuf {
+    without(bits, life, |s| matches!(u32::from(s.id), messages::SVC_PACKETENTITIES | messages::NET_TICK)).0
+}
+
 /// A stream without the messages `drop` picks.
 fn without(bits: &BitBuf, life: &Lifecycle, drop: impl Fn(&Span) -> bool) -> (BitBuf, Lifecycle) {
     if !life.spans.iter().any(&drop) {

@@ -7,8 +7,12 @@ use crate::net::bits::BitBuf;
 use crate::net::messages::{self, Signon};
 use crate::net::netchan::Header;
 use crate::net::receiver::{Received, Receiver};
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Instant;
+
+/// Frames remembered as sent to a client, at most: as many as a game client keeps.
+const MAX_FRAMES_SENT: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Phase {
@@ -58,6 +62,14 @@ pub(super) struct Client {
     pub(super) past_connected: bool,
     /// Told to reconnect, and not yet said it has.
     pub(super) reconnecting: bool,
+    /// The frames with entities it was sent since its last full update, by server tick: one of
+    /// them is what it acks.
+    pub(super) frames: VecDeque<u32>,
+    /// The frame it last acked: it has it, and a delta from it it can take. A game client sent
+    /// one from a frame it lacks (a datagram lost) crashes.
+    pub(super) acked: Option<u32>,
+    /// When it was sent a full update it has not acked yet: no delta until it does.
+    pub(super) keyed: Option<Instant>,
     /// It keeps what it has while the backlog is made anew (see [`Hub::hold_in_game`]): none of
     /// that is for it.
     ///
@@ -92,6 +104,9 @@ impl Client {
             gone: None,
             past_connected: false,
             reconnecting: false,
+            frames: VecDeque::new(),
+            acked: None,
+            keyed: None,
             held: false,
         }
     }
@@ -107,6 +122,34 @@ impl Client {
     pub(super) fn set_phase(&mut self, phase: Phase, now: Instant) {
         self.phase = phase;
         self.since = now;
+        if phase != Phase::Active {
+            self.frames.clear();
+            (self.acked, self.keyed) = (None, None);
+        }
+    }
+
+    /// It was sent a full update of frame `tick`: that is all it has.
+    pub(super) fn keyed_at(&mut self, tick: u32, now: Instant) {
+        self.frames.clear();
+        self.frames.push_back(tick);
+        (self.acked, self.keyed) = (None, Some(now));
+    }
+
+    /// It was sent the entities of frame `tick`.
+    pub(super) fn sent_frame(&mut self, tick: u32) {
+        if self.frames.len() >= MAX_FRAMES_SENT {
+            self.frames.pop_front();
+        }
+        self.frames.push_back(tick);
+    }
+
+    /// It says it has frame `tick`: only one it was sent since its full update counts (one from
+    /// before a jump it no longer has).
+    fn ack(&mut self, tick: u32) {
+        if self.frames.contains(&tick) {
+            self.frames.retain(|t| *t >= tick);
+            (self.acked, self.keyed) = (Some(tick), None);
+        }
     }
 
     /// Queues the backlog from the cursor up to the next signon state the client must echo.
@@ -180,7 +223,11 @@ impl Client {
                     ClientMsg::Tick(messages::FULL_UPDATE_TICK) => {
                         ready |= self.phase == Phase::Active && now.duration_since(self.since) > FULL_UPDATE_GRACE;
                     }
-                    ClientMsg::Tick(_) => {}
+                    ClientMsg::Tick(tick) => {
+                        if let Ok(tick) = u32::try_from(tick) {
+                            self.ack(tick);
+                        }
+                    }
                     ClientMsg::Disconnect(reason) => self.gone = Some(reason),
                 }
             }
