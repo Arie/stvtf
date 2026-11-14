@@ -30,7 +30,7 @@ pub(super) struct Player<'r> {
     /// Why the clients get nothing, if they do not.
     problem: Option<String>,
     /// Checkpoints through the demo playing, made on the side.
-    index: Option<Arc<Index>>,
+    pub(super) index: Option<Arc<Index>>,
     /// The camera the clients were last told to take, and when.
     cued: Option<(Camera, Instant)>,
     /// The kept beams shown: when each last was, and what may be sent now.
@@ -217,7 +217,8 @@ impl Player<'_> {
             Some(m) => Cursor::restore(&want.demo, m)?,
             None => Cursor::open_detached(&want.demo)?,
         };
-        self.dry = skim(&mut again, &self.relay.hub, target).1;
+        // The clients had the string table changes up to there.
+        self.dry = skim(&mut again, None, target).1;
         trace!("decoded back to {target} in {} ms", took.elapsed().as_millis());
         if again.dec.tables_rewritten() < rewritten {
             // The clients' tables are set back to these, or failing that, they sign on again.
@@ -299,13 +300,14 @@ impl Player<'_> {
         }
         let (from, took) = (c.tick(), Instant::now());
         // From a checkpoint well past where it is, if there is one: the clients get the string
-        // table changes passed over with it.
+        // table changes passed over with it, those after the ones they had.
         let mark = self.index.as_ref().and_then(|i| i.before(target)).filter(|m| i64::from(m.tick) > from + jump);
         if let Some(m) = &mark {
-            self.relay.hub().add_table_changes(&m.tables());
+            let passed = m.tables();
+            self.relay.hub().add_table_changes(passed.get(c.tables.len()..).unwrap_or_default());
             *c = Cursor::restore(&want.demo, m)?;
         }
-        let (decoded, dry) = skim(c, &self.relay.hub, target);
+        let (decoded, dry) = skim(c, Some(&self.relay.hub), target);
         let decoded = decoded + usize::from(mark.is_some());
         log!(
             ":{} jump ahead from {from} to {} in {} ms, {} clients",
@@ -420,9 +422,10 @@ impl Player<'_> {
     }
 }
 
-/// Decodes on to `target` without sending: only string table changes reach the clients. How many
-/// frames it decoded, and whether it stopped short for want of more written.
-fn skim(c: &mut Cursor, hub: &Mutex<Hub>, target: i64) -> (usize, bool) {
+/// Decodes on to `target` without sending: only string table changes reach the clients, through
+/// `hub` if given. How many frames it decoded, and whether it stopped short for want of more
+/// written.
+fn skim(c: &mut Cursor, hub: Option<&Mutex<Hub>>, target: i64) -> (usize, bool) {
     let mut decoded = 0;
     loop {
         match c.next_tick() {
@@ -430,7 +433,9 @@ fn skim(c: &mut Cursor, hub: &Mutex<Hub>, target: i64) -> (usize, bool) {
             Some(next) if next > target => return (decoded, false),
             Some(_) => match c.decode() {
                 Some((bits, life)) => {
-                    lock(hub).skim(&bits, &life);
+                    if let Some(hub) = hub {
+                        lock(hub).skim(&bits, &life);
+                    }
                     decoded += 1;
                 }
                 None => c.skip_next(),

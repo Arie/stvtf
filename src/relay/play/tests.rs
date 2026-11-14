@@ -497,3 +497,60 @@ fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     p.show_kept(&playback);
     assert_eq!(p.laser, None, "not again");
 }
+
+/// The string tables a client given the hub's backlog has are those of `p`'s demo where it is;
+/// None when they are not.
+fn client_tables_are_the_demos(relay: &Relay, p: &Player<'_>, signon: usize) -> Option<()> {
+    let c = p.cur.as_ref().unwrap();
+    let mut client = Cursor::open_detached(&c.path).unwrap();
+    let hub = relay.hub();
+    for i in signon..hub.backlog.len() {
+        let m = &hub.backlog.get(i).unwrap().bits;
+        client.dec.feed(m.bytes(), m.nbits());
+    }
+    c.dec.set_tables_back(&client.dec).filter(Vec::is_empty).map(drop)
+}
+
+/// Far ahead, back, and ahead again from a checkpoint: the clients' string tables are the demo's
+/// each time, and the checkpoint gives them only the changes past those they had.
+#[test]
+fn a_jump_ahead_from_a_checkpoint_gives_the_clients_only_the_table_changes_passed_over() {
+    let path = crate::fixture("pl_upward.dem");
+    let mut b = bench_with_one_in();
+    let first = upward_until(|c| c.started);
+    let from = i64::from(first.dec.server_tick());
+    let (relay, _, mut want) = relay_playing(&mut b, first, 0);
+    relay.hub().start_playing();
+    let c = Cursor::open(&path, &relay.hub).unwrap();
+    let signon = relay.hub().backlog.len();
+    let mut p = Player::new(&relay);
+    p.start_demo(c);
+    let index = index::Index::shared(&path);
+    let (early, mid, late) = (from + 3000, from + 9000, from + 13_000);
+    let since = Instant::now();
+    while index.before(late).is_none_or(|m| i64::from(m.tick) < mid) {
+        assert!(since.elapsed() < Duration::from_secs(60), "the demo has a checkpoint by then");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    p.index = Some(index);
+    want.paused = true;
+    let mut go = |p: &mut Player<'_>, tick: i64| {
+        want.tick = u32::try_from(tick).unwrap();
+        want.at = Instant::now();
+        for _ in 0..20 {
+            p.step(&want).unwrap();
+        }
+        assert_eq!(p.cur.as_ref().unwrap().tick() / 100, tick / 100, "there");
+    };
+    go(&mut p, late);
+    assert!(client_tables_are_the_demos(&relay, &p, signon).is_some(), "ahead");
+    let changes = p.cur.as_ref().unwrap().tables.len();
+    go(&mut p, early);
+    assert!(client_tables_are_the_demos(&relay, &p, signon).is_some(), "back");
+    let (had, sent) = (p.cur.as_ref().unwrap().tables.len(), relay.hub().backlog.len());
+    assert!(had < changes, "the demo has string table changes between");
+    go(&mut p, mid);
+    assert!(client_tables_are_the_demos(&relay, &p, signon).is_some(), "ahead from a checkpoint");
+    let passed = p.cur.as_ref().unwrap().tables.len() - had;
+    assert!(relay.hub().backlog.len() - sent <= passed, "none of those before");
+}

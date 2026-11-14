@@ -195,6 +195,30 @@ fn tables_set_back_go_again_on_every_jump_back() {
     }
 }
 
+/// A player leaves a slot, another takes it and leaves too: the second clearing is the first's
+/// bits, and a change all the same. A demo's own repeat right after is not.
+#[test]
+fn a_demos_table_change_the_same_as_an_earlier_one_reaches_the_clients_again() {
+    let (mut hub, active) = hub_with_one_in();
+    hub.start_playing();
+    let change = |value: u32| {
+        let mut w = BitWriter::new();
+        w.write_bits(SVC_UPDATESTRINGTABLE, TYPE_BITS);
+        w.write_bits(value, 16);
+        w.finish()
+    };
+    let (cleared, taken) = (change(1), change(2));
+    hub.add_table_changes(&[cleared.clone(), taken.clone(), cleared.clone(), cleared.clone()]);
+    assert_eq!(hub.clients[&active].queue, [cleared.clone(), taken.clone(), cleared.clone()]);
+    // As played: in a datagram's unreliable part.
+    let (bits, life) = datagram_with_table_change();
+    for msg in [&bits, &taken, &bits] {
+        let life = Lifecycle { spans: life.spans.clone(), ..Lifecycle::default() };
+        hub.upstream_stream(msg, Part::Unreliable, &life);
+    }
+    assert_eq!(hub.clients[&active].queue[3..], [bits.clone(), taken, bits]);
+}
+
 /// The relay's protocol from the client's side, without threads or clocks.
 pub(super) struct Bench {
     pub(super) hub: Hub,

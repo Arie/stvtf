@@ -15,9 +15,11 @@ pub(super) struct Entry {
 
 pub(super) struct Backlog {
     entries: Vec<Entry>,
-    /// The string table changes in it, each once: those of unreliable parts come again until
-    /// acked.
+    /// The string table changes in it: a server's unreliable parts come again until acked, and
+    /// the relay's own are added once.
     tables: HashSet<BitBuf>,
+    /// The last string table change added.
+    last_table: Option<BitBuf>,
     /// Every reliable message joins it until the first entities after a signon start.
     pub(super) open: bool,
 }
@@ -34,7 +36,7 @@ pub(super) enum Delivery {
 
 impl Backlog {
     pub(super) fn new() -> Self {
-        Backlog { entries: Vec::new(), tables: HashSet::new(), open: true }
+        Backlog { entries: Vec::new(), tables: HashSet::new(), last_table: None, open: true }
     }
 
     pub(super) fn len(&self) -> usize {
@@ -53,6 +55,7 @@ impl Backlog {
     pub(super) fn clear(&mut self) {
         self.entries.clear();
         self.tables.clear();
+        self.last_table = None;
         self.open = true;
     }
 
@@ -67,17 +70,20 @@ impl Backlog {
         }
     }
 
-    /// Adds string table change `msg`, once, and gives it to the clients: those at the end of the
-    /// backlog as `delivery` says, the others as they get to it. Whether it was added.
+    /// Adds string table change `msg` and gives it to the clients: those at the end of the backlog
+    /// as `delivery` says, the others as they get to it. One the same as an earlier one is a change
+    /// too, unless that was the last (a server's repeat).
     pub(super) fn add_table_change(
         &mut self,
         msg: &BitBuf,
         clients: &mut HashMap<SocketAddr, Client>,
         delivery: Delivery,
-    ) -> bool {
-        if !self.tables.insert(msg.clone()) {
-            return false;
+    ) {
+        if self.last_table.as_ref() == Some(msg) {
+            return;
         }
+        self.last_table = Some(msg.clone());
+        self.tables.insert(msg.clone());
         self.push(msg.clone(), None);
         for c in clients.values_mut() {
             let at_end = c.cursor + 1 == self.len();
@@ -95,6 +101,5 @@ impl Backlog {
                 _ => c.pump(self),
             }
         }
-        true
     }
 }

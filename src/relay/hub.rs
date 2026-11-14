@@ -168,12 +168,15 @@ impl Hub {
         }
     }
 
-    /// Adds a string table change from a datagram's unreliable part to the backlog, once.
+    /// Adds a string table change from a datagram's unreliable part to the backlog: a server's
+    /// once (it comes again until acked), a demo's every time (it has each once).
     fn add_unreliable_table_change(&mut self, msg: &BitBuf) {
         let queue = self.mode.is_play();
-        if self.backlog.add_table_change(msg, &mut self.clients, Delivery::InDatagrams { queue }) {
-            trace!("a string table change of {} bits from a datagram into the backlog", msg.nbits());
+        if !queue && self.backlog.has_table_change(msg) {
+            return;
         }
+        self.backlog.add_table_change(msg, &mut self.clients, Delivery::InDatagrams { queue });
+        trace!("a string table change of {} bits from a datagram into the backlog", msg.nbits());
     }
 
     /// A stream passed over on a jump: only its string table changes count, which every client
@@ -192,7 +195,7 @@ impl Hub {
     }
 
     /// String table changes passed over (a jump), into the backlog and reliably to the clients
-    /// already in; those in it already are not again.
+    /// already in.
     pub(super) fn add_table_changes(&mut self, tables: &[BitBuf]) {
         self.since_full = None;
         for msg in tables {
