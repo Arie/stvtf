@@ -1,9 +1,10 @@
 use super::beams::past_beams;
 use super::cursor::{Cursor, without_cues};
+use super::index::Index;
 use super::*;
 use crate::decode::{BeamModel, Entities, ModelsSent, Span};
 use crate::demo::Packet;
-use crate::net::bits::BitWriter;
+use crate::net::bits::{BitBuf, BitWriter};
 use crate::net::messages::{self, SVC_USERMESSAGE, Signon, TYPE_BITS};
 use crate::net::receiver::Receiver;
 use crate::relay::client::Phase;
@@ -577,7 +578,7 @@ fn a_jump_ahead_from_a_checkpoint_gives_the_clients_only_the_table_changes_passe
     let signon = relay.hub().backlog.len();
     let mut p = Player::new(&relay);
     p.start_demo(c);
-    let index = index::Index::shared(&path);
+    let index = Index::shared(&path);
     let (early, mid, late) = (from + 3000, from + 9000, from + 13_000);
     let since = Instant::now();
     while index.before(late).is_none_or(|m| i64::from(m.tick) < mid) {
@@ -809,6 +810,52 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
     want.demo = crate::fixture("pass_stadium.dem");
     assert!(p.open_wanted(&want, &playback).is_continue());
     assert!(relay.hub().clients.values().next().unwrap().reconnecting);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Going into a demo played before (back into an earlier part of the match), playback starts
+/// from the checkpoints made of it then: it stands where it would decoded from the demo's start,
+/// and one coming in later is given the same.
+#[test]
+fn going_into_a_demo_played_before_starts_from_its_checkpoints() {
+    let dir = std::env::temp_dir().join(format!("stvtf-goes-back-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let next = dir.join("next.dem");
+    std::fs::copy(crate::fixture("pl_upward.dem"), &next).unwrap();
+    let went = |with_checkpoints: bool| {
+        let mut b = bench_with_one_in();
+        let (relay, mut want) = upward_playing_to_a_client(&mut b);
+        let mut p = Player::new(&relay);
+        p.start_demo(Cursor::open(&want.demo, &relay.hub).unwrap());
+        for _ in 0..20 {
+            p.step(&want).unwrap();
+            let mut hub = relay.hub();
+            let end = hub.backlog.len();
+            for c in hub.clients.values_mut() {
+                (c.cursor, c.gate, c.outgoing) = (end, None, None);
+                c.queue.clear();
+            }
+        }
+        let at = p.cur.as_ref().unwrap().tick();
+        if with_checkpoints {
+            let index = Index::shared(&next);
+            let t = Instant::now();
+            while index.before(at).is_none_or(|m| i64::from(m.tick) + 4000 < at) {
+                assert!(t.elapsed() < Duration::from_secs(20), "its checkpoints");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            p.past.push(index);
+        }
+        want.demo.clone_from(&next);
+        assert!(p.goes_on_into(&want.demo));
+        let c = p.cur.as_ref().unwrap();
+        assert_eq!(c.tick(), at);
+        let backlog: Vec<BitBuf> = relay.hub().backlog.entries().map(|e| e.bits.clone()).collect();
+        let whole = Cursor::open_detached(&next).unwrap();
+        (at, c.tables.len(), backlog, c.dec.set_tables_back(&whole.dec).map(|m| m.len()))
+    };
+    let (plain, checkpointed) = (went(false), went(true));
+    assert!(plain.1 > 0 && plain == checkpointed);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -4,8 +4,8 @@ use super::beams::Kept;
 use super::cursor::{Cursor, owned};
 use super::index::Index;
 use super::{
-    CUE_EVERY, Camera, FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, Want,
-    light, notes, voice,
+    CUE_EVERY, Camera, FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, PAST_INDEXES, Playback,
+    RETRY, Want, light, notes, voice,
 };
 use crate::decode::{BeamModel, ModelsSent};
 use crate::lock;
@@ -41,6 +41,8 @@ pub(super) struct Player<'r> {
     pub(super) given_up: Option<std::path::PathBuf>,
     /// Checkpoints through the demo playing, made on the side.
     pub(super) index: Option<Arc<Index>>,
+    /// Those of the demos played before it, the last few: going back into one starts from them.
+    pub(super) past: Vec<Arc<Index>>,
     /// The camera the clients were last told to take, and when.
     cued: Option<(Camera, Instant)>,
     /// The kept beams shown: when each last was, and what may be sent now.
@@ -90,6 +92,7 @@ impl<'r> Player<'r> {
             taken_over: lock(&relay.taken_over).take(),
             given_up: None,
             index: None,
+            past: Vec::new(),
             cued: None,
             kept: Kept::new(Instant::now()),
             shown_notes: notes::Shown::default(),
@@ -179,9 +182,7 @@ impl Player<'_> {
                 self.start_demo(c);
                 self.refused = None;
                 playback.set_problem(None);
-                if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
-                    self.index = Some(Index::shared(&want.demo));
-                }
+                self.index_of(&want.demo);
                 ControlFlow::Continue(())
             }
             Err(e) => {
@@ -195,6 +196,20 @@ impl Player<'_> {
                 playback.set_problem(Some(why));
                 std::thread::sleep(RETRY);
                 ControlFlow::Break(())
+            }
+        }
+    }
+
+    /// The checkpoints of `demo` are the ones playback has; those it had are kept a while.
+    fn index_of(&mut self, demo: &std::path::Path) {
+        if self.index.as_ref().is_some_and(|i| i.path == demo) {
+            return;
+        }
+        if let Some(was) = self.index.replace(Index::shared(demo)) {
+            self.past.retain(|i| i.path != was.path);
+            self.past.push(was);
+            if self.past.len() > PAST_INDEXES {
+                self.past.remove(0);
             }
         }
     }
@@ -273,6 +288,13 @@ impl Player<'_> {
             (Some(has), Some(BeamModel { index, load: Some(load) })) if index == has => Some(Some(load)),
             _ => None,
         };
+        // From its last checkpoint before there, if it has any made (a demo played before).
+        let made = self.past.iter().chain(&self.index).find(|i| i.path == demo);
+        if let Some(m) = made.and_then(|i| i.before(at)).filter(|m| i64::from(m.tick) > next.tick())
+            && let Ok(there) = Cursor::restore(demo, &m)
+        {
+            next = there;
+        }
         skim(&mut next, None, at);
         if at < begins || laser_there(&next).is_none() {
             let why =
@@ -284,8 +306,10 @@ impl Player<'_> {
             return false;
         }
         self.relay.hub().hold_in_game();
-        let opened = Cursor::open(demo, &self.relay.hub).ok().and_then(|mut next| {
-            skim(&mut next, Some(&self.relay.hub), at);
+        // Its signon for those to come, then its string table changes up to there: `next` has
+        // them, and is where playback goes on.
+        let opened = Cursor::open(demo, &self.relay.hub).ok().and_then(|_| {
+            self.relay.hub().add_table_changes(&owned(&next.tables));
             if let Some(load) = laser_there(&next)? {
                 self.relay.hub().add_table_change_once(&load);
             }
@@ -302,7 +326,7 @@ impl Player<'_> {
         );
         self.start_demo(next);
         self.laser = laser;
-        self.index = Some(Index::shared(demo));
+        self.index_of(demo);
         self.relay.hub().reshow_panel_with_next_keyframe();
         true
     }
@@ -372,6 +396,7 @@ impl Player<'_> {
         if since.elapsed() > IDLE && self.cur.is_some() {
             self.cur = None;
             self.index = None;
+            self.past.clear();
             self.signed_on = None;
             self.given_up = None;
             hub.start_over();
