@@ -52,6 +52,8 @@ const IDLE: Duration = Duration::from_secs(60);
 const RECENT: usize = 128;
 /// How long the player waits after an error, or a demo it cannot open, before trying it again.
 const RETRY: Duration = Duration::from_millis(200);
+/// How long clients get to finish what they are being sent before they are handed over.
+const HAND_OVER_WAIT: Duration = Duration::from_secs(1);
 /// How often the camera cue is repeated, for clients that looked away.
 const CUE_EVERY: Duration = Duration::from_secs(3);
 /// How often kept beams are shown again; each shows until then, its life rounded up to the step

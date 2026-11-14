@@ -408,7 +408,12 @@ fn a_client_asks_for_another_full_update_only_after_the_grace() {
 #[test]
 fn the_server_is_asked_for_a_full_update_when_needed_and_not_too_often() {
     let mut b = Bench::new("", 1);
-    let relay = |hub: Hub| Relay { sock: UdpSocket::bind("127.0.0.1:0").unwrap(), port: 0, hub: Mutex::new(hub) };
+    let relay = |hub: Hub| Relay {
+        sock: UdpSocket::bind("127.0.0.1:0").unwrap(),
+        port: 0,
+        hub: Mutex::new(hub),
+        taken_over: Mutex::new(None),
+    };
     b.connect();
     let now = Instant::now();
     b.client_state().set_phase(Phase::Active, now);
@@ -647,4 +652,33 @@ fn a_client_part_way_through_the_last_demos_signon_is_told_to_reconnect() {
 fn a_clients_address_is_logged_without_its_end() {
     assert_eq!(masked_addr("203.0.113.57:27005".parse().unwrap()), "203.0.113.x:27005");
     assert_eq!(masked_addr("[2001:db8:1:2:3:4:5:6]:27005".parse().unwrap()), "2001:db8:1::x:27005");
+}
+
+/// The next relay goes on with a client's connection: its packets are read, ours are numbered
+/// on, and one in a signon or a transfer is told to retry.
+#[test]
+fn a_client_handed_over_is_heard_and_sent_on_from_where_its_connection_was() {
+    let mut b = Bench::new("", 2);
+    b.connect();
+    let now = Instant::now();
+    {
+        let c = b.client_state();
+        c.gate = None;
+        c.set_phase(Phase::Active, now);
+        (c.out_seq, c.rx.in_seq, c.in_reliable_state) = (40, 12, 0b101);
+    }
+    let late: SocketAddr = "127.0.0.1:2".parse().unwrap();
+    b.hub.clients.insert(late, Client::new("late".into(), 9, 9, now));
+    let h = b.hub.hand_over(None);
+    assert_eq!(h.clients(), 1, "the one in the game");
+    assert!(b.hub.silent && b.hub.clients.is_empty());
+    let config = RelayConfig { password: String::new(), ..RelayConfig::new("127.0.0.1:0") };
+    let mut next = Hub::new(UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
+    next.take_over(&serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap(), now).unwrap();
+    let c = &next.clients[&b.addr];
+    assert_eq!((c.out_seq, c.rx.in_seq, c.in_reliable_state, c.phase), (40, 12, 0b101, Phase::WaitingFull));
+    assert_eq!(c.challenge, b.challenge);
+    b.hub = next;
+    b.client_sends(13, &messages::tick(5));
+    assert_eq!(b.client_state().rx.in_seq, 13);
 }

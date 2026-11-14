@@ -3,10 +3,14 @@
 use super::beams::Kept;
 use super::cursor::{Cursor, owned};
 use super::index::Index;
-use super::{CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice};
+use super::{
+    CUE_EVERY, Camera, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes,
+    voice,
+};
 use crate::decode::ModelsSent;
 use crate::lock;
-use crate::relay::{Hub, Relay};
+use crate::relay::handover::{Played, TakenOver};
+use crate::relay::{Handover, Hub, Relay};
 use anyhow::Result;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +35,8 @@ pub(super) struct Player<'r> {
     problem: Option<String>,
     /// The demo that could not be opened, and why, as last logged: said once, not every try.
     refused: Option<(std::path::PathBuf, String)>,
+    /// Clients were taken over from the process before, and where their playback was.
+    taken_over: Option<TakenOver>,
     /// A demo that will never open (another TF2 build's, say): not tried again.
     pub(super) given_up: Option<std::path::PathBuf>,
     /// Checkpoints through the demo playing, made on the side.
@@ -79,6 +85,7 @@ impl<'r> Player<'r> {
             dry: false,
             problem: None,
             refused: None,
+            taken_over: lock(&relay.taken_over).take(),
             given_up: None,
             index: None,
             cued: None,
@@ -102,6 +109,10 @@ impl<'r> Player<'r> {
 impl Player<'_> {
     pub(super) fn run(mut self, playback: &Playback, stop: &AtomicBool) {
         while !stop.load(Ordering::Relaxed) {
+            if playback.hand_over_asked() {
+                playback.give(self.hand_over());
+                return;
+            }
             if !self.anyone_in() {
                 std::thread::sleep(IDLE_NAP);
                 continue;
@@ -143,6 +154,14 @@ impl Player<'_> {
             std::thread::sleep(NAP);
             return ControlFlow::Break(());
         }
+        if let Some(TakenOver(played)) = self.taken_over.take() {
+            match played.filter(|p| p.demo == want.demo).map(|p| self.go_on_from(p)) {
+                Some(Ok(())) => return ControlFlow::Continue(()),
+                Some(Err(e)) => log!(":{} the clients taken over sign on again: {e:#}", self.relay.port()),
+                None => log!(":{} the clients taken over sign on again: another demo", self.relay.port()),
+            }
+            self.signed_on = Some(want.demo.clone());
+        }
         // Another demo (a live match's next one), or this again: clients in a game sign on again.
         self.cur = None;
         if let Some(was) = self.signed_on.take() {
@@ -181,6 +200,55 @@ impl Player<'_> {
         }
         self.refused = Some((demo.to_owned(), why.to_owned()));
         true
+    }
+
+    /// The clients, once those in the game are at rest or [`HAND_OVER_WAIT`] is over, with where
+    /// playback is: the relay is silent from then on.
+    pub(super) fn hand_over(&mut self) -> Handover {
+        let until = Instant::now() + HAND_OVER_WAIT;
+        while !self.relay.hub().all_at_rest() && Instant::now() < until {
+            std::thread::sleep(NAP);
+        }
+        let played =
+            self.cur.as_ref().filter(|c| c.started && self.signed_on.as_ref() == Some(&c.path)).map(|c| Played {
+                demo: c.path.clone(),
+                tick: c.tick(),
+                laser: self.laser,
+                models: self.models.with(&c.dec),
+                match_laser: self.match_laser.clone(),
+            });
+        let h = self.relay.hub().hand_over(played);
+        log!(":{} {} clients handed over", self.relay.port(), h.clients());
+        h
+    }
+
+    /// Goes on where the process before `played`: its demo decoded up to there, giving the
+    /// clients nothing (they have it), and a full update of wherever playback is wanted next.
+    fn go_on_from(&mut self, played: Played) -> Result<()> {
+        let took = Instant::now();
+        let index = Index::shared(&played.demo);
+        let mut c = match index.before(played.tick) {
+            Some(m) => Cursor::restore(&played.demo, &m)?,
+            None => Cursor::open_detached(&played.demo)?,
+        };
+        skim(&mut c, None, played.tick);
+        if c.tick() != played.tick || !c.started {
+            anyhow::bail!("{} has no frame at {}", played.demo.display(), played.tick);
+        }
+        log!(
+            ":{} goes on at {} after {} ms, {} clients",
+            self.relay.port(),
+            c.tick(),
+            took.elapsed().as_millis(),
+            self.relay.clients()
+        );
+        self.start_demo(c);
+        self.index = Some(index);
+        self.laser = played.laser;
+        self.models = played.models;
+        self.match_laser = played.match_laser;
+        self.relay.hub().reshow_panel_with_next_keyframe();
+        Ok(())
     }
 
     /// What the room shows besides the demo: kept beams, notes, voice and light.

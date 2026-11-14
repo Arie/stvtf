@@ -95,12 +95,14 @@ mod admission;
 mod backlog;
 mod client;
 mod client_msg;
+mod handover;
 mod hub;
 mod out;
 mod play;
 mod server_msg;
 mod transfer;
 pub(crate) use client_msg::{ClientMsg, client_messages};
+pub use handover::Handover;
 pub use play::{Beam, Camera, Light, Note, Playback, VoiceIn, Want};
 
 /// How often the trace sums up what each client was sent.
@@ -178,6 +180,9 @@ pub struct Relay {
     /// The port clients connect to: which relay a log line is of.
     port: u16,
     hub: Mutex<Hub>,
+    /// Clients were taken over (see [`Relay::take_over`]), and where their playback was: the
+    /// player goes on from there.
+    taken_over: Mutex<Option<handover::TakenOver>>,
 }
 
 impl Relay {
@@ -186,7 +191,18 @@ impl Relay {
         let sock = UdpSocket::bind(&config.listen).with_context(|| format!("binding {}", config.listen))?;
         let port = sock.local_addr().map_or(0, |a| a.port());
         let hub = Mutex::new(Hub::new(sock.try_clone()?, config));
-        Ok(Relay { sock, port, hub })
+        Ok(Relay { sock, port, hub, taken_over: Mutex::new(None) })
+    }
+
+    /// Takes in the clients a relay on this address handed over (see [`Playback::hand_over`]),
+    /// before [`Relay::play`]: they go on where they were with a full update, or failing that
+    /// sign on again, connected still. False if the handover does not read: they are not taken.
+    pub fn take_over(&self, h: &Handover) -> bool {
+        if self.hub().take_over(h, Instant::now()).is_none() {
+            return false;
+        }
+        *lock(&self.taken_over) = Some(handover::TakenOver(h.played.clone()));
+        true
     }
 
     /// The address clients connect to.
@@ -283,7 +299,9 @@ impl Relay {
             }
             self.hub().service(Instant::now());
         }
-        self.hub().shutdown("Relay shutting down");
+        if !self.hub().silent {
+            self.hub().shutdown("Relay shutting down");
+        }
     }
 }
 

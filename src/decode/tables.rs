@@ -65,7 +65,7 @@ const BEAM_SPRITES: [&str; 3] = ["sprites/laserbeam.vmt", "sprites/physbeam.vmt"
 
 /// What the clients' `modelprecache` has had since their signon, which a jump back does not take
 /// from them: how many entries, and where the match's own laser is.
-#[derive(Default, Clone, Copy, Debug, PartialEq)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ModelsSent {
     next: u16,
     laser: Option<u16>,

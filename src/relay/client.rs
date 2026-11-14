@@ -90,6 +90,14 @@ impl Client {
         }
     }
 
+    pub(super) fn out_reliable_state(&self) -> u8 {
+        self.out_reliable_state
+    }
+
+    pub(super) fn set_out_reliable_state(&mut self, state: u8) {
+        self.out_reliable_state = state;
+    }
+
     pub(super) fn set_phase(&mut self, phase: Phase, now: Instant) {
         self.phase = phase;
         self.since = now;

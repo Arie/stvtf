@@ -2,10 +2,11 @@
 
 use super::{Beam, Light, Note, VoiceIn, voice};
 use crate::lock;
+use crate::relay::Handover;
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 /// Where playback should be: at `tick` (a server tick of `demo`) at the instant `at`, going on
 /// from there at `speed` unless paused.
@@ -82,6 +83,17 @@ pub struct Playback {
     voice: Mutex<VecDeque<VoiceIn>>,
     /// The light they keep seeing, if any.
     light: Mutex<Option<Light>>,
+    /// The clients asked for, to hand to the next process, and given.
+    hand: Mutex<Hand>,
+    handed: Condvar,
+}
+
+#[derive(Default)]
+enum Hand {
+    #[default]
+    Kept,
+    Asked,
+    Given(Handover),
 }
 
 impl Playback {
@@ -94,7 +106,35 @@ impl Playback {
             notes: Mutex::default(),
             voice: Mutex::new(VecDeque::new()),
             light: Mutex::new(None),
+            hand: Mutex::default(),
+            handed: Condvar::new(),
         }
+    }
+
+    /// Stops the relay playing and takes its clients, for the relay of the next process to take
+    /// over (see [`Relay::take_over`](crate::relay::Relay::take_over)); None if it does not give
+    /// them within `wait`: they are dropped as it stops.
+    pub fn hand_over(&self, wait: Duration) -> Option<Handover> {
+        let mut hand = lock(&self.hand);
+        *hand = Hand::Asked;
+        let until = Instant::now() + wait;
+        while !matches!(*hand, Hand::Given(_)) {
+            let left = until.checked_duration_since(Instant::now())?;
+            hand = self.handed.wait_timeout(hand, left).unwrap_or_else(PoisonError::into_inner).0;
+        }
+        match std::mem::take(&mut *hand) {
+            Hand::Given(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    pub(super) fn hand_over_asked(&self) -> bool {
+        matches!(*lock(&self.hand), Hand::Asked)
+    }
+
+    pub(super) fn give(&self, h: Handover) {
+        *lock(&self.hand) = Hand::Given(h);
+        self.handed.notify_all();
     }
 
     /// The light the clients in the game keep seeing (a room's spotlight), in place of the one

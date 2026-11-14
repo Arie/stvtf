@@ -51,6 +51,19 @@ impl Backlog {
         self.entries.push(Entry { bits, gate });
     }
 
+    pub(super) fn entries(&self) -> impl Iterator<Item = &Entry> {
+        self.entries.iter()
+    }
+
+    /// An entry of the backlog before (a handover's), a string table change known as one.
+    pub(super) fn restore(&mut self, bits: BitBuf, gate: Option<Signon>) {
+        if super::handover::is_table_change(&bits) {
+            self.tables.insert(bits.clone());
+            self.last_table = Some(bits.clone());
+        }
+        self.push(bits, gate);
+    }
+
     /// Empty and open: the next signon starts afresh.
     pub(super) fn clear(&mut self) {
         self.entries.clear();

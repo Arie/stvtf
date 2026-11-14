@@ -23,7 +23,7 @@ const SLOW_SIGNON: &str = "stv.tf: took too long to load, retry";
 
 /// Everything the upstream and client threads share.
 pub(super) struct Hub {
-    out: Out,
+    pub(super) out: Out,
     /// The port it listens on: which relay a log line is of.
     port: u16,
     pub(super) admission: Admission,
@@ -46,6 +46,8 @@ pub(super) struct Hub {
     /// Since when another signon waits for the clients in one.
     signon_held: Option<Instant>,
     traced: Instant,
+    /// The clients were handed over: nothing more is sent or read.
+    pub(super) silent: bool,
 }
 
 /// Which part of a datagram a stream is.
@@ -87,6 +89,7 @@ impl Hub {
             mode: Mode::Live,
             signon_held: None,
             traced: Instant::now(),
+            silent: false,
         }
     }
 
@@ -389,6 +392,9 @@ impl Hub {
     }
 
     pub(super) fn datagram(&mut self, from: SocketAddr, data: &[u8], now: Instant) {
+        if self.silent {
+            return;
+        }
         if netchan::classify(data) == netchan::Kind::Oob {
             self.connectionless(from, data, now);
             return;
@@ -428,6 +434,9 @@ impl Hub {
 
     /// Resends, keepalives and timeouts.
     pub(super) fn service(&mut self, now: Instant) {
+        if self.silent {
+            return;
+        }
         let port = self.port;
         self.clients.retain(|addr, c| {
             let loading = c.phase == Phase::Signon || c.reconnecting;

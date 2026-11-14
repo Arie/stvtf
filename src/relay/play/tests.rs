@@ -319,7 +319,12 @@ fn relay_playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
     let config = crate::relay::RelayConfig::new("127.0.0.1:0");
     let spare = crate::relay::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
     let hub = std::mem::replace(&mut b.hub, spare);
-    let relay = Relay { sock: std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), port: 0, hub: hub.into() };
+    let relay = Relay {
+        sock: std::net::UdpSocket::bind("127.0.0.1:0").unwrap(),
+        port: 0,
+        hub: hub.into(),
+        taken_over: None.into(),
+    };
     let want = Want {
         demo: c.path.clone(),
         tick,
@@ -592,4 +597,93 @@ fn a_demo_that_will_never_open_is_not_tried_again() {
     assert!(p.open_wanted(&want, &playback).is_break());
     assert_eq!(p.given_up.as_ref(), Some(&want.demo), "not opened again: gone, it would be one not there yet");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A relay playing `pl_upward.dem` some way in, its one client in the game with all it was sent
+/// acked; the player, what it wants, and where the backlog's signon ends.
+fn upward_played_to_a_client(b: &mut Bench) -> (Relay, Want, usize) {
+    let path = crate::fixture("pl_upward.dem");
+    let first = upward_until(|c| c.started);
+    let from = i64::from(first.dec.server_tick());
+    let (relay, _, mut want) = relay_playing(b, first, 0);
+    relay.hub().start_playing();
+    let c = Cursor::open(&path, &relay.hub).unwrap();
+    let signon = relay.hub().backlog.len();
+    let mut p = Player::new(&relay);
+    p.start_demo(c);
+    want.paused = true;
+    want.tick = u32::try_from(from + 5000).unwrap();
+    for _ in 0..20 {
+        p.step(&want).unwrap();
+    }
+    {
+        let mut hub = relay.hub();
+        let end = hub.backlog.len();
+        for c in hub.clients.values_mut() {
+            (c.cursor, c.gate, c.outgoing) = (end, None, None);
+            c.queue.clear();
+            c.set_phase(Phase::Active, Instant::now());
+        }
+    }
+    let h = p.hand_over();
+    assert!(relay.hub().silent && relay.hub().clients.is_empty());
+    drop(p);
+    let h: crate::relay::Handover = serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap();
+    assert_eq!(h.clients(), 1);
+    let config = crate::relay::RelayConfig::new("127.0.0.1:0");
+    let next = Relay::bind(&config).unwrap();
+    next.hub().start_playing();
+    assert!(next.take_over(&h));
+    assert_eq!(next.hub().backlog.len(), relay.hub().backlog.len());
+    (next, want, signon)
+}
+
+/// Handed to the next process, the clients go on with a full update: no signon, their string
+/// tables the demo's still, and what a client coming in later is given is what they were.
+#[test]
+fn clients_handed_over_go_on_where_they_were_with_a_full_update() {
+    let mut b = bench_with_one_in();
+    let (next, mut want, signon) = upward_played_to_a_client(&mut b);
+    let had = next.hub().backlog.len();
+    let playback = Playback::new(want.clone());
+    let mut p = Player::new(&next);
+    assert!(p.open_wanted(&want, &playback).is_continue());
+    assert_eq!(i64::from(want.tick) / 100, p.cur.as_ref().unwrap().tick() / 100, "where it was");
+    want.tick += 2000;
+    for _ in 0..20 {
+        p.step(&want).unwrap();
+        // It acks what it is sent.
+        for c in next.hub().clients.values_mut() {
+            c.outgoing = None;
+            c.queue.clear();
+        }
+    }
+    assert!(client_tables_are_the_demos(&next, &p, signon).is_some());
+    let hub = next.hub();
+    let c = hub.clients.values().next().unwrap();
+    assert_eq!(
+        (c.phase, c.cursor, c.reconnecting),
+        (Phase::Active, hub.backlog.len(), false),
+        "a full update, no signon"
+    );
+    assert!((had..hub.backlog.len()).all(|i| hub.backlog.get(i).unwrap().gate.is_none()));
+}
+
+/// Wanted on another demo than they are signed on to, the clients taken over sign on again,
+/// connected still.
+#[test]
+fn clients_handed_over_sign_on_again_when_the_room_is_on_another_demo() {
+    let mut b = bench_with_one_in();
+    let (next, mut want, _) = upward_played_to_a_client(&mut b);
+    let dir = std::env::temp_dir().join(format!("stvtf-other-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    want.demo = dir.join("other.dem");
+    std::fs::copy(crate::fixture("pl_upward.dem"), &want.demo).unwrap();
+    let playback = Playback::new(want.clone());
+    let mut p = Player::new(&next);
+    assert!(p.open_wanted(&want, &playback).is_continue());
+    std::fs::remove_dir_all(&dir).unwrap();
+    let hub = next.hub();
+    let c = hub.clients.values().next().unwrap();
+    assert_eq!((c.phase, c.reconnecting), (Phase::Signon, true));
 }

@@ -356,6 +356,12 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   has the string tables of later on: where an entry of `userinfo` (a player left or joined) or
   `instancebaseline` changed value since, it is first sent those entries as they were
   (`svc_UpdateStringTable`), and the stream's own changes again when playback comes to them.
+- A playing relay hands its clients to the process after it (`Playback::hand_over`, then
+  `Relay::take_over` on a relay bound to the same address): each client's connection (sequence
+  numbers, reliable state, challenge), all they were sent since their signon, and where the demo
+  was. The next relay decodes the demo up to there, giving them nothing, and goes on with a full
+  update; wanted on another demo, or with no frame there, it signs them on again, connected
+  still. A client in its signon or a transfer when handed over is told to `retry`.
 - A full update (a jump, or a client just in) is followed by the last round start, win panel or
   game over event decoded, so the HUD shows the round's end, or hides it, as at that moment: a
   jump passes over the event that would.
