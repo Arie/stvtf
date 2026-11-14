@@ -87,6 +87,8 @@ lower-case names (`scout` … `engineer`, `unknown`).
 {"type":"status","state":"disconnected","reason":"...","decode_errors":0,"packets":11935,"lost":0}
 {"type":"status","state":"connect_failed","reason":"connect refused: #GameUI_ServerRejectServerFull"}
 {"type":"status","state":"gave_up","reason":"..."}       // not from the CLI: a host of the library reporting watch's error
+{"type":"status","state":"fetching","percent":40}        // not from the CLI: a host fetching a recording (null if unknown)
+{"type":"status","state":"decoding"}                     // not from the CLI: a host decoding a recording it fetched
 {"type":"status","state":"relay","listen":"0.0.0.0:27121"} // with --relay: clients can watch through this address
 ```
 
@@ -296,8 +298,9 @@ For "fired" markers, diff the projectile ids of consecutive snapshots.
 
 ```
 stvtf connect HOST:PORT … --relay 0.0.0.0:27121 [--relay-password PW] [--relay-slots 10]
-stvtf relay   HOST:PORT|FILE.cap [--listen 0.0.0.0:27020] [--relay-password PW] [--relay-slots 10]
-              [--password tv] [--name …] [--tables …] [--crc …] [--build N] [--speed 1]
+stvtf relay   HOST:PORT|FILE.cap|FILE.dem [--listen 0.0.0.0:27020] [--relay-password PW]
+              [--relay-slots 10] [--password tv] [--name …] [--tables …] [--crc …] [--build N]
+              [--speed 1]
 ```
 
 `--relay` passes the server on to TF2 clients (or other stvtf watchers) that connect to that
@@ -315,6 +318,13 @@ connection, so it costs the server no slot. In the library it is `Watch::relay`,
   has proved itself by echoing a challenge. `A2S_INFO` first gets a challenge, as on current
   srcds, and a connect with a wrong challenge gets no reply at all. The challenges are derived
   from the address with a secret key, so nothing is stored before a client connects.
+- **Log**: a line each on stderr (in the library, `relay::log_to` takes them instead) for a
+  client that connects, gives a wrong password, leaves or times out (how long it was silent, and
+  which phase it was in for how long), by its name and its address less the last part; and, of a
+  relay playing a demo, for a jump, a pause and playing on, a demo that goes on into another or
+  why it does not, a handover, and a demo that cannot be played. `STVTF_DEBUG=relay` also traces
+  each client's handshake packets, its signon timing, the transfers it is sent, and every 5 s how
+  many of its packets carried server data.
 
 How it works (nothing is re-encoded: clients get the server's own message bits):
 
@@ -325,7 +335,8 @@ How it works (nothing is re-encoded: clients get the server's own message bits):
   full update onward. The relay keeps the datagrams since the last full update (up to 64) and
   sends them to a client that joins in that window. Otherwise it asks the server for a full
   update (tick ack -1), at most once every 2 s, and passes it on. From then on, each datagram's
-  unreliable part goes to the client unchanged.
+  unreliable part goes to the client unchanged. A client that asks for a full update itself (it
+  lost a frame) is given one the same way.
 - A map change restarts the signon on the relay's connection, and every client signs on again.
 - A client that has not been heard from is dropped: after 120 s while it signs on (loading a map
   is silent), after 30 s in the game.
@@ -333,6 +344,12 @@ How it works (nothing is re-encoded: clients get the server's own message bits):
   `net_graph 5` shows the same rates and no packets without entities. Reliable data rides
   along, and only a server silent for 100 ms gets a keepalive in between. Signon transfers go
   out on all eight subchannels at once.
+
+Given a capture, `relay` replays the capture's first session instead of connecting, at `--speed`:
+it starts when the first client connects and pauses while a client signs on. `tests/relay.rs`
+connects stvtf to it and gets the same output as `stvtf replay`. A client that joins a capture
+outside the 64-datagram window gets no entities, since a capture cannot be asked for a full
+update.
 
 ### Playing a demo
 
@@ -343,70 +360,75 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
 
 - Frames go out at their own pace, up to the moment wanted, each when its own `net_Tick` is due
   (an STV demo has no frames while the server is paused). Off from it by more than a second,
-  playback jumps: it decodes on without sending (back, from the demo's start), and every client
-  gets a full update of where it went, and whether the match is paused there. A thread decodes
-  the whole demo on the side as soon as it is opened (following a growing one), keeping a
-  checkpoint every 2000 ticks (30 s): a jump decodes from the last one before where it goes, so at
-  most 30 s of the match (decoding with what a full update needs runs at about 500 times game
-  speed). A checkpoint is the string table changes so far, a full update and the frames after it,
-  and where the file goes on. A client is made to sign on again (`net_SignonState(CONNECTED)`
-  first, as a server's reconnect) only for another demo file, and never while it is still in a
-  signon: the next demo waits until every client is through, 30 s at most, and one still signing on
-  then is dropped, with a reason (it can `retry`), not signed on a second time. After a jump back it
-  has the string tables of later on: where an entry of `userinfo` (a player left or joined) or
-  `instancebaseline` changed value since, it is first sent those entries as they were
-  (`svc_UpdateStringTable`), and the stream's own changes again when playback comes to them.
+  playback jumps: it decodes on without sending (back, from before there), and every client gets
+  a full update of where it went, and whether the match is paused there.
+- A thread decodes the whole demo on the side as soon as it is opened (following a growing one),
+  keeping a checkpoint every 2000 ticks (30 s): a jump decodes from the last one before where it
+  goes, so at most 30 s of the match (decoding with what a full update needs runs at about 500
+  times game speed). A checkpoint is the string table changes so far, a full update and the
+  frames after it, and where the file goes on.
+- The string tables follow a jump. Ahead, the clients are sent the changes passed over. Back,
+  they have the tables of later on: where an entry of `userinfo` (a player left or joined) or
+  `instancebaseline` changed value since, they are first sent those entries as they were
+  (`svc_UpdateStringTable`), and the stream's own changes again when playback comes to them;
+  where those cannot be written, they sign on again.
+- A client signs on again (`net_SignonState(CONNECTED)` first, as a server's reconnect) for
+  another demo file, unless that one goes on from the one playing, and never while it is still in
+  a signon: the next demo waits until every client is through, 30 s at most, and one still signing
+  on then is dropped, with a reason (it can `retry`), not signed on a second time.
 - Another demo of the same map load of the same server (its ServerInfo says so: a match
-  recorded again, by the next process) goes on from the one playing with no signon, once that one
-  was played up to where the other begins: the clients keep what they have and get a full
+  recorded again, by the next process) goes on from the one playing with no signon: the one
+  playing is decoded up to where the other begins, the clients keep what they have and get a full
   update, and the new demo's signon is what a client coming in later is given. Not when the one
   playing ends before the other begins, nor when a later client would get the relay's laser
   elsewhere than they have it: then they sign on again.
+- A full update is written from the decoded entities (`decode::world`): each entity entering
+  with its props that differ from its class's static baseline, as a server writes one. A client
+  gets one when it comes in, when it asks for one, and after a jump, a pause and playing on;
+  nothing is asked of a game server. It is of the frame the demo's next one builds on (in a
+  recorded live session, the last one stvtf acked, often a few ticks back). A frame of the demo
+  the clients in the game cannot follow (a full update, or a delta from a frame older than they
+  may hold) is not sent: they get such a full update instead.
 - A game client sent a delta from a frame it lacks crashes, and any datagram may be lost, so a
-  playing relay does as a server: each client's entities are a delta from the frame that client
-  last acked (the demo's own when that is the one it builds on, else written anew, listing every
-  prop that changed on the way), a full update comes first and is acked before any delta, and a
-  client whose acked frame is no longer kept (3 s of ticks are) gets a full update again.
-- A playing relay hands its clients to the process after it (`Playback::hand_over`, then
-  `Relay::take_over` on a relay bound to the same address): each client's connection (sequence
-  numbers, reliable state, challenge), all they were sent since their signon, and where the demo
-  was. The next relay decodes the demo up to there, giving them nothing, and goes on with a full
-  update; wanted on another demo, or with no frame there, it signs them on again, connected
-  still. A client in its signon or a transfer when handed over is told to `retry`.
-- A full update (a jump, or a client just in) is followed by the last round start, win panel or
-  game over event decoded, so the HUD shows the round's end, or hides it, as at that moment: a
-  jump passes over the event that would.
+  playing relay does as a server. A client gets no entities until it acks its full update, and
+  another full update if it has not in 600 ms. From then on each frame's entities are a delta
+  from the frame that client last acked: the demo's own when that is the one it builds on, else
+  written anew, listing every prop that changed on the way. A client whose acked frame is no
+  longer kept (3 s of ticks are, 128 frames at most) gets a full update again.
+- A full update is followed by the last round start, win panel or game over event decoded, so
+  the HUD shows the round's end, or hides it, as at that moment: a jump passes over the event
+  that would.
+- A playing relay hands its clients to the process after it (`Playback::hand_over` gives a
+  `Handover`, which serializes, then `Relay::take_over` on a relay bound to the same address):
+  each client's connection (sequence numbers, reliable state, challenge), all they were sent
+  since their signon, and where the demo was. The next relay decodes the demo up to there, giving
+  them nothing, and goes on with a full update; wanted on another demo, or with no frame there,
+  it signs them on again, connected still. A client still in its signon or a transfer a second
+  after the handover is asked for is told to `retry`.
 - An STV demo's signon states carry another spawn count than its ServerInfo; a game client
   refuses that, so they are given the ServerInfo's.
 - A frame's own `net_SignonState` (the changelevel a demo ends with) is not passed on: a game
   client would leave the map for one. A client's signon is the relay's.
-- A client that joins, loses a frame or follows a jump ahead gets a full update written from the
-  decoded entities (`decode::world`): each entity entering with its props that differ from its
-  class's static baseline, as a server writes one. It is of the frame the next one builds on
-  (in a recorded live session, the last one stvtf acked, often a few ticks back; the decoder
-  keeps the frames since), followed by the frames played since then, so the demo's own frames
-  build on what the client has. Nothing is asked of a game server. A frame of the demo the clients
-  in the game cannot follow (a full update, or a delta from a frame older than they may hold) is
-  replaced by such a full update too.
-- Paused, no frames go out, and the clients get `svc_SetPause`.
-- With nobody in, nothing is decoded, and after a minute what was decoded is dropped.
-- A demo whose class tables are not this build's cannot be played: a game client builds its
-  classes from its own game, so `Playback::problem` says why and nothing is sent.
+- Paused, no frames go out. The clients are not told, so their clock runs on: their full update
+  holds the round timers where they are, and playing on they get another. The match's own pauses
+  in the demo they are told (`svc_SetPause`).
+- A `Playback` also holds what a room shows the clients in the game besides the demo: beams
+  (`keep_beams`, drawn with a laser model the relay loads for them), notes (`keep_notes`, the
+  game's text bubbles), a light (`keep_light`), voice as a player's own (`push_voice`) and a
+  camera (`Want::camera`, in place of the demo's director cues).
+- With nobody in, nothing is played, and after a minute what was decoded is dropped.
+- A demo that cannot be played gives the clients nothing: `Playback::problem` says why, and the
+  log once. One that is not there, or not written up to the end of its signon, is tried again
+  every 200 ms. Any other is not tried again: one whose class tables are not this build's, say,
+  as a game client builds its classes from its own game.
 
 ### Recording demos
 
 `Watch::demos` records the session as `.dem` files, one per connection (a reconnect or a new map
-starts another): the data tables of the build, the signon the connection got, then a frame per
-`net_Tick`, every message as the server sent it. The header's counts are written every 100 ms, so
-a file can be played while it is being written.
-
-`STVTF_DEBUG=relay` traces each client's handshake packets, its signon timing, the transfers it
-is sent, and every 5 s how many of its packets carried server data.
-
-Given a capture, `relay` replays the capture's first session instead of connecting: it starts
-when the first client connects and pauses while a client signs on. `tests/relay.rs` connects
-stvtf to it and gets the same output as `stvtf replay`. A client that joins a capture outside
-the 64-datagram window gets no entities, since a capture cannot be asked for a full update.
+starts another): the signon the connection got, with the data tables of the build, then a frame
+per `net_Tick`, every message as the server sent it. Every frame reaches the file at once and the
+header's counts are written every 100 ms, so a file can be played while it is being written.
+`demo::with_voice` copies a demo with voice written into it, as the game's own voice messages.
 
 ## Known limits
 
@@ -448,6 +470,7 @@ Install Rust with [rustup](https://rustup.rs); `rust-toolchain.toml` picks stabl
 cargo fmt --all --check                           # format (settings in rustfmt.toml)
 cargo clippy --all-targets -- -D warnings         # lint (lint set in Cargo.toml [lints])
 cargo test                                        # tests
+RUSTDOCFLAGS='-D warnings' cargo doc --no-deps    # the library's docs build
 cargo deny check                                  # advisories and licenses (cargo install cargo-deny)
 ```
 
@@ -464,8 +487,9 @@ match (`tests/fixtures/pl_upward.dem`) and `tests/flags.rs` a bball match
 (`tests/fixtures/ctf_turbine.dem`) for votes and medic defences. `tests/modes.rs` runs the starts
 of pass time, robot and player destruction, special delivery, Mann vs. Machine and territorial
 control matches. `src/recovery.rs` loses packets on purpose against a fake server that answers
-requests for full updates. `tests/relay.rs` connects clients to a relay, and `tests/cli.rs` runs the program
-itself, from a made-up relay password to `connect --record` and a replay of the recording.
+requests for full updates. `tests/relay.rs` connects clients to a relay of a capture,
+`tests/play.rs` to one playing a demo, and `tests/cli.rs` runs the program itself, from a made-up
+relay password to `connect --record` and a replay of the recording.
 `src/hostile.rs` feeds every parser seeded garbage and corrupted traffic; `STVTF_FUZZ_ROUNDS=100`
 multiplies how much and `STVTF_FUZZ_SEED=N` picks other inputs; CI does both weekly. `fuzz/` holds coverage-guided
 fuzz targets for the same parsers, which CI also runs weekly (a crash's input is kept as a build
