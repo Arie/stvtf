@@ -3,7 +3,9 @@
 use super::beams::Kept;
 use super::cursor::{Cursor, owned};
 use super::index::Index;
-use super::{CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, Want, light, notes, voice};
+use super::{
+    CUE_EVERY, Camera, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, Playback, RETRY, RETRY_MAX, Want, light, notes, voice,
+};
 use crate::decode::ModelsSent;
 use crate::lock;
 use crate::relay::{Hub, Relay};
@@ -11,7 +13,7 @@ use anyhow::Result;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(super) struct Player<'r> {
     pub(super) relay: &'r Relay,
@@ -31,6 +33,8 @@ pub(super) struct Player<'r> {
     problem: Option<String>,
     /// The demo that could not be opened, and why, as last logged: said once, not every try.
     refused: Option<(std::path::PathBuf, String)>,
+    /// The demo being tried again, and the wait before the next try.
+    retrying: Option<(std::path::PathBuf, Duration)>,
     /// A demo that will never open (another TF2 build's, say): not tried again.
     pub(super) given_up: Option<std::path::PathBuf>,
     /// Checkpoints through the demo playing, made on the side.
@@ -79,6 +83,7 @@ impl<'r> Player<'r> {
             dry: false,
             problem: None,
             refused: None,
+            retrying: None,
             given_up: None,
             index: None,
             cued: None,
@@ -127,7 +132,7 @@ impl Player<'_> {
     }
 
     /// Opens the demo `want` names unless it is playing, once no signon is held: break while it is,
-    /// or the demo cannot be opened. One not written yet is tried again every [`RETRY`]; one that
+    /// or the demo cannot be opened. One not written yet is tried again, each wait longer; one that
     /// will never open, not again.
     pub(super) fn open_wanted(&mut self, want: &Want, playback: &Playback) -> ControlFlow<()> {
         if self.cur.as_ref().is_some_and(|c| c.path == want.demo) {
@@ -153,6 +158,7 @@ impl Player<'_> {
             Ok(c) => {
                 self.start_demo(c);
                 self.refused = None;
+                self.retrying = None;
                 playback.set_problem(None);
                 if self.index.as_ref().is_none_or(|i| i.path != want.demo) {
                     self.index = Some(Index::shared(&want.demo));
@@ -168,10 +174,17 @@ impl Player<'_> {
                     log!("cannot play {}: {why}", want.demo.display());
                 }
                 playback.set_problem(Some(why));
-                std::thread::sleep(RETRY);
+                std::thread::sleep(self.retry_in(&want.demo));
                 ControlFlow::Break(())
             }
         }
+    }
+
+    /// How long until `demo` is tried again: [`RETRY`], then twice the last, up to [`RETRY_MAX`].
+    pub(super) fn retry_in(&mut self, demo: &std::path::Path) -> Duration {
+        let wait = self.retrying.take().filter(|(d, _)| d == demo).map_or(RETRY, |(_, w)| w);
+        self.retrying = Some((demo.to_owned(), (wait * 2).min(RETRY_MAX)));
+        wait
     }
 
     /// Whether `demo` not opening for `why` is news.
