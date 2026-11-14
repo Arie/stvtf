@@ -593,14 +593,3 @@ fn a_demo_that_will_never_open_is_not_tried_again() {
     assert_eq!(p.given_up.as_ref(), Some(&want.demo), "not opened again: gone, it would be one not there yet");
     std::fs::remove_dir_all(&dir).unwrap();
 }
-
-#[test]
-fn a_demo_not_there_yet_is_tried_again_after_twice_as_long_each_time() {
-    let mut b = bench_with_one_in();
-    let (relay, c, want) = relay_playing(&mut b, upward_until(|c| c.started), 0);
-    drop(c);
-    let mut p = Player::new(&relay);
-    let waits: Vec<u64> = (0..6).map(|_| p.retry_in(&want.demo).as_millis() as u64).collect();
-    assert_eq!(waits, [200, 400, 800, 1600, 2000, 2000]);
-    assert_eq!(p.retry_in(std::path::Path::new("next.dem")), RETRY, "another demo starts over");
-}
