@@ -522,6 +522,26 @@ fn sent_to(b: &Bench) -> Vec<ClientMsg> {
     sent
 }
 
+/// A `Full` sent after a reconnect is no answer to it.
+#[test]
+fn a_state_of_the_signon_left_is_no_answer_to_a_reconnect() {
+    let mut b = Bench::new("", 2);
+    b.hub.backlog.push(BitBuf::from_bytes(vec![1]), None);
+    b.connect();
+    let now = Instant::now();
+    b.client_sends(1, &messages::signonstate(Signon::Connected, -1));
+    b.hub.clients.get_mut(&b.addr).unwrap().set_phase(Phase::Active, now);
+    b.hub.reconnect_all();
+    b.hub.restart_signon(now);
+    b.client_sends(2, &messages::signonstate(Signon::Full, -1));
+    let c = &b.hub.clients[&b.addr];
+    assert!(c.reconnecting && c.gate.is_some() && c.phase == Phase::Signon, "still to answer");
+    assert!(b.hub.hold_for_signon(now), "another signon waits for it");
+    b.client_sends(3, &messages::signonstate(Signon::Connected, -1));
+    let c = &b.hub.clients[&b.addr];
+    assert!(!c.reconnecting && c.gate.is_none(), "answered");
+}
+
 /// At the hold's end a client still in its signon is dropped, told why, before the next goes: a
 /// second signon crashes a game client. One in the game stays.
 #[test]

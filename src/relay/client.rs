@@ -213,6 +213,10 @@ impl Client {
                 match m {
                     ClientMsg::Signon(s) => {
                         trace!("{from} signon {s:?} at {} ms", now.duration_since(self.connected).as_millis());
+                        // Only the answer to a reconnect counts.
+                        if self.reconnecting && s != Signon::Connected {
+                            continue;
+                        }
                         self.past_connected |= s > Signon::Connected;
                         self.reconnecting &= s < Signon::Connected;
                         if self.gate.is_some_and(|g| s >= g) {
