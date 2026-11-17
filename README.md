@@ -47,7 +47,7 @@ zero-width characters). Escape them before display.
 SourceTV sends no class tables: the client builds them from its game DLL and proves it with
 a SendTable CRC at signon. The tables come from any demo of the build, and the CRC from them
 (the engine's `SendTable_ComputeCRC`, over each server class's send table). Known builds are
-compiled in (`BUILDS` in `src/lib.rs`, tables in `assets/`); the newest is `CURRENT_BUILD`.
+compiled in (`BUILDS` in `src/builds.rs`, tables in `assets/`); the newest is `builds::CURRENT`.
 The server refuses any build but its own, so each connection attempt offers the build from the
 STV port's A2S_INFO reply, shown in the `connecting` status. Without a usable reply it offers the
 last build it did, or the current one. A build it has no data for gets the current build's
