@@ -92,7 +92,7 @@ fn write_signonstate(w: &mut BitWriter, state: Signon, spawncount: i32) {
 pub fn connected_reply(name: &str) -> BitBuf {
     let mut w = BitWriter::new();
     w.write_bits(NET_SETCONVAR, TYPE_BITS);
-    w.write_u8(u8::try_from(USERINFO.len()).expect("USERINFO fits a u8 count"));
+    w.write_u8(u8::try_from(USERINFO.len()).expect("internal error: USERINFO has over 255 entries"));
     for (k, v) in USERINFO {
         w.write_string(k);
         w.write_string(if *k == "name" { name } else { v });
@@ -180,7 +180,7 @@ pub fn reliable_region(body: &BitBuf, subchannel: u8) -> BitBuf {
     w.write_bit(true); // messages follow
     w.write_bit(false); // in one block
     w.write_bit(false); // uncompressed
-    w.write_varint32(u32::try_from(body.bytes().len()).expect("client messages are small"));
+    w.write_varint32(u32::try_from(body.bytes().len()).expect("internal error: a client message is over 4 GiB"));
     w.write_bytes(body.bytes());
     w.write_bit(false); // no files
     w.finish()

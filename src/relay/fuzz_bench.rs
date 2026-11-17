@@ -17,8 +17,8 @@ pub(crate) struct FuzzBench {
 
 impl FuzzBench {
     pub(crate) fn new() -> Self {
-        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let client: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let sock = UdpSocket::bind("127.0.0.1:0").expect("internal error: no local UDP port for the fuzz bench");
+        let client: SocketAddr = SocketAddr::from(([127, 0, 0, 1], 9));
         let config = RelayConfig { password: String::new(), ..RelayConfig::new("127.0.0.1:0") };
         let mut hub = Hub::new(sock, &config);
         let now = Instant::now();

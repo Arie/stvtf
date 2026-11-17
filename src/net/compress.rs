@@ -93,7 +93,9 @@ pub fn inflate_datagram(datagram: &[u8]) -> Result<Vec<u8>> {
 pub fn snappy_transfer(data: &[u8]) -> Vec<u8> {
     let mut out = SNAPPY_MAGIC.to_vec();
     // Compressing a slice into a Vec only fails for inputs over 4 GiB.
-    out.extend_from_slice(&snap::raw::Encoder::new().compress_vec(data).expect("compressible size"));
+    out.extend_from_slice(
+        &snap::raw::Encoder::new().compress_vec(data).expect("internal error: a datagram is too large for Snappy"),
+    );
     out
 }
 

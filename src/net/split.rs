@@ -87,7 +87,7 @@ pub const SPLIT_SIZE: usize = 1200;
 /// Cuts a datagram too large for one packet into `-2` parts of group `group`.
 pub fn split(datagram: &[u8], group: i32) -> Vec<Vec<u8>> {
     let chunks: Vec<&[u8]> = datagram.chunks(SPLIT_SIZE).collect();
-    let count = u8::try_from(chunks.len()).expect("datagrams stay under 128 parts");
+    let count = u8::try_from(chunks.len()).expect("internal error: a datagram split into over 255 parts");
     chunks
         .iter()
         .enumerate()

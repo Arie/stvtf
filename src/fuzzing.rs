@@ -81,11 +81,13 @@ pub fn relay_hub(data: &[u8]) {
     bench.service();
 }
 
-static TABLES: LazyLock<Tables> = LazyLock::new(|| crate::builds::tables(crate::builds::CURRENT, None).unwrap());
+static TABLES: LazyLock<Tables> =
+    LazyLock::new(|| crate::builds::tables(crate::builds::CURRENT, None).expect("internal error: no tables built in"));
 
 /// Message streams into a new decoder, as they come out of a channel.
 pub fn decoder(data: &[u8]) {
-    let mut decoder = Decoder::new(&TABLES, crate::DEFAULT_SNAPSHOT_HZ).unwrap();
+    let mut decoder =
+        Decoder::new(&TABLES, crate::DEFAULT_SNAPSHOT_HZ).expect("internal error: the built-in tables do not decode");
     for piece in pieces(data) {
         let _ = decoder.feed(piece, piece.len() * 8);
     }
@@ -94,8 +96,8 @@ pub fn decoder(data: &[u8]) {
 /// Inputs for [`channel`] and [`decoder`] from a real capture: the fuzzer starts from traffic that
 /// gets far, not from nothing. Each is `(channel, decoder)`.
 pub fn seeds(capture_bytes: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let records = capture::read(capture_bytes).unwrap();
-    let challenge = records[0].challenge().unwrap();
+    let records = capture::read(capture_bytes).expect("internal error: the seed capture does not read");
+    let challenge = records[0].challenge().expect("internal error: the seed capture has no session first");
     let mut rx = Receiver::new(Some(challenge));
     let now = Instant::now();
     let prefixed = |p: &[u8]| {
