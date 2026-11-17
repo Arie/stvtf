@@ -9,7 +9,7 @@ use tf_demo_parser::demo::message::usermessage::{ChatMessageKind, UserMessage};
 use tf_demo_parser::demo::parser::analyser::{Class, Team};
 
 use super::convert::{building_kind, medigun_kind, projectile_kind, resist, strip_colors, team_num, *};
-use super::events::*;
+use super::events::round_event;
 use super::extractor::Extractor;
 use super::limits::{
     COND_BITS, COND_WORDS, FLAMETHROWER_FIRING, MY_WEAPON_SLOTS, PROP_MY_WEAPONS, RESIST_BLAST, RESIST_BULLET,
