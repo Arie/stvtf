@@ -174,6 +174,9 @@ pub(crate) enum Entities {
     Delta(u32),
 }
 
+/// A stream's own baselines (see [`Decoder::baselines`]).
+pub(crate) struct Baselines(Box<[tf_demo_parser::demo::parser::state::Baseline; 2]>);
+
 pub(crate) struct Decoder {
     handler: DemoHandler<Extractor>,
     snapshot_hz: f32,
@@ -258,6 +261,24 @@ impl Decoder {
         Some(w.finish())
     }
 
+    /// Whether the stream's entity messages are for no client as they are (see `world`).
+    pub(crate) fn own_baselines(&self) -> bool {
+        self.world.as_ref().is_some_and(world::World::own_baselines)
+    }
+
+    /// The stream's own baselines, for a decoder that goes on from here.
+    pub(crate) fn baselines(&self) -> Option<Baselines> {
+        self.own_baselines().then(|| Baselines(Box::new(self.handler.get_parser_state().instance_baselines.clone())))
+    }
+
+    /// Goes on with `baselines`, another decoder's there.
+    pub(crate) fn set_baselines(&mut self, baselines: &Baselines) {
+        self.handler.state_handler.instance_baselines.clone_from(&baselines.0);
+        if let Some(w) = &mut self.world {
+            w.set_own_baselines();
+        }
+    }
+
     /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
     /// tick): those after it, each as played if the client still has the frame it builds on, else
     /// (from a live server, a frame a few ticks back) rewritten as a delta from `key`, or failing
@@ -268,11 +289,12 @@ impl Decoder {
         let state = self.handler.get_parser_state();
         let mut have = vec![key];
         let mut out = Vec::new();
+        let own = world.own_baselines();
         for (tick, bits) in recent.iter().filter(|(t, _)| *t > key) {
             match self.entities(bits.bytes()) {
                 // No entities in it: nothing builds on it.
                 None => out.push(bits.clone()),
-                Some(Entities::Delta(base)) if have.contains(&base) => {
+                Some(Entities::Delta(base)) if have.contains(&base) && !own => {
                     out.push(bits.clone());
                     have.retain(|t| *t >= base);
                 }
@@ -285,6 +307,7 @@ impl Decoder {
                             out.push(d);
                             have.retain(|t| *t >= from);
                         }
+                        None if own => {}
                         None => out.push(bits.clone()),
                     }
                 }

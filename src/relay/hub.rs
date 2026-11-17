@@ -62,6 +62,8 @@ pub(super) struct Played {
     pub(super) from: HashMap<u32, BitBuf>,
     /// Its stream without the entities, for a client that can take none of those.
     pub(super) bare: BitBuf,
+    /// Its own entities are for no client (see `decode::world`): only those in `from`.
+    pub(super) rewritten: bool,
 }
 
 impl Played {
@@ -74,7 +76,7 @@ impl Played {
                 c.keyed_at(self.tick, now);
                 return played;
             }
-            (Some(base), Some(acked)) if base == acked => played,
+            (Some(base), Some(acked)) if base == acked && !self.rewritten => played,
             (Some(_), Some(acked)) => self.from.get(&acked),
             (Some(_), None) => None,
         };

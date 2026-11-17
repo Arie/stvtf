@@ -15,7 +15,9 @@ impl Player<'_> {
     pub(super) fn play_frame(&mut self, camera: Option<Camera>) {
         let Some(c) = &mut self.cur else { return };
         let base = c.next_frame().and_then(|d| c.dec.entities(d));
-        if !follows(self.floor, base) {
+        // With baselines of its own every frame is written anew, from what each client acked.
+        let floor = if c.dec.own_baselines() { None } else { self.floor };
+        if !follows(floor, base) {
             trace!(
                 "a frame the clients cannot follow, from {base:?}, they have from {:?}: a full update instead",
                 self.floor
@@ -42,10 +44,11 @@ impl Player<'_> {
                 Entities::Delta(base) => Some(base),
             };
             // From each frame a client acked: it has that one for sure.
-            let from = hub.acked().into_iter().filter(|a| base.is_some_and(|b| b != *a));
+            let rewritten = c.dec.own_baselines();
+            let from = hub.acked().into_iter().filter(|a| rewritten || base.is_some_and(|b| b != *a));
             let from = from.filter_map(|a| Some((a, with_entities(&bits, &life, &c.dec.entities_from(a)?)))).collect();
             let stripped = without_entities(&bits, &life);
-            hub.play(Played { tick: c.dec.server_tick(), base, from, bare: stripped });
+            hub.play(Played { tick: c.dec.server_tick(), base, from, bare: stripped, rewritten });
         }
         hub.upstream_stream(&bits, Part::Unreliable, &life);
         hub.upstream_flush();

@@ -11,7 +11,7 @@
 
 use super::cursor::Cursor;
 use super::{NOT_A_FRAME, RECENT};
-use crate::decode::Placed;
+use crate::decode::{Baselines, Placed};
 use crate::lock;
 use crate::net::bits::BitBuf;
 use anyhow::Result;
@@ -43,6 +43,8 @@ pub(super) struct Checkpoint {
     round: Option<BitBuf>,
     /// Baseline placement.
     placed: Placed,
+    /// The stream's own baselines, if it uses any.
+    baselines: Option<Baselines>,
 }
 
 impl Checkpoint {
@@ -154,6 +156,7 @@ impl Cursor {
             paused: self.paused,
             round: self.dec.round_event(),
             placed: self.dec.placed(),
+            baselines: self.dec.baselines(),
         })
     }
 
@@ -170,6 +173,10 @@ impl Cursor {
         c.dec.take_output();
         c.dec.set_round_event(mark.round.clone());
         c.dec.set_placed(mark.placed.clone());
+        // After the frames written here, which use none.
+        if let Some(b) = &mark.baselines {
+            c.dec.set_baselines(b);
+        }
         c.reader.seek_to(mark.pos)?;
         c.next = None;
         c.next_pos = mark.pos;

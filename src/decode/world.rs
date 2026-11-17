@@ -7,10 +7,9 @@
 //!
 //! A delta builds on the frame it names, which from a live `SourceTV` is the last one acked, often
 //! a few ticks back: the frames since are kept (entities shared between them), as a game client
-//! keeps them. An entity entering on a baseline of the stream's own (`updated_base_line`) cannot be
-//! followed from a full update, as the client lacks that baseline: a server sends such baselines to
-//! a viewer that acks them, which stvtf never does, so they stay unused, but if one is used no full
-//! update is written.
+//! keeps them. A stream with baselines of its own (`updated_base_line`: a player's demo, whose game
+//! acked them) has entities enter on them, which a client started from a full update lacks: none of
+//! its entity messages are for a client then, each is written anew (see [`World::own_baselines`]).
 
 use crate::net::bits::{BitBuf, BitWriter};
 use crate::net::messages::{self, SVC_PACKETENTITIES};
@@ -107,17 +106,29 @@ impl Frame {
 #[cfg(test)]
 pub(crate) type Dumped = (u16, u32, Vec<(u32, String)>);
 
+/// Whose baselines a stream's entities enter on.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Baselines {
+    /// Their class's.
+    #[default]
+    Static,
+    /// Their class's, and its full update sets baselines (as a server's to a viewer does): a
+    /// keyframe does the same, so the client keeps the baselines the stream's frames expect.
+    SetByFull,
+    /// Its own (see [`World::own_baselines`]). Stays so.
+    Own,
+}
+
 #[derive(Default)]
 pub(crate) struct World {
     /// The frames by server tick, oldest first: the last is the latest.
     frames: VecDeque<(u32, Frame)>,
     max_entries: u16,
-    /// No full update came yet, or a frame was lost or built on a baseline of its own since.
+    /// No full update came yet, or a frame was lost since.
     broken: bool,
     seen_full: bool,
-    /// Whether the stream's full update set baselines (as a server's to a viewer does): a
-    /// keyframe does the same, so the client keeps the baselines the stream's frames expect.
-    full_sets_baselines: bool,
+    /// Whose baselines the stream's entities enter on.
+    baselines: Baselines,
 }
 
 impl World {
@@ -129,7 +140,9 @@ impl World {
             None => {
                 self.broken = false;
                 self.seen_full = true;
-                self.full_sets_baselines = pe.updated_base_line;
+                if self.baselines != Baselines::Own {
+                    self.baselines = if pe.updated_base_line { Baselines::SetByFull } else { Baselines::Static };
+                }
                 Frame::default()
             }
             Some(base) => {
@@ -142,6 +155,9 @@ impl World {
             }
         };
         let dynamic = &state.instance_baselines[usize::from(pe.base_line == BaselineIndex::Second)];
+        if pe.delta.is_some() && (pe.updated_base_line || pe.base_line == BaselineIndex::Second) {
+            self.baselines = Baselines::Own;
+        }
         for e in &pe.entities {
             let index = u32::from(e.entity_index);
             match e.update_type {
@@ -150,12 +166,17 @@ impl World {
                         self.broken = true;
                         continue;
                     };
+                    let mut props = Props::default();
                     if pe.delta.is_some()
                         && dynamic.get(e.entity_index).is_some_and(|b| b.server_class == e.server_class)
                     {
-                        self.broken = true;
+                        self.baselines = Baselines::Own;
+                        // The parser keeps such a baseline as the props sent; a game has it over
+                        // the class's.
+                        for p in state.get_static_baseline(e.server_class, table).unwrap_or_default() {
+                            props.set(&p);
+                        }
                     }
-                    let mut props = Props::default();
                     if let Ok(base) =
                         state.get_baseline(pe.base_line, e.entity_index, e.server_class, table, pe.delta.is_some())
                     {
@@ -196,6 +217,16 @@ impl World {
         if self.frames.len() > MAX_FRAMES {
             self.frames.pop_front();
         }
+    }
+
+    /// Whether the stream's deltas use baselines of its own, which no client of ours has: its
+    /// entity messages are then for nobody as they are. Stays so.
+    pub(crate) fn own_baselines(&self) -> bool {
+        self.baselines == Baselines::Own
+    }
+
+    pub(crate) fn set_own_baselines(&mut self) {
+        self.baselines = Baselines::Own;
     }
 
     /// Whether frame `tick` is kept.
@@ -275,7 +306,7 @@ impl World {
             max_entries: self.max_entries,
             delta: None,
             base_line: BaselineIndex::First,
-            updated_base_line: self.full_sets_baselines,
+            updated_base_line: self.baselines == Baselines::SetByFull,
         };
         Some((tick, encode(state, &msg, tick)?))
     }
