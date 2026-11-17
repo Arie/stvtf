@@ -56,7 +56,7 @@ pub fn gunzipped(name: &str) -> String {
 
 /// The current build's built-in tables.
 pub fn tables() -> Tables {
-    Tables::from_demo_bytes(stvtf::builtin(stvtf::CURRENT_BUILD).unwrap().tables).unwrap()
+    Tables::from_demo_bytes(stvtf::builds::builtin(stvtf::builds::CURRENT).unwrap().tables).unwrap()
 }
 
 /// A demo file's output.

@@ -209,7 +209,7 @@ pub(crate) mod tests {
         static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let bytes = std::fs::read(crate::fixture(name)).unwrap();
         let records = capture::read(&bytes).unwrap();
-        let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
+        let tables = crate::builds::tables(crate::builds::CURRENT, None).unwrap();
         let mut want = Vec::new();
         capture::replay(&records, &tables, opt, &mut |l| want.push(l)).unwrap();
         let n = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

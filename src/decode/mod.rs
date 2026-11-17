@@ -869,7 +869,7 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Line)) -> 
 
 #[cfg(test)]
 fn tests_tables() -> Tables {
-    crate::watch::tables(crate::CURRENT_BUILD, None).unwrap()
+    crate::builds::tables(crate::builds::CURRENT, None).unwrap()
 }
 
 #[cfg(test)]

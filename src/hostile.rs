@@ -134,7 +134,7 @@ fn captures_never_panic() {
 
 #[test]
 fn garbage_for_the_decoder_never_panics_the_process() {
-    let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
+    let tables = crate::builds::tables(crate::builds::CURRENT, None).unwrap();
     let mut rng = Rng::seeded(5);
     for _ in 0..rounds(40) {
         let mut dec = Decoder::new(&tables, crate::DEFAULT_SNAPSHOT_HZ).unwrap();
@@ -149,7 +149,7 @@ fn garbage_for_the_decoder_never_panics_the_process() {
 /// each change, or the receiver would drop the packet before anything interesting.
 #[test]
 fn corrupted_sessions_never_panic_the_process() {
-    let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
+    let tables = crate::builds::tables(crate::builds::CURRENT, None).unwrap();
     let bytes = std::fs::read(crate::fixture("bots_cp_badlands.cap")).unwrap();
     let records = capture::read(&bytes).unwrap();
     let mut sessions = records.iter().filter(|r| r.kind == capture::Kind::Session as u8);

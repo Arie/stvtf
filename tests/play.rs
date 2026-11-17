@@ -74,7 +74,7 @@ impl Drop for StopOnDrop<'_> {
 fn client<'s>(s: &'s std::thread::Scope<'s, '_>, addr: &str, stop: &'s AtomicBool) -> Seen {
     let seen: Seen = Arc::default();
     let mut w = Watch::new(addr, "pw");
-    w.build = Some(stvtf::CURRENT_BUILD.to_string());
+    w.build = Some(stvtf::builds::CURRENT.to_string());
     w.snapshot_hz = 1000.0;
     w.duration = Some(LIMIT);
     let into = seen.clone();

@@ -118,8 +118,8 @@ impl Args {
 
     /// The tables of `--build`, or of the current build.
     fn tables(&self) -> Result<Tables> {
-        let build = self.get("build").unwrap_or(stvtf::CURRENT_BUILD);
-        watch::tables(build, self.get("tables").map(PathBuf::from).as_deref())
+        let build = self.get("build").unwrap_or(stvtf::builds::CURRENT);
+        stvtf::builds::tables(build, self.get("tables").map(PathBuf::from).as_deref())
     }
 
     /// The file given as the target.

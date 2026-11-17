@@ -65,7 +65,7 @@ impl Recording {
             packets.push(d);
         }
 
-        let tables = watch::tables(crate::CURRENT_BUILD, None).unwrap();
+        let tables = crate::builds::tables(crate::builds::CURRENT, None).unwrap();
         let mut decoder = Decoder::new(&tables, 0.0).unwrap();
         let mut rx = Receiver::new(Some(challenge));
         let complete = packets
@@ -228,7 +228,7 @@ impl LossyLink {
 
 fn watch_of(target: SocketAddr) -> Watch {
     let mut w = Watch::new(&target.to_string(), "");
-    w.build = Some(crate::CURRENT_BUILD.to_string());
+    w.build = Some(crate::builds::CURRENT.to_string());
     w.duration = Some(LIMIT);
     w
 }

@@ -27,7 +27,7 @@ impl Admission {
             slots: config.slots.min(MAX_SLOTS),
             challenge_key: RandomState::new(),
             map: String::new(),
-            build: crate::CURRENT_BUILD.to_string(),
+            build: crate::builds::CURRENT.to_string(),
             seen_client: false,
         }
     }

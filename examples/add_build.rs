@@ -11,7 +11,7 @@
 //! The demo's data tables give the build's `SendTable` CRC. When a compiled-in build has the
 //! same tables, as after most updates, the new build shares them. Otherwise the demo is cut
 //! after its data tables into `assets/tables_BUILD.dem`. Either way the build joins `BUILDS`
-//! in `src/lib.rs`; the newest one there is `CURRENT_BUILD`.
+//! in `src/builds.rs`; the newest one there is `CURRENT`.
 
 #[path = "common/demo.rs"]
 mod demo;
@@ -23,7 +23,7 @@ use std::process::Command;
 use stvtf::decode::Tables;
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-const LIB: &str = "src/lib.rs";
+const LIB: &str = "src/builds.rs";
 const BUILDS_MARK: &str = "    // add_build: builds\n";
 const TABLES_MARK: &str = "// add_build: tables\n";
 
@@ -61,7 +61,7 @@ fn main() -> Result<()> {
     };
     let lib = add_build(&lib, number, &name)?;
     std::fs::write(&lib_path, &lib)?;
-    eprintln!("added to {LIB}; CURRENT_BUILD is {}. Next: cargo test", lib_current(&lib)?);
+    eprintln!("added to {LIB}; CURRENT is {}. Next: cargo test", lib_current(&lib)?);
     Ok(())
 }
 
@@ -201,9 +201,9 @@ const BUILDS: &[(&str, &[u8])] = &[
     #[test]
     fn the_lib_lists_its_tables() {
         let lib = std::fs::read_to_string(Path::new(ROOT).join(LIB)).unwrap();
-        let current = stvtf::builtin(stvtf::CURRENT_BUILD).unwrap().tables;
+        let current = stvtf::builds::builtin(stvtf::builds::CURRENT).unwrap().tables;
         let crc = Tables::from_demo_bytes(current).unwrap().sendtable_crc();
         assert!(known_tables(&lib).unwrap().iter().any(|t| t.1 == crc));
-        assert_eq!(lib_current(&lib).unwrap(), stvtf::CURRENT_BUILD);
+        assert_eq!(lib_current(&lib).unwrap(), stvtf::builds::CURRENT);
     }
 }

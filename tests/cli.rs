@@ -259,7 +259,7 @@ impl Drop for SilentServer {
 fn watch_silent(server: &SilentServer, extra: &[&str]) -> Running {
     Running(
         stvtf()
-            .args(["connect", &server.addr, "--build", stvtf::CURRENT_BUILD])
+            .args(["connect", &server.addr, "--build", stvtf::builds::CURRENT])
             .args(extra)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

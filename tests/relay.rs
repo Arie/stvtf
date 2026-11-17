@@ -93,7 +93,7 @@ fn through_relay(records: &[capture::Record<'_>], opt: &Options, speed: f64) -> 
         Some(format!("the client failed: {e}"))
     } else if relay_lines.first() != Some(&Line::Status(Status::Relay { listen })) {
         Some(format!("the relay's first line was {}", brief(relay_lines.first())))
-    } else if connecting != Some(stvtf::CURRENT_BUILD) {
+    } else if connecting != Some(stvtf::builds::CURRENT) {
         Some(format!("the build from the relay's A2S_INFO was {connecting:?}"))
     } else {
         None
@@ -152,7 +152,7 @@ fn with_replay<T>(name: &str, speed: f64, config: &RelayConfig, client: impl FnO
 /// A watch of a relay, of the current build, ended by its test or else by `LIMIT`.
 fn bounded_watch(addr: &str, password: &str) -> Watch {
     let mut w = Watch::new(addr, password);
-    w.build = Some(stvtf::CURRENT_BUILD.to_string());
+    w.build = Some(stvtf::builds::CURRENT.to_string());
     w.duration = Some(LIMIT);
     w
 }

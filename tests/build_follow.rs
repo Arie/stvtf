@@ -98,7 +98,7 @@ fn an_older_build_than_ours_is_offered_too() {
 
 #[test]
 fn an_implausible_report_offers_the_current_build() {
-    assert_eq!(offered(&["nonsense\"; quit"], 1, |_| {}), [stvtf::CURRENT_BUILD]);
+    assert_eq!(offered(&["nonsense\"; quit"], 1, |_| {}), [stvtf::builds::CURRENT]);
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn a_game_port_leads_to_the_tv_port_beside_it() {
     .next()
     .unwrap();
     let mut w = Watch::new(&game.local_addr().unwrap().to_string(), "tv");
-    w.build = Some(stvtf::CURRENT_BUILD.to_string());
+    w.build = Some(stvtf::builds::CURRENT.to_string());
     w.duration = Some(LIMIT);
     let answer = |sock: &UdpSocket, auth: u32| {
         sock.set_read_timeout(Some(LIMIT)).unwrap();

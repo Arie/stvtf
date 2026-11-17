@@ -7,6 +7,7 @@
 
 #![warn(missing_docs)]
 
+pub mod builds;
 pub mod capture;
 pub mod decode;
 pub mod demo;
@@ -30,19 +31,6 @@ pub use session::{Fatal, Options, parse_snapshot_hz};
 /// [`output::Server::tick_interval`].
 pub const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
-/// The newest TF2 server build compiled in. A build with no data compiled in gets its tables.
-pub const CURRENT_BUILD: &str = BUILDS[0].0;
-
-/// Known TF2 server builds (`A2S_INFO` `version`) and the demo of their data tables, newest first.
-/// Most updates keep the tables, so builds share them. `cargo run --example add_build` adds to it.
-const BUILDS: &[(&str, &[u8])] = &[
-    // add_build: builds
-    ("11185272", TABLES_11138802),
-];
-
-// add_build: tables
-const TABLES_11138802: &[u8] = include_bytes!("../assets/tables_11138802.dem");
-
 /// Locks `m`, whatever a thread that panicked with it left.
 fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -52,16 +40,4 @@ fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")).join(name)
-}
-
-/// Compiled-in data for one TF2 server build.
-#[derive(Debug, Clone, Copy)]
-pub struct Build {
-    /// A demo of that build cut off after its data tables, which give its `SendTable` CRC too.
-    pub tables: &'static [u8],
-}
-
-/// Compiled-in data for known TF2 server builds (`A2S_INFO` `version`).
-pub fn builtin(build: &str) -> Option<Build> {
-    BUILDS.iter().find(|b| b.0 == build).map(|b| Build { tables: b.1 })
 }

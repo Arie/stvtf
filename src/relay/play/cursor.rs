@@ -17,7 +17,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
 static OUR_CRC: LazyLock<Option<u32>> = LazyLock::new(|| {
-    let b = crate::builtin(crate::CURRENT_BUILD)?;
+    let b = crate::builds::builtin(crate::builds::CURRENT)?;
     Tables::from_demo_bytes(b.tables).ok().map(|t| t.sendtable_crc())
 });
 

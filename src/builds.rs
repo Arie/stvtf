@@ -1,0 +1,51 @@
+//! The TF2 server builds whose data is compiled in, and the send tables of any build.
+
+use crate::decode::Tables;
+use anyhow::{Result, bail};
+use std::path::Path;
+
+/// The newest TF2 server build compiled in. A build with no data compiled in gets its tables.
+pub const CURRENT: &str = BUILDS[0].0;
+
+/// Known TF2 server builds (`A2S_INFO` `version`) and the demo of their data tables, newest first.
+/// Most updates keep the tables, so builds share them. `cargo run --example add_build` adds to it.
+const BUILDS: &[(&str, &[u8])] = &[
+    // add_build: builds
+    ("11185272", TABLES_11138802),
+];
+
+// add_build: tables
+const TABLES_11138802: &[u8] = include_bytes!("../assets/tables_11138802.dem");
+
+/// Compiled-in data for one TF2 server build.
+#[derive(Debug, Clone, Copy)]
+pub struct Build {
+    /// A demo of that build cut off after its data tables, which give its `SendTable` CRC too.
+    pub tables: &'static [u8],
+}
+
+/// Compiled-in data for known TF2 server builds (`A2S_INFO` `version`).
+pub fn builtin(build: &str) -> Option<Build> {
+    BUILDS.iter().find(|b| b.0 == build).map(|b| Build { tables: b.1 })
+}
+
+/// Send tables for a build: the given demo, or the compiled-in ones.
+pub fn tables(build: &str, demo: Option<&Path>) -> Result<Tables> {
+    match (demo, builtin(build)) {
+        (Some(p), _) => Tables::from_demo(p),
+        (None, Some(b)) => Tables::from_demo_bytes(b.tables),
+        (None, None) => bail!("no built-in tables for build {build}; pass --tables SAME_BUILD.dem"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_build_without_data_needs_a_demo() {
+        assert!(tables(CURRENT, None).is_ok());
+        assert!(tables("1", None).err().unwrap().to_string().contains("--tables"));
+        assert!(tables(CURRENT, Some(Path::new("/nonexistent.dem"))).is_err(), "a given demo counts");
+    }
+}

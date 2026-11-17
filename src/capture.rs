@@ -153,7 +153,7 @@ mod tests {
         let mut bytes = MAGIC.to_vec();
         bytes.extend(record(2, &[1]));
         let recs = read(&bytes).unwrap();
-        let tables = crate::watch::tables(crate::CURRENT_BUILD, None).unwrap();
+        let tables = crate::builds::tables(crate::builds::CURRENT, None).unwrap();
         assert!(replay(&recs, &tables, &Options::default(), &mut |_| {}).is_err());
     }
 

@@ -6,10 +6,10 @@ use crate::net::handshake::{self, GamePort, Rejected, Stopped, Wait};
 use crate::output::{Line, Status};
 use crate::relay::{Relay, RelayConfig};
 use crate::session::{self, DEFAULT_SNAPSHOT_HZ, End, Fatal, Options};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use std::fmt;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -144,15 +144,6 @@ pub fn resolve(target: &str) -> Result<SocketAddr> {
         .ok_or_else(|| anyhow!("no IPv4 address for {target}"))
 }
 
-/// Send tables for a build: the given demo, or the compiled-in ones.
-pub fn tables(build: &str, demo: Option<&Path>) -> Result<Tables> {
-    match (demo, crate::builtin(build)) {
-        (Some(p), _) => Tables::from_demo(p),
-        (None, Some(b)) => Tables::from_demo_bytes(b.tables),
-        (None, None) => bail!("no built-in tables for build {build}; pass --tables SAME_BUILD.dem"),
-    }
-}
-
 /// Sets `stop` on the first Ctrl-C so the session can say goodbye (otherwise STV
 /// holds the slot for 300 s); a second Ctrl-C exits at once.
 ///
@@ -188,7 +179,7 @@ pub(crate) fn watch_with(
     emit: &mut dyn FnMut(Line),
 ) -> Result<(), WatchError> {
     let mut server = resolve(&w.target)?;
-    let mut build = crate::CURRENT_BUILD.to_string();
+    let mut build = crate::builds::CURRENT.to_string();
     let mut opt = Options { name: w.name.clone(), snapshot_hz: w.snapshot_hz, ..Options::default() };
     let mut loaded: Option<(String, Tables)> = None;
     let deadline = w.duration.map(|d| Instant::now() + d);
@@ -215,11 +206,11 @@ pub(crate) fn watch_with(
         }
         // Most updates keep the class tables, so a build we have no data for gets the current
         // one's; if they did change, the server says so and that is fatal.
-        let known = w.build.is_some() || crate::builtin(&build).is_some();
-        let source = if known { build.as_str() } else { crate::CURRENT_BUILD };
+        let known = w.build.is_some() || crate::builds::builtin(&build).is_some();
+        let source = if known { build.as_str() } else { crate::builds::CURRENT };
         let (_, class_tables) = match loaded.take() {
             Some((s, t)) if s == source => loaded.insert((s, t)),
-            _ => loaded.insert((source.to_string(), tables(source, w.tables.as_deref())?)),
+            _ => loaded.insert((source.to_string(), crate::builds::tables(source, w.tables.as_deref())?)),
         };
         opt.crc = w.crc.unwrap_or_else(|| class_tables.sendtable_crc());
         if let Some(tap) = tap {
@@ -345,12 +336,5 @@ mod tests {
         assert_eq!(resolve("127.0.0.1:27020").unwrap().port(), 27020);
         assert!(resolve("127.0.0.1").unwrap_err().to_string().contains("resolving"));
         assert!(resolve("[::1]:27020").unwrap_err().to_string().contains("no IPv4 address"));
-    }
-
-    #[test]
-    fn a_build_without_data_needs_a_demo() {
-        assert!(tables(crate::CURRENT_BUILD, None).is_ok());
-        assert!(tables("1", None).err().unwrap().to_string().contains("--tables"));
-        assert!(tables(crate::CURRENT_BUILD, Some(Path::new("/nonexistent.dem"))).is_err(), "a given demo counts");
     }
 }
