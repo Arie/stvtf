@@ -31,7 +31,7 @@ use crate::net::bits::BitBuf;
 use crate::output::{Line, Status};
 use crate::session::{self, Options, Tap};
 use crate::watch::{Watch, WatchError};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 #[cfg(fuzzing)]
 use client::Client;
 use client::Phase;
@@ -158,7 +158,7 @@ pub struct Relay {
 
 impl Relay {
     /// Listens for clients as `config` says.
-    pub fn bind(config: &RelayConfig) -> Result<Relay> {
+    pub fn bind(config: &RelayConfig) -> crate::Result<Relay> {
         let sock = UdpSocket::bind(&config.listen).with_context(|| format!("binding {}", config.listen))?;
         let port = sock.local_addr().map_or(0, |a| a.port());
         let hub = Mutex::new(Hub::new(sock.try_clone()?, config));
@@ -195,7 +195,7 @@ impl Relay {
     }
 
     /// Relays a `SourceTV` server, reconnecting as [`crate::watch::watch`] does, until `stop`.
-    pub fn watch(&self, w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
+    pub fn watch(&self, w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> crate::Result<(), WatchError> {
         self.watch_also(w, stop, None, emit)
     }
 
@@ -225,9 +225,9 @@ impl Relay {
         speed: f64,
         stop: &AtomicBool,
         emit: &mut dyn FnMut(Line),
-    ) -> Result<()> {
+    ) -> crate::Result<()> {
         let mut sessions = records.iter().skip_while(|r| r.kind != capture::Kind::Session as u8);
-        let Some(first) = sessions.next() else { bail!("no session in the capture") };
+        let Some(first) = sessions.next() else { return Err(anyhow::anyhow!("no session in the capture").into()) };
         let challenge = u32::from_le_bytes(first.data.try_into().context("session record is not a 4-byte challenge")?);
         let datagrams: Vec<(u64, &[u8])> = sessions
             .take_while(|r| r.kind != capture::Kind::Session as u8)
@@ -237,9 +237,9 @@ impl Relay {
         let opt = Options { snapshot_hz: 0.0, ..Options::default() };
         self.announce(emit)?;
         let wait = || self.hub().replay_waits();
-        self.serving(stop, || {
+        Ok(self.serving(stop, || {
             session::replay_paced(challenge, &datagrams, tables, &opt, speed, self, &wait, stop, emit)
-        })
+        })?)
     }
 
     fn announce(&self, emit: &mut dyn FnMut(Line)) -> Result<()> {

@@ -1,7 +1,8 @@
 //! The TF2 server builds whose data is compiled in, and the send tables of any build.
 
 use crate::decode::Tables;
-use anyhow::{Result, bail};
+use crate::{Error, ErrorKind};
+use anyhow::anyhow;
 use std::path::Path;
 
 /// The newest TF2 server build compiled in. A build with no data compiled in gets its tables.
@@ -30,11 +31,14 @@ pub fn builtin(build: &str) -> Option<Build> {
 }
 
 /// Send tables for a build: the given demo, or the compiled-in ones.
-pub fn tables(build: &str, demo: Option<&Path>) -> Result<Tables> {
+pub fn tables(build: &str, demo: Option<&Path>) -> crate::Result<Tables> {
     match (demo, builtin(build)) {
         (Some(p), _) => Tables::from_demo(p),
         (None, Some(b)) => Tables::from_demo_bytes(b.tables),
-        (None, None) => bail!("no built-in tables for build {build}; pass --tables SAME_BUILD.dem"),
+        (None, None) => Err(Error::new(
+            ErrorKind::UnknownBuild,
+            anyhow!("no built-in tables for build {build}; pass --tables SAME_BUILD.dem"),
+        )),
     }
 }
 

@@ -11,6 +11,7 @@ pub mod builds;
 pub mod capture;
 pub mod decode;
 pub mod demo;
+mod error;
 #[cfg(fuzzing)]
 pub mod fuzzing;
 #[cfg(test)]
@@ -23,6 +24,7 @@ pub mod relay;
 mod session;
 pub mod watch;
 
+pub use error::{Error, ErrorKind, Result};
 pub use output::Line;
 pub use session::DEFAULT_SNAPSHOT_HZ;
 pub use session::{Fatal, Options, parse_snapshot_hz};

@@ -95,9 +95,9 @@ pub struct Header {
 
 impl Header {
     /// Reads a header from the start of a demo.
-    pub fn parse(b: &[u8]) -> Result<Header> {
+    pub fn parse(b: &[u8]) -> crate::Result<Header> {
         if b.len() < HEADER_LEN || &b[..MAGIC.len()] != MAGIC {
-            bail!("not a demo");
+            return Err(anyhow::anyhow!("not a demo").into());
         }
         let u = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap_or_default());
         let s = |i: usize| {
@@ -183,7 +183,7 @@ pub struct Reader<R> {
 
 impl<R: Read + Seek> Reader<R> {
     /// Opens a demo, reading its header.
-    pub fn new(mut r: R) -> Result<Self> {
+    pub fn new(mut r: R) -> crate::Result<Self> {
         r.seek(SeekFrom::Start(0))?;
         let mut b = vec![0u8; HEADER_LEN];
         r.read_exact(&mut b).context("reading the demo header")?;
@@ -191,7 +191,7 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     /// Reads on from `pos`, where a packet starts (one [`Reader::position`] gave).
-    pub fn seek_to(&mut self, pos: u64) -> Result<()> {
+    pub fn seek_to(&mut self, pos: u64) -> crate::Result<()> {
         self.r.seek(SeekFrom::Start(pos))?;
         self.pos = pos;
         Ok(())
@@ -204,7 +204,7 @@ impl<R: Read + Seek> Reader<R> {
 
     /// The next packet. At the end of what was written so far it stays where it was, so a
     /// later call reads the packet once it is all there.
-    pub fn next_packet(&mut self) -> Result<Next> {
+    pub fn next_packet(&mut self) -> crate::Result<Next> {
         match self.read_packet() {
             Ok(p) => {
                 self.pos = self.r.stream_position()?;
@@ -217,7 +217,7 @@ impl<R: Read + Seek> Reader<R> {
                 self.r.seek(SeekFrom::Start(self.pos))?;
                 Ok(Next::More)
             }
-            Err(e) => Err(e),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -292,23 +292,23 @@ pub struct Writer<W> {
 impl<W: Write + Seek> Writer<W> {
     /// Starts a demo with `header` (its counts are kept up to date), on a server ticking every
     /// `tick_interval` seconds.
-    pub fn new(mut w: W, header: Header, tick_interval: f32) -> Result<Self> {
+    pub fn new(mut w: W, header: Header, tick_interval: f32) -> crate::Result<Self> {
         w.write_all(&header.bytes())?;
         Ok(Writer { w, header, tick_interval, first_tick: None, in_signon: true })
     }
 
     /// The data tables packet of the build, as a tables demo has it.
-    pub fn data_tables(&mut self, data: &[u8]) -> Result<()> {
-        self.packet(DATA_TABLES, 0, data)
+    pub fn data_tables(&mut self, data: &[u8]) -> crate::Result<()> {
+        Ok(self.packet(DATA_TABLES, 0, data)?)
     }
 
     /// Signon messages, byte padded.
-    pub fn signon(&mut self, data: &[u8]) -> Result<()> {
-        self.packet(SIGNON, 0, data)
+    pub fn signon(&mut self, data: &[u8]) -> crate::Result<()> {
+        Ok(self.packet(SIGNON, 0, data)?)
     }
 
     /// One datagram's messages at server tick `server_tick`, byte padded.
-    pub fn message(&mut self, server_tick: i32, data: &[u8]) -> Result<()> {
+    pub fn message(&mut self, server_tick: i32, data: &[u8]) -> crate::Result<()> {
         if self.in_signon {
             // Everything up to the first frame is the signon, as the header counts it.
             self.in_signon = false;
@@ -338,7 +338,7 @@ impl<W: Write + Seek> Writer<W> {
     }
 
     /// Writes the header's counts as they are now and flushes.
-    pub fn flush(&mut self) -> Result<()> {
+    pub fn flush(&mut self) -> crate::Result<()> {
         let end = self.w.stream_position()?;
         self.w.seek(SeekFrom::Start(0))?;
         self.w.write_all(&self.header.bytes())?;
@@ -349,12 +349,12 @@ impl<W: Write + Seek> Writer<W> {
 
     /// Writes out what is buffered, so a reader sees every packet so far; the header's counts
     /// wait for [`Writer::flush`].
-    pub fn flush_packets(&mut self) -> Result<()> {
+    pub fn flush_packets(&mut self) -> crate::Result<()> {
         Ok(self.w.flush()?)
     }
 
     /// The stop packet and the final header.
-    pub fn finish(mut self) -> Result<W> {
+    pub fn finish(mut self) -> crate::Result<W> {
         let tick = self.header.ticks as i32;
         self.w.write_all(&[STOP])?;
         self.w.write_all(&tick.to_le_bytes())?;
@@ -389,7 +389,7 @@ fn heard_at(due: i32, before: i32, tick: i32) -> i32 {
 /// the demo's at or after its tick, as the game's own voice messages (so the demo plays them as
 /// the players talking). The header's counts are made anew, and a demo still being written (no
 /// stop packet yet) gets one.
-pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mut out: W) -> Result<W> {
+pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mut out: W) -> crate::Result<W> {
     let mut r = Reader::new(src)?;
     let mut header = r.header.clone();
     let interval = if header.ticks > 0 && header.seconds > 0.0 { header.seconds / header.ticks as f32 } else { 0.015 };
@@ -442,7 +442,7 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     for v in order {
         voice.say(&mut out, &mut header, v, last)?;
     }
-    end_demo(out, &mut header, interval)
+    Ok(end_demo(out, &mut header, interval)?)
 }
 
 /// Voice written into a demo: a speaker's frames are numbered on from one message to the next.

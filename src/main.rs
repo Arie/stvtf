@@ -113,13 +113,13 @@ impl Args {
     }
 
     fn hz(&self) -> Result<f32> {
-        self.get("hz").map_or(Ok(stvtf::DEFAULT_SNAPSHOT_HZ), stvtf::parse_snapshot_hz)
+        Ok(self.get("hz").map_or(Ok(stvtf::DEFAULT_SNAPSHOT_HZ), stvtf::parse_snapshot_hz)?)
     }
 
     /// The tables of `--build`, or of the current build.
     fn tables(&self) -> Result<Tables> {
         let build = self.get("build").unwrap_or(stvtf::builds::CURRENT);
-        stvtf::builds::tables(build, self.get("tables").map(PathBuf::from).as_deref())
+        Ok(stvtf::builds::tables(build, self.get("tables").map(PathBuf::from).as_deref())?)
     }
 
     /// The file given as the target.

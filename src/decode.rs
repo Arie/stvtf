@@ -49,13 +49,13 @@ pub struct Tables {
 
 impl Tables {
     /// Reads the tables from a demo file (any STV or POV demo of the build).
-    pub fn from_demo(path: &std::path::Path) -> Result<Tables> {
+    pub fn from_demo(path: &std::path::Path) -> crate::Result<Tables> {
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         Self::from_demo_bytes(&bytes)
     }
 
     /// Reads the tables from demo bytes; everything after the data tables is ignored.
-    pub fn from_demo_bytes(bytes: &[u8]) -> Result<Tables> {
+    pub fn from_demo_bytes(bytes: &[u8]) -> crate::Result<Tables> {
         let mut stream = BitReadStream::new(BitReadBuffer::new(bytes, LittleEndian));
         let header = Header::read(&mut stream)?;
         let handler = DemoHandler::with_analyser(tf_demo_parser::demo::parser::NullHandler);
@@ -66,7 +66,7 @@ impl Tables {
                 return Ok(Tables { header, datatables: dt, crc, raw: raw_datatables(bytes)? });
             }
         }
-        bail!("no data tables in demo")
+        Err(anyhow::anyhow!("no data tables in demo").into())
     }
 
     /// The server class names (`CTFPlayer`, …), in class id order.
@@ -848,7 +848,7 @@ impl SnapshotClock {
 
 /// Runs a demo file through the same extractor a live session uses, passing events and
 /// snapshots (at most `snapshot_hz` per second; 0 disables them) to `emit`.
-pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Line)) -> Result<()> {
+pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Line)) -> crate::Result<()> {
     let demo = tf_demo_parser::Demo::new(bytes);
     let parser = tf_demo_parser::DemoParser::new_with_analyser(demo.get_stream(), Extractor::default());
     let (_header, mut ticker) = parser.ticker()?;

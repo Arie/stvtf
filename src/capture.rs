@@ -7,7 +7,7 @@
 use crate::decode::Tables;
 use crate::output::Line;
 use crate::session::{self, Options};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -35,7 +35,7 @@ pub(crate) struct Recorder {
 
 impl Recorder {
     /// Creates a new capture file; an existing file is never overwritten.
-    pub fn create(path: &Path) -> Result<Self> {
+    pub fn create(path: &Path) -> crate::Result<Self> {
         let file = File::create_new(path).with_context(|| format!("creating capture {}", path.display()))?;
         let mut out = BufWriter::new(file);
         out.write_all(MAGIC)?;
@@ -51,14 +51,14 @@ impl Recorder {
         Ok(())
     }
 
-    pub fn session(&mut self, challenge: u32) -> Result<()> {
+    pub fn session(&mut self, challenge: u32) -> crate::Result<()> {
         self.record(Kind::Session, &challenge.to_le_bytes())?;
         self.out.flush()?;
         Ok(())
     }
 
-    pub fn datagram(&mut self, data: &[u8]) -> Result<()> {
-        self.record(Kind::Datagram, data)
+    pub fn datagram(&mut self, data: &[u8]) -> crate::Result<()> {
+        Ok(self.record(Kind::Datagram, data)?)
     }
 }
 
@@ -81,8 +81,8 @@ impl Record<'_> {
 }
 
 /// Splits a capture into its records.
-pub fn read(bytes: &[u8]) -> Result<Vec<Record<'_>>> {
-    let Some(mut r) = bytes.strip_prefix(MAGIC) else { bail!("not an stvtf capture") };
+pub fn read(bytes: &[u8]) -> crate::Result<Vec<Record<'_>>> {
+    let Some(mut r) = bytes.strip_prefix(MAGIC) else { return Err(anyhow::anyhow!("not an stvtf capture").into()) };
     let mut out = Vec::new();
     while let Some(header) = r.get(..RECORD_HEADER) {
         let t_us = u64::from_le_bytes(header[..KIND_AT].try_into()?);
@@ -98,7 +98,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Record<'_>>> {
 }
 
 /// Decodes a capture without a network, one session per recorded connection.
-pub fn replay(records: &[Record<'_>], tables: &Tables, opt: &Options, emit: &mut dyn FnMut(Line)) -> Result<()> {
+pub fn replay(records: &[Record<'_>], tables: &Tables, opt: &Options, emit: &mut dyn FnMut(Line)) -> crate::Result<()> {
     let mut sessions: Vec<(u32, Vec<&[u8]>)> = Vec::new();
     for rec in records {
         if rec.kind == Kind::Session as u8 {

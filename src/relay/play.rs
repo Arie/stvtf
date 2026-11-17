@@ -34,7 +34,6 @@ pub use voice::VoiceIn;
 
 use crate::output::Line;
 use crate::relay::Relay;
-use anyhow::Result;
 use player::Player;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -77,7 +76,7 @@ const FLUSH: Duration = Duration::from_millis(150);
 
 impl Relay {
     /// Plays demos to the clients, where `playback` wants them, until `stop`.
-    pub fn play(&self, playback: &Playback, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<()> {
+    pub fn play(&self, playback: &Playback, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> crate::Result<()> {
         self.announce(emit)?;
         self.serving(stop, || {
             self.hub().start_playing();

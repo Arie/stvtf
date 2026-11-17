@@ -364,5 +364,5 @@ pub(super) fn owned(tables: &[Arc<BitBuf>]) -> Vec<BitBuf> {
 fn tables_of(path: &Path, reader: &demo::Reader<File>) -> Result<Tables> {
     let mut prefix = vec![0u8; reader.position() as usize];
     File::open(path)?.read_exact(&mut prefix)?;
-    Tables::from_demo_bytes(&prefix)
+    Ok(Tables::from_demo_bytes(&prefix)?)
 }

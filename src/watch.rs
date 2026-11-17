@@ -107,7 +107,7 @@ pub enum WatchError {
         reason: String,
     },
     /// Setup failed (address, build, tables, capture file) or local I/O failed.
-    Other(anyhow::Error),
+    Other(crate::Error),
 }
 
 impl fmt::Display for WatchError {
@@ -124,24 +124,27 @@ impl std::error::Error for WatchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             WatchError::Rejected { .. } => None,
-            WatchError::Other(e) => Some(e.as_ref()),
+            WatchError::Other(e) => Some(e),
         }
+    }
+}
+
+impl From<crate::Error> for WatchError {
+    fn from(e: crate::Error) -> Self {
+        WatchError::Other(e)
     }
 }
 
 impl From<anyhow::Error> for WatchError {
     fn from(e: anyhow::Error) -> Self {
-        WatchError::Other(e)
+        WatchError::Other(e.into())
     }
 }
 
 /// The IPv4 address of a `HOST:PORT` (`SourceTV` is IPv4 only).
-pub fn resolve(target: &str) -> Result<SocketAddr> {
-    target
-        .to_socket_addrs()
-        .with_context(|| format!("resolving {target}"))?
-        .find(SocketAddr::is_ipv4)
-        .ok_or_else(|| anyhow!("no IPv4 address for {target}"))
+pub fn resolve(target: &str) -> crate::Result<SocketAddr> {
+    let mut all = target.to_socket_addrs().with_context(|| format!("resolving {target}"))?;
+    Ok(all.find(SocketAddr::is_ipv4).ok_or_else(|| anyhow!("no IPv4 address for {target}"))?)
 }
 
 /// Sets `stop` on the first Ctrl-C so the session can say goodbye (otherwise STV
@@ -150,7 +153,7 @@ pub fn resolve(target: &str) -> Result<SocketAddr> {
 /// SIGTERM (`docker stop`, a deploy) counts as Ctrl-C too.
 ///
 /// The process can have only one Ctrl-C handler, so this fails if one is already set.
-pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
+pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> crate::Result<()> {
     ctrlc::set_handler(move || {
         if stop.swap(true, Ordering::Relaxed) {
             std::process::exit(EXIT_INTERRUPTED);
@@ -162,7 +165,7 @@ pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
 /// Runs until `stop`, the duration, or a rejection that reconnecting cannot fix,
 /// passing every event and snapshot to `emit`. Blocks the calling thread.
 /// With [`Watch::relay`] set, the relay serves clients for as long as this runs.
-pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
+pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> crate::Result<(), WatchError> {
     let recorder = w.demos.clone().map(crate::demo::Recorder::new);
     let recording = recorder.as_ref().map(|r| r as &dyn session::Tap);
     match &w.relay {

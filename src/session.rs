@@ -54,10 +54,10 @@ const DEFAULT_SILENCE: Duration = Duration::from_secs(15);
 pub const DEFAULT_SNAPSHOT_HZ: f32 = 20.0;
 
 /// A snapshot rate as given on a command line: a number, 0 or more (0 disables snapshots).
-pub fn parse_snapshot_hz(hz: &str) -> Result<f32> {
+pub fn parse_snapshot_hz(hz: &str) -> crate::Result<f32> {
     let parsed: f32 = hz.parse().map_err(|_| anyhow::anyhow!("--hz {hz}: not a number"))?;
     if !parsed.is_finite() || parsed < 0.0 {
-        anyhow::bail!("--hz must be 0 or more");
+        return Err(anyhow::anyhow!("--hz must be 0 or more").into());
     }
     Ok(parsed)
 }
@@ -540,7 +540,7 @@ pub fn run(
     wait: Wait<'_>,
     tap: Option<&dyn Tap>,
     emit: &mut dyn FnMut(Line),
-) -> Result<End> {
+) -> crate::Result<End> {
     let mut s = Session::new(Some(&conn.sock), conn.challenge, opt);
     s.tap = tap;
     if let Some(r) = recorder.as_deref_mut() {
@@ -588,7 +588,7 @@ pub fn replay(
     tables: &Tables,
     opt: &Options,
     emit: &mut dyn FnMut(Line),
-) -> Result<()> {
+) -> crate::Result<()> {
     let mut s = Session::new(None, challenge, opt);
     let mut it = datagrams.iter();
     let mut next = |buf: &mut [u8]| -> Result<Next> { Ok(it.next().map_or(Next::Stop, |d| Next::recorded(d, buf))) };
