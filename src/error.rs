@@ -1,4 +1,4 @@
-//! Building the crate's [`Error`]s as they go up: what was being done, and why it failed.
+//! The crate's [`Error`]s as they go up: what was being done, and why it failed.
 
 use std::fmt::Display;
 
@@ -9,7 +9,7 @@ const READ_OR_WRITE: &str = "read or write";
 
 use crate::net::handshake::{GamePort, Rejected, Stopped};
 
-/// A failure inside this library or one it builds on, kept out of this library's API.
+/// A failure inside this library or a dependency, kept out of the API.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 pub struct InternalError(pub(crate) Inner);
@@ -73,7 +73,7 @@ impl From<std::array::TryFromSliceError> for Error {
     }
 }
 
-/// An [`Error::Invalid`] saying what is wrong, formatted as `format!` does.
+/// An [`Error::Invalid`], formatted as `format!` does.
 macro_rules! invalid {
     ($($arg:tt)*) => {
         $crate::Error::Invalid { reason: format!($($arg)*) }
@@ -120,7 +120,7 @@ impl<T> Context<T> for Option<T> {
     }
 }
 
-/// `source` as the cause of failing to do `doing`: a bare I/O error takes `doing` as its own.
+/// `source` as why `doing` failed; a bare I/O error takes `doing` as its own.
 fn because(doing: String, source: Error) -> Error {
     match source {
         Error::Io { doing: bare, source } if bare == READ_OR_WRITE => Error::Io { doing, source },

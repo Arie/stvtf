@@ -1,4 +1,4 @@
-//! A relay bound to its port: its settings, and serving a watch, a capture or a demo to its clients.
+//! A relay on its port: its settings, and what it serves.
 
 use std::fmt;
 use std::io::ErrorKind;
@@ -87,7 +87,8 @@ impl Relay {
         Ok(Relay { sock, port, hub, taken_over: Mutex::new(None) })
     }
 
-    /// Takes in the clients a relay on this address handed over (see [`Playback::hand_over`](super::Playback::hand_over)),
+    /// Takes in the clients a relay on this address handed over
+    /// ([`Playback::hand_over`](super::Playback::hand_over)),
     /// before [`Relay::play`]: they go on where they were with a full update, or failing that
     /// sign on again, connected still. False if the handover does not read: they are not taken.
     pub fn take_over(&self, h: &Handover) -> bool {
