@@ -411,7 +411,10 @@ impl Player<'_> {
     fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
         log!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
-        self.relay.hub().reshow_panel_with_next_keyframe();
+        // A spectator's panel: not for one watching as the player.
+        if !c.dec.players_own() {
+            self.relay.hub().reshow_panel_with_next_keyframe();
+        }
         // The clients keep the models loaded since.
         self.models = self.models.with(&c.dec);
         let rewritten = c.dec.tables_rewritten();
@@ -567,6 +570,9 @@ impl Player<'_> {
         // Its clock may have gone back: the timers, waiting for a time it passed, redraw.
         since.extend(c.dec.update_timer());
         let mut hub = self.relay.hub();
+        if c.dec.players_own() {
+            hub.with_next_keyframe(super::cursor::as_the_player(c.view));
+        }
         hub.send_keyframe(tick, &key, &since, c.paused);
         hub.reshow_notes(Instant::now());
         drop(hub);

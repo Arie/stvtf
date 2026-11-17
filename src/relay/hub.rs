@@ -343,6 +343,11 @@ impl Hub {
         self.with_next = vec![vgui_menu(SPECTATORS, false), vgui_menu(SPECTATORS, true)];
     }
 
+    /// Reliably, with the next full update, to those who get it.
+    pub(super) fn with_next_keyframe(&mut self, msgs: impl IntoIterator<Item = BitBuf>) {
+        self.with_next.extend(msgs);
+    }
+
     /// What a client gets after every full update from now on, in place of what it got before.
     pub(super) fn set_notes(&mut self, notes: Vec<BitBuf>) {
         self.notes = notes;

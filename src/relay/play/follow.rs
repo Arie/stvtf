@@ -1,7 +1,7 @@
 //! Frames played to the clients in the game, as they are where a game client can follow them.
 
 use super::Camera;
-use super::cursor::{with_entities, without_cues, without_entities};
+use super::cursor::{for_watchers, with_entities, without_cues, without_entities};
 use super::player::Player;
 use crate::decode::{Decoder, Entities};
 use crate::net::bits::BitBuf;
@@ -37,6 +37,7 @@ impl Player<'_> {
         let Some((bits, life)) = c.decode() else { return };
         // Ours, not the demo's director's.
         let (bits, life) = if camera.is_some() { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
+        let (bits, life) = if c.dec.players_own() { for_watchers(&bits, &life, c.view) } else { (bits, life) };
         let mut hub = self.relay.hub();
         if let Some(entities) = c.dec.entities(bits.bytes()) {
             let base = match entities {

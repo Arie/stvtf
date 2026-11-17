@@ -192,6 +192,8 @@ pub(crate) struct Decoder {
     tables: tables::Tables,
     /// The last round start, win panel or game over event (see [`Decoder::round_event`]).
     round: Option<BitBuf>,
+    /// The stream is a player's game's, not a `SourceTV`'s.
+    players_own: bool,
     out: Vec<Line>,
 }
 
@@ -210,6 +212,7 @@ impl Decoder {
             world: None,
             tables: tables::Tables::default(),
             round: None,
+            players_own: false,
             out: Vec::new(),
         })
     }
@@ -259,6 +262,21 @@ impl Decoder {
             w.write_buf(m);
         }
         Some(w.finish())
+    }
+
+    /// Takes the stream's `ServerInfo`: its count of map loads and map.
+    fn server_info(&mut self, i: &tf_demo_parser::demo::message::ServerInfoMessage) -> (i32, String) {
+        self.players_own = !i.stv;
+        if let (true, Some(w)) = (self.players_own, &mut self.world) {
+            w.set_player(u32::from(i.player_slot) + 1);
+        }
+        (i.server_count as i32, i.map.clone())
+    }
+
+    /// Whether the stream is a player's game's (a demo a player recorded), not a `SourceTV`'s: a
+    /// client given it is that player.
+    pub(crate) fn players_own(&self) -> bool {
+        self.players_own
     }
 
     /// Whether the stream's entity messages are for no client as they are (see `world`).
@@ -507,7 +525,7 @@ impl Decoder {
         for msg in &messages {
             match msg {
                 Message::SignOnState(s) => life.signon.push(signon(&s.state)),
-                Message::ServerInfo(i) => life.server_info = Some((i.server_count as i32, i.map.clone())),
+                Message::ServerInfo(i) => life.server_info = Some(self.server_info(i)),
                 Message::NetTick(t) => life.tick = Some(u32::from(t.tick) as i32),
                 Message::PacketEntities(pe) => {
                     has_entities = true;

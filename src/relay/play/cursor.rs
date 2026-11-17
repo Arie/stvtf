@@ -48,6 +48,8 @@ pub(super) struct Cursor {
     pub(super) next_pos: u64,
     /// Every string table change since the signon, in order: what a checkpoint starts from.
     pub(super) tables: Vec<Arc<BitBuf>>,
+    /// Where the recording game looked as of the last frame decoded.
+    pub(super) view: [f32; 3],
 }
 
 /// The demo's signon is not all written yet.
@@ -107,6 +109,7 @@ impl Cursor {
             paused: false,
             next_pos: 0,
             tables: Vec::new(),
+            view: [0.0; 3],
         })
     }
 
@@ -159,6 +162,8 @@ impl Cursor {
     /// that is not one.
     pub(super) fn decode(&mut self) -> Option<(BitBuf, Lifecycle)> {
         let Some(Packet::Message { tick, data }) = self.next.take() else { return None };
+        // The reader is no further than the packet read ahead.
+        self.view = self.reader.view;
         let bits = BitBuf::from_bytes(data);
         let life = self.dec.feed(bits.bytes(), bits.nbits());
         let (bits, life) = without_signon(life.bits(&bits), &life);
@@ -295,6 +300,25 @@ fn without_signon(bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
 /// A frame's stream without the director's camera cues.
 pub(super) fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
     without(bits, life, |s| dec.is_director_cue(bits.bytes(), s))
+}
+
+/// What a client watching a player's own demo is told with every full update: it is that player
+/// to its game, which must not move them on its own, and looks where they did (`view`).
+pub(super) fn as_the_player(view: [f32; 3]) -> [BitBuf; 2] {
+    [messages::set_convar("sv_client_predict", "0"), messages::fix_angle(view)]
+}
+
+/// A frame of a player's own demo for clients watching it: looking where the player did (`view`),
+/// and without the commands the server gave the player's game.
+pub(super) fn for_watchers(bits: &BitBuf, life: &Lifecycle, view: [f32; 3]) -> (BitBuf, Lifecycle) {
+    let (bits, mut life) = without(bits, life, |s| u32::from(s.id) == messages::NET_STRINGCMD);
+    let mut w = BitWriter::new();
+    let end = life.spans.last().map_or(0, |s| s.bits.end);
+    w.write_range(bits.bytes(), 0..end);
+    w.write_buf(&messages::fix_angle(view));
+    life.spans.push(Span { id: messages::SVC_FIXANGLE as u8, bits: end..w.nbits() });
+    life.stream = None;
+    (w.finish(), life)
 }
 
 /// A frame's stream with `entities` in place of its own entity message.

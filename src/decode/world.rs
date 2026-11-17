@@ -126,6 +126,8 @@ pub(crate) struct World {
     max_entries: u16,
     /// No full update came yet, or a frame was lost since.
     broken: bool,
+    /// The entity of the player whose game the stream is of, if it is one's.
+    player: Option<u32>,
     seen_full: bool,
     /// Whose baselines the stream's entities enter on.
     baselines: Baselines,
@@ -229,6 +231,11 @@ impl World {
         self.baselines = Baselines::Own;
     }
 
+    /// The stream is the game's of the player who is entity `player`.
+    pub(crate) fn set_player(&mut self, player: u32) {
+        self.player = Some(player);
+    }
+
     /// Whether frame `tick` is kept.
     pub(crate) fn has(&self, tick: u32) -> bool {
         self.kept(tick).is_some()
@@ -291,7 +298,7 @@ impl World {
         .map(|(t, f)| (*t, f))?;
         let mut entities = Vec::new();
         for (index, e) in frame.iter() {
-            let mut entering = enter(state, index, e)?;
+            let mut entering = self.enter(state, index, e)?;
             let clock = timer_props(state, e, hold.map(|interval| tick as f32 * interval));
             for set in clock.into_iter().chain(reset_parity(state, e)) {
                 entering.props.retain(|p| !set.iter().any(|q| q.index == p.index));
@@ -412,7 +419,7 @@ impl World {
                     }
                 }
                 _ => {
-                    entities.insert(index, enter(state, index, e)?);
+                    entities.insert(index, self.enter(state, index, e)?);
                 }
             }
         }
@@ -464,6 +471,33 @@ fn reset_parity(state: &ParserState, e: &Entity) -> Option<Vec<SendProp>> {
     let id = SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
     let index = super::props::prop_index(table, id)?;
     Some(vec![SendProp { index, identifier: id, value: SendPropValue::Integer(0) }])
+}
+
+impl World {
+    /// [`enter`], the stream's own player where its game has them: a player's origin is two props,
+    /// one for their own game and one for the others', of which a client takes the last, and their
+    /// own game is only sent the first.
+    fn enter(&self, state: &ParserState, index: u32, e: &Entity) -> Option<PacketEntity> {
+        let mut entering = enter(state, index, e)?;
+        if self.player != Some(index) {
+            return Some(entering);
+        }
+        let table = state.send_tables.get(usize::from(e.class))?;
+        for name in ["m_vecOrigin", "m_vecOrigin[2]"] {
+            let own = SendPropIdentifier::new("DT_TFLocalPlayerExclusive", name);
+            let others = SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", name);
+            let (Some(from), Some(to)) =
+                (super::props::prop_index(table, own), super::props::prop_index(table, others))
+            else {
+                continue;
+            };
+            let Some(at) = e.props.get(from) else { continue };
+            entering.props.retain(|p| p.index != to);
+            entering.props.push(SendProp { index: to, identifier: others, value: at.value.clone() });
+        }
+        entering.props.sort_by_key(|p| p.index);
+        Some(entering)
+    }
 }
 
 /// An entity entering with the props that differ from its class's static baseline.

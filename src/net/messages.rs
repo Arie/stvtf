@@ -23,6 +23,7 @@ pub const SVC_SETPAUSE: u32 = 11;
 pub const SVC_CREATESTRINGTABLE: u32 = 12;
 pub const SVC_UPDATESTRINGTABLE: u32 = 13;
 pub const SVC_VOICEDATA: u32 = 15;
+pub const SVC_FIXANGLE: u32 = 19;
 pub const SVC_USERMESSAGE: u32 = 23;
 pub const SVC_GAMEEVENT: u32 = 25;
 pub const SVC_PACKETENTITIES: u32 = 26;
@@ -135,6 +136,27 @@ pub fn disconnect(reason: &str) -> BitBuf {
 /// `net_Disconnect` as a client leaving on its own sends it.
 pub fn goodbye() -> BitBuf {
     disconnect(GOODBYE)
+}
+
+/// `svc_FixAngle`: the client looks at `angles` (pitch, yaw, roll) at once.
+pub fn fix_angle(angles: [f32; 3]) -> BitBuf {
+    let mut w = BitWriter::new();
+    w.write_bits(SVC_FIXANGLE, TYPE_BITS);
+    w.write_bit(false); // not relative to where it looks
+    for a in angles {
+        w.write_bits(((f64::from(a) * 65536.0 / 360.0) as i64 & 0xffff) as u32, 16);
+    }
+    w.finish()
+}
+
+/// `net_SetConVar`: the server's `value` of one replicated cvar.
+pub fn set_convar(name: &str, value: &str) -> BitBuf {
+    let mut w = BitWriter::new();
+    w.write_bits(NET_SETCONVAR, TYPE_BITS);
+    w.write_bits(1, 8);
+    w.write_string(name);
+    w.write_string(value);
+    w.finish()
 }
 
 /// The tick a client acks to ask for a full update.

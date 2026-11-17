@@ -29,6 +29,8 @@ const COUNTS_AT: usize = NAMES_AT + 4 * NAME_LEN;
 const _: () = assert!(COUNTS_AT + 16 == HEADER_LEN, "seconds, ticks, frames and signon bytes end the header");
 /// View origins and angles, then the in and out sequence numbers.
 const META_LEN: usize = 84;
+/// Where the view angles are in it: past its flags and the view's origin.
+const VIEW_ANGLES: usize = 16;
 /// Longer than any packet a demo has; a corrupt length is not read into memory.
 const MAX_PACKET: usize = 1 << 26;
 
@@ -174,6 +176,9 @@ pub struct Reader<R> {
     pos: u64,
     /// The demo's header, as it was when the demo was opened.
     pub header: Header,
+    /// Where the recording game looked (pitch, yaw, roll) as of the last frame read: a player's
+    /// own demo has it.
+    pub view: [f32; 3],
 }
 
 impl<R: Read + Seek> Reader<R> {
@@ -182,7 +187,7 @@ impl<R: Read + Seek> Reader<R> {
         r.seek(SeekFrom::Start(0))?;
         let mut b = vec![0u8; HEADER_LEN];
         r.read_exact(&mut b).context("reading the demo header")?;
-        Ok(Reader { r, pos: HEADER_LEN as u64, header: Header::parse(&b)? })
+        Ok(Reader { r, pos: HEADER_LEN as u64, header: Header::parse(&b)?, view: [0.0; 3] })
     }
 
     /// Reads on from `pos`, where a packet starts (one [`Reader::position`] gave).
@@ -252,8 +257,15 @@ impl<R: Read + Seek> Reader<R> {
         Ok(u32::from_le_bytes(b))
     }
 
+    /// Passes over a packet's command info, keeping its view angles.
     fn skip_meta(&mut self) -> std::io::Result<()> {
-        self.r.read_exact(&mut [0u8; META_LEN])
+        let mut meta = [0u8; META_LEN];
+        self.r.read_exact(&mut meta)?;
+        for (i, angle) in self.view.iter_mut().enumerate() {
+            let at = VIEW_ANGLES + 4 * i;
+            *angle = f32::from_le_bytes([meta[at], meta[at + 1], meta[at + 2], meta[at + 3]]);
+        }
+        Ok(())
     }
 
     fn data(&mut self) -> Result<Vec<u8>> {
