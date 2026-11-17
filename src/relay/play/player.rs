@@ -134,7 +134,7 @@ impl Player<'_> {
                 Ok(()) => playback.set_problem(self.problem.clone()),
                 Err(e) => {
                     // The file went or is corrupt: tell why, and open it again in a while.
-                    log!("playing {}: {e:#}", want.demo.display());
+                    tracing::info!("relay: playing {}: {e:#}", want.demo.display());
                     playback.set_problem(Some(format!("{e:#}")));
                     self.cur = None;
                     std::thread::sleep(RETRY);
@@ -166,15 +166,19 @@ impl Player<'_> {
         if let Some(TakenOver(played)) = self.taken_over.take() {
             match played.filter(|p| p.demo == want.demo).map(|p| self.go_on_from(p)) {
                 Some(Ok(())) => return ControlFlow::Continue(()),
-                Some(Err(e)) => log!(":{} the clients taken over sign on again: {e:#}", self.relay.port()),
-                None => log!(":{} the clients taken over sign on again: another demo", self.relay.port()),
+                Some(Err(e)) => {
+                    tracing::info!("relay: :{} the clients taken over sign on again: {e:#}", self.relay.port());
+                }
+                None => {
+                    tracing::info!("relay: :{} the clients taken over sign on again: another demo", self.relay.port());
+                }
             }
             self.signed_on = Some(want.demo.clone());
         }
         // Another demo (a live match's next one), or this again: clients in a game sign on again.
         self.cur = None;
         if let Some(was) = self.signed_on.take() {
-            trace!("the clients leave {} for {}", was.display(), want.demo.display());
+            tracing::debug!("relay: the clients leave {} for {}", was.display(), want.demo.display());
             self.relay.hub().reconnect_all();
         }
         match Cursor::open(&want.demo, &self.relay.hub) {
@@ -191,7 +195,7 @@ impl Player<'_> {
                     self.given_up = Some(want.demo.clone());
                 }
                 if self.refuses_anew(&want.demo, &why) {
-                    log!("cannot play {}: {why}", want.demo.display());
+                    tracing::info!("relay: cannot play {}: {why}", want.demo.display());
                 }
                 playback.set_problem(Some(why));
                 std::thread::sleep(RETRY);
@@ -239,7 +243,7 @@ impl Player<'_> {
                 match_laser: self.match_laser.clone(),
             });
         let h = self.relay.hub().hand_over(played);
-        log!(":{} {} clients handed over", self.relay.port(), h.clients());
+        tracing::info!("relay: :{} {} clients handed over", self.relay.port(), h.clients());
         h
     }
 
@@ -258,8 +262,8 @@ impl Player<'_> {
             }
         }
         let Some(begins) = next.first.filter(|_| next.server == c.server) else {
-            log!(
-                ":{port} {} is of another map load ({:?}, playing {:?}): a signon",
+            tracing::info!(
+                "relay: :{port} {} is of another map load ({:?}, playing {:?}): a signon",
                 demo.display(),
                 next.server,
                 c.server
@@ -299,7 +303,7 @@ impl Player<'_> {
         if at < begins || laser_there(&next).is_none() {
             let why =
                 if at < begins { "the one playing ends before it begins" } else { "the laser is elsewhere in it" };
-            log!(":{port} {} at {begins}, playing at {at}: {why}: a signon", demo.display());
+            tracing::info!("relay: :{port} {} at {begins}, playing at {at}: {why}: a signon", demo.display());
             if passed {
                 self.rekey();
             }
@@ -317,8 +321,8 @@ impl Player<'_> {
         });
         self.relay.hub().release_held(Instant::now());
         let Some(next) = opened else { return false };
-        log!(
-            ":{} goes on into {} at {}, {} clients",
+        tracing::info!(
+            "relay: :{} goes on into {} at {}, {} clients",
             self.relay.port(),
             demo.display(),
             next.tick(),
@@ -344,8 +348,8 @@ impl Player<'_> {
         if c.tick() != played.tick || !c.started {
             anyhow::bail!("{} has no frame at {}", played.demo.display(), played.tick);
         }
-        log!(
-            ":{} goes on at {} after {} ms, {} clients",
+        tracing::info!(
+            "relay: :{} goes on at {} after {} ms, {} clients",
             self.relay.port(),
             c.tick(),
             took.elapsed().as_millis(),
@@ -410,7 +414,12 @@ impl Player<'_> {
     /// back first.
     fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
-        log!(":{} jump back from {} to {target}, {} clients", self.relay.port(), c.tick(), self.relay.clients());
+        tracing::info!(
+            "relay: :{} jump back from {} to {target}, {} clients",
+            self.relay.port(),
+            c.tick(),
+            self.relay.clients()
+        );
         // A spectator's panel: not for one watching as the player.
         if !c.dec.players_own() {
             self.relay.hub().reshow_panel_with_next_keyframe();
@@ -427,16 +436,19 @@ impl Player<'_> {
         };
         // The clients had the string table changes up to there.
         self.dry = skim(&mut again, None, target).1;
-        trace!("decoded back to {target} in {} ms", took.elapsed().as_millis());
+        tracing::debug!("relay: decoded back to {target} in {} ms", took.elapsed().as_millis());
         if again.dec.tables_rewritten() < rewritten {
             // The clients' tables are set back to these, or failing that, they sign on again.
             // The stream's changes after here are sent again when playback comes to them.
             let later = owned(c.tables.get(again.tables.len()..).unwrap_or_default());
             if let Some(msgs) = again.dec.set_tables_back(&c.dec) {
-                trace!("string tables set back with {} messages", msgs.len());
+                tracing::debug!("relay: string tables set back with {} messages", msgs.len());
                 self.relay.hub().set_tables_back(&later, &msgs);
             } else {
-                log!(":{} the string tables changed since: the clients sign on again", self.relay.port());
+                tracing::info!(
+                    "relay: :{} the string tables changed since: the clients sign on again",
+                    self.relay.port()
+                );
                 self.cur = None;
                 self.dry = false;
                 return Ok(());
@@ -481,10 +493,16 @@ impl Player<'_> {
             self.dry = false;
         }
         self.last_target = Some(target);
-        if *crate::relay::TRACE && self.traced.is_none_or(|t| t.elapsed() >= crate::relay::TRACE_EVERY) {
+        if tracing::enabled!(tracing::Level::DEBUG)
+            && self.traced.is_none_or(|t| t.elapsed() >= crate::relay::TRACE_EVERY)
+        {
             self.traced = Some(Instant::now());
             let tick = self.cur.as_ref().map_or(0, Cursor::tick);
-            trace!("playing tick {tick}, wanted {target}, paused {}, speed {}", want.paused, want.speed);
+            tracing::debug!(
+                "relay: playing tick {tick}, wanted {target}, paused {}, speed {}",
+                want.paused,
+                want.speed
+            );
         }
     }
 
@@ -494,8 +512,8 @@ impl Player<'_> {
             return;
         }
         let what = if want.paused { "paused" } else { "plays on" };
-        log!(
-            ":{} {what} at {}, {} clients",
+        tracing::info!(
+            "relay: :{} {what} at {}, {} clients",
             self.relay.port(),
             self.cur.as_ref().map_or(0, Cursor::tick),
             self.relay.clients()
@@ -526,8 +544,8 @@ impl Player<'_> {
         }
         let (decoded, dry) = skim(c, Some(&self.relay.hub), target);
         let decoded = decoded + usize::from(mark.is_some());
-        log!(
-            ":{} jump ahead from {from} to {} in {} ms, {} clients",
+        tracing::info!(
+            "relay: :{} jump ahead from {from} to {} in {} ms, {} clients",
             self.relay.port(),
             c.tick(),
             took.elapsed().as_millis(),
@@ -638,7 +656,7 @@ impl Player<'_> {
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
         let Camera::Follow { player } = camera;
         if let Some(msg) = c.dec.hltv_chase(player) {
-            trace!("camera on player {player}");
+            tracing::debug!("relay: camera on player {player}");
             self.relay.hub().queue_to_active(&msg);
         }
         self.cued = Some((camera, Instant::now()));

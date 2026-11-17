@@ -40,43 +40,11 @@ use std::fmt;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-/// `STVTF_DEBUG=relay` traces handshakes, signon timing and what each client is sent.
-pub(crate) static TRACE: LazyLock<bool> = LazyLock::new(|| std::env::var("STVTF_DEBUG").as_deref() == Ok("relay"));
-
-macro_rules! trace {
-    ($($arg:tt)*) => {
-        if *$crate::relay::TRACE {
-            eprintln!("relay: {}", format_args!($($arg)*));
-        }
-    };
-}
-
-/// Where a relay's log goes: stderr, unless a host takes it ([`log_to`]).
-static LOG: OnceLock<LogSink> = OnceLock::new();
-type LogSink = Box<dyn Fn(&str) + Send + Sync>;
-
-/// Has `take` given a relay's log from here on (clients coming and going, jumps, demos that will
-/// not play), a line each, instead of stderr. Once: a second call changes nothing.
-pub fn log_to(take: impl Fn(&str) + Send + Sync + 'static) {
-    let _ = LOG.set(Box::new(take));
-}
-
-pub(crate) fn log_line(line: &str) {
-    match LOG.get() {
-        Some(take) => take(line),
-        None => eprintln!("{line}"),
-    }
-}
-
-/// What is worth keeping of a relay's life, traced or not: a line a client, a jump or a failure.
-macro_rules! log {
-    ($($arg:tt)*) => {
-        $crate::relay::log_line(&format!("relay: {}", format_args!($($arg)*)))
-    };
-}
+// Logged through `tracing`: info a line a client, a jump or a failure; debug
+// (`RUST_LOG=stvtf::relay=debug`) also handshakes, signon timing and what each client is sent.
 
 /// A client's address as it is logged: without the end of it, the port kept to tell two apart.
 pub(crate) fn masked_addr(addr: SocketAddr) -> String {

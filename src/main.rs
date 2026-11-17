@@ -129,6 +129,15 @@ impl Args {
 }
 
 fn main() -> Result<()> {
+    // The library's log on stderr; `RUST_LOG` sets what (default info).
+    let level = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    tracing_subscriber::fmt()
+        .with_env_filter(level)
+        .with_target(false)
+        .with_ansi(tty)
+        .with_writer(std::io::stderr)
+        .init();
     let Some(args) = parse_args(std::env::args().skip(1))? else {
         eprintln!("{USAGE}");
         std::process::exit(EXIT_USAGE);

@@ -66,12 +66,16 @@ impl Admission {
                         &format!("This relay speaks protocol {}", handshake::PROTOCOL_VERSION),
                     )
                 } else if !self.password.is_empty() && password != self.password {
-                    log!(":{port} {} ({}) gave a wrong password", name.escape_debug(), masked_addr(from));
+                    tracing::info!(
+                        "relay: :{port} {} ({}) gave a wrong password",
+                        name.escape_debug(),
+                        masked_addr(from)
+                    );
                     handshake::build_reject(nonce, "#GameUI_ServerRejectBadPassword")
                 } else if clients.len() >= self.slots && !clients.contains_key(&from) {
                     handshake::build_reject(nonce, "#GameUI_ServerRejectServerFull")
                 } else {
-                    log!(":{port} {} ({}) connected", name.escape_debug(), masked_addr(from));
+                    tracing::info!("relay: :{port} {} ({}) connected", name.escape_debug(), masked_addr(from));
                     clients.insert(from, Client::new(name, challenge, nonce, now));
                     self.seen_client = true;
                     handshake::build_accept(nonce)

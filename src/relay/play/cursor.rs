@@ -126,7 +126,7 @@ impl Cursor {
                 }
                 // A demo cut off in a broken packet (a recording stopped short, say) ends there.
                 Err(e) => {
-                    log!("{} ends in an unreadable packet: {e:#}", self.path.display());
+                    tracing::info!("relay: {} ends in an unreadable packet: {e:#}", self.path.display());
                     self.ended = true;
                     None
                 }

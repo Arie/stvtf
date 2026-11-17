@@ -148,7 +148,7 @@ impl Recorder {
             match started {
                 Ok(w) => st.writer = Some(w),
                 Err(e) => {
-                    eprintln!("stvtf: recording a demo: {e:#}");
+                    tracing::warn!("recording a demo: {e:#}");
                     st.failed = true;
                     return;
                 }
@@ -166,7 +166,7 @@ impl Recorder {
             st.flushed = Some(Instant::now());
         }
         if let Err(e) = written {
-            eprintln!("stvtf: writing a demo: {e:#}");
+            tracing::warn!("writing a demo: {e:#}");
             st.writer = None;
             st.failed = true;
         }

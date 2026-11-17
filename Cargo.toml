@@ -16,6 +16,8 @@ md5 = "0.7"
 anyhow = "1"
 ctrlc = { version = "3", features = ["termination"] }
 serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 flate2 = "1"

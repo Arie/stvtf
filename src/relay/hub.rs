@@ -8,7 +8,7 @@ use super::out::{Empty, Out};
 use super::server_msg::{is_table_change, set_pause, signon_state, table_changes, vgui_menu};
 use super::{
     CLIENT_TIMEOUT, KEEPALIVE, KEY_WAIT, MAX_SINCE_FULL, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT,
-    SPECTATORS, TRACE, TRACE_EVERY, masked_addr,
+    SPECTATORS, TRACE_EVERY, masked_addr,
 };
 use crate::decode::Lifecycle;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
@@ -85,7 +85,12 @@ impl Played {
             return stream;
         }
         if c.keyed.is_none_or(|at| now.duration_since(at) > KEY_WAIT) {
-            trace!("{} cannot take frame {} from {:?}: a full update", c.name.escape_debug(), self.tick, c.acked);
+            tracing::debug!(
+                "relay: {} cannot take frame {} from {:?}: a full update",
+                c.name.escape_debug(),
+                self.tick,
+                c.acked
+            );
             c.set_phase(Phase::WaitingFull, now);
         }
         Some(&self.bare)
@@ -240,7 +245,7 @@ impl Hub {
             return;
         }
         self.backlog.add_table_change(msg, &mut self.clients, Delivery::InDatagrams { queue });
-        trace!("a string table change of {} bits from a datagram into the backlog", msg.nbits());
+        tracing::debug!("relay: a string table change of {} bits from a datagram into the backlog", msg.nbits());
     }
 
     /// A stream passed over on a jump: only its string table changes count, which every client
@@ -309,7 +314,7 @@ impl Hub {
         let again = std::mem::take(&mut self.with_next);
         for (addr, c) in &mut self.clients {
             if c.takes_full_update(&self.backlog) {
-                trace!("{addr} gets a keyframe of {} bits", key.nbits());
+                tracing::debug!("relay: {addr} gets a keyframe of {} bits", key.nbits());
                 c.set_phase(Phase::Active, now);
                 c.queue.push(pause.clone());
                 c.queue.extend(again.iter().cloned());
@@ -353,7 +358,7 @@ impl Hub {
     pub(super) fn rekey_unacked(&mut self, now: Instant) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
             if c.keyed.is_some_and(|at| now.duration_since(at) > KEY_WAIT) {
-                trace!("{} did not ack its full update: another", c.name.escape_debug());
+                tracing::debug!("relay: {} did not ack its full update: another", c.name.escape_debug());
                 c.set_phase(Phase::WaitingFull, now);
             }
         }
@@ -451,7 +456,7 @@ impl Hub {
         let frame = self.frame.take();
         for (addr, c) in &mut self.clients {
             if full && c.takes_full_update(&self.backlog) {
-                trace!("{addr} gets a full update of {} bits", tail.as_ref().map_or(0, BitBuf::nbits));
+                tracing::debug!("relay: {addr} gets a full update of {} bits", tail.as_ref().map_or(0, BitBuf::nbits));
                 c.set_phase(Phase::Active, now);
                 c.enter_notes(&self.notes, now);
             }
@@ -477,14 +482,17 @@ impl Hub {
             && !self.mode.is_play()
             && c.through_backlog(&self.backlog)
         {
-            trace!("{addr} gets entities from the {} datagrams kept since the last full update", frames.len());
+            tracing::debug!(
+                "relay: {addr} gets entities from the {} datagrams kept since the last full update",
+                frames.len()
+            );
             c.set_phase(Phase::Active, now);
             c.enter_notes(&self.notes, now);
             for t in frames {
                 self.out.send(addr, c, Some(t), Empty::Skip, now);
             }
         } else {
-            trace!("{addr} waits for a full update");
+            tracing::debug!("relay: {addr} waits for a full update");
             c.set_phase(Phase::WaitingFull, now);
         }
     }
@@ -501,7 +509,13 @@ impl Hub {
         let Some(pkt) = c.rx.feed(data, now) else { return };
         let ready = c.read_packet(from, &pkt, now);
         if let Some(reason) = &c.gone {
-            log!(":{} {} ({}) left: {}", self.port, c.name.escape_debug(), masked_addr(from), reason.escape_debug());
+            tracing::info!(
+                "relay: :{} {} ({}) left: {}",
+                self.port,
+                c.name.escape_debug(),
+                masked_addr(from),
+                reason.escape_debug()
+            );
             self.clients.remove(&from);
             return;
         }
@@ -520,8 +534,8 @@ impl Hub {
     }
 
     fn connectionless(&mut self, from: SocketAddr, data: &[u8], now: Instant) {
-        trace!(
-            "{from} out of band {:?} ({} bytes): {:?}",
+        tracing::debug!(
+            "relay: {from} out of band {:?} ({} bytes): {:?}",
             data.get(4).map(|&b| char::from(b)),
             data.len(),
             String::from_utf8_lossy(&data[5.min(data.len())..data.len().min(40)])
@@ -540,8 +554,8 @@ impl Hub {
             let loading = c.phase == Phase::Signon || c.reconnecting;
             let alive = now.duration_since(c.last_heard) < if loading { SIGNON_TIMEOUT } else { CLIENT_TIMEOUT };
             if !alive {
-                log!(
-                    ":{port} {} ({}) timed out, silent for {:.0} s, {:?} for {:.1} s",
+                tracing::info!(
+                    "relay: :{port} {} ({}) timed out, silent for {:.0} s, {:?} for {:.1} s",
                     c.name.escape_debug(),
                     masked_addr(*addr),
                     now.duration_since(c.last_heard).as_secs_f32(),
@@ -561,11 +575,11 @@ impl Hub {
                 self.out.burst(*addr, c, Empty::send_if(keepalive), now);
             }
         }
-        if *TRACE && now.duration_since(self.traced) > TRACE_EVERY {
+        if tracing::enabled!(tracing::Level::DEBUG) && now.duration_since(self.traced) > TRACE_EVERY {
             self.traced = now;
             for (addr, c) in &mut self.clients {
-                trace!(
-                    "{addr} {:?}: sent {} packets with server data, {} without",
+                tracing::debug!(
+                    "relay: {addr} {:?}: sent {} packets with server data, {} without",
                     c.phase,
                     std::mem::take(&mut c.sent_with_tail),
                     std::mem::take(&mut c.sent_bare)
@@ -604,7 +618,11 @@ impl Hub {
             if !c.mid_signon() {
                 return true;
             }
-            log!(":{port} {} ({}) still in its signon: dropped", c.name.escape_debug(), masked_addr(*addr));
+            tracing::info!(
+                "relay: :{port} {} ({}) still in its signon: dropped",
+                c.name.escape_debug(),
+                masked_addr(*addr)
+            );
             // Only the goodbye: the rest of the signon is of no use to it.
             c.queue.clear();
             c.outgoing = None;

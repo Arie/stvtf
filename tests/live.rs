@@ -498,7 +498,7 @@ fn map_change(server: &Server, relay: &Proc, clients: &[Proc], checks: &mut Chec
 fn through_a_relay(server: &Server, checks: &mut Checks) {
     let listen = format!("127.0.0.1:{RELAY_PORT}");
     let args = ["relay", &server.tv, "--listen", &listen, "--relay-password", "pw"];
-    let mut relay = Proc::start(&args, &[("STVTF_DEBUG", "relay")]);
+    let mut relay = Proc::start(&args, &[("RUST_LOG", "stvtf::relay=debug")]);
     if relay.wait_line(Instant::now(), WAIT, is_state("full")).is_none() {
         checks.check("the relay gets in", false, "");
         return;

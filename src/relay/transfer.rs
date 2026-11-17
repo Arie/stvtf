@@ -63,7 +63,7 @@ impl Outgoing {
             }
         }
         let frags = data.len().div_ceil(FRAGMENT_SIZE);
-        trace!("transfer of {} bytes ({:?} uncompressed), {frags} fragments", data.len(), uncompressed);
+        tracing::debug!("relay: transfer of {} bytes ({:?} uncompressed), {frags} fragments", data.len(), uncompressed);
         Outgoing { data, uncompressed, frags, next: 0, inflight: Default::default(), lost: Vec::new() }
     }
 

@@ -212,7 +212,10 @@ impl Client {
             for m in client_messages(&stream.bits) {
                 match m {
                     ClientMsg::Signon(s) => {
-                        trace!("{from} signon {s:?} at {} ms", now.duration_since(self.connected).as_millis());
+                        tracing::debug!(
+                            "relay: {from} signon {s:?} at {} ms",
+                            now.duration_since(self.connected).as_millis()
+                        );
                         // Only the answer to a reconnect counts.
                         if self.reconnecting && s != Signon::Connected {
                             continue;

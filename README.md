@@ -318,11 +318,11 @@ connection, so it costs the server no slot. In the library it is `Watch::relay`,
   has proved itself by echoing a challenge. `A2S_INFO` first gets a challenge, as on current
   srcds, and a connect with a wrong challenge gets no reply at all. The challenges are derived
   from the address with a secret key, so nothing is stored before a client connects.
-- **Log**: a line each on stderr (in the library, `relay::log_to` takes them instead) for a
+- **Log**: a line each through `tracing` (the CLI writes them to stderr) for a
   client that connects, gives a wrong password, leaves or times out (how long it was silent, and
   which phase it was in for how long), by its name and its address less the last part; and, of a
   relay playing a demo, for a jump, a pause and playing on, a demo that goes on into another or
-  why it does not, a handover, and a demo that cannot be played. `STVTF_DEBUG=relay` also traces
+  why it does not, a handover, and a demo that cannot be played. `RUST_LOG=stvtf::relay=debug` also traces
   each client's handshake packets, its signon timing, the transfers it is sent, and every 5 s how
   many of its packets carried server data.
 

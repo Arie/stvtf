@@ -94,7 +94,7 @@ impl Player<'_> {
         let Some(ahead) = past_beams(now, key as f64 * f64::from(interval), self.beams_until, interval) else {
             return false;
         };
-        trace!("the clients' clock put ahead to {ahead}, past the beams they see");
+        tracing::debug!("relay: the clients' clock put ahead to {ahead}, past the beams they see");
         self.relay.hub().send_to_waiting(&messages::tick(ahead));
         self.flushing = Some(Instant::now() + FLUSH);
         self.beams_until = 0.0;
@@ -134,7 +134,7 @@ impl Player<'_> {
         if !self.cur.as_ref().is_some_and(|c| c.dec.laser_loaded_twice(self.laser)) {
             return false;
         }
-        log!(":{} the match loaded the laser too: the clients sign on again", self.relay.port());
+        tracing::info!("relay: :{} the match loaded the laser too: the clients sign on again", self.relay.port());
         self.match_laser = self.cur.take().map(|c| c.path);
         true
     }

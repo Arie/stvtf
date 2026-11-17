@@ -86,7 +86,7 @@ impl Index {
         let path = path.to_owned();
         std::thread::spawn(move || {
             if let Err(e) = index_demo(&path, &weak, EVERY) {
-                trace!("indexing {}: {e:#}", path.display());
+                tracing::debug!("relay: indexing {}: {e:#}", path.display());
             }
         });
         index

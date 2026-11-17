@@ -18,8 +18,8 @@ impl Player<'_> {
         // With baselines of its own every frame is written anew, from what each client acked.
         let floor = if c.dec.own_baselines() { None } else { self.floor };
         if !follows(floor, base) {
-            trace!(
-                "a frame the clients cannot follow, from {base:?}, they have from {:?}: a full update instead",
+            tracing::debug!(
+                "relay: a frame the clients cannot follow, from {base:?}, they have from {:?}: a full update instead",
                 self.floor
             );
             // Only its string table changes reach them; its sounds, events and temp entities do
