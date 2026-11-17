@@ -23,46 +23,60 @@ fn lines(stdout: &[u8]) -> Vec<Value> {
         .collect()
 }
 
-/// A command fails with this on stderr, and stdout stays empty for whatever reads it.
+/// A command fails with `status` and this on stderr, and stdout stays empty for whatever reads it.
 #[track_caller]
-fn fails_with(args: &[&str], message: &str) {
+fn fails(args: &[&str], status: i32, message: &str) {
     let out = run(args);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{args:?}: {stderr}");
+    assert_eq!(out.status.code(), Some(status), "{args:?}: {stderr}");
     assert!(stderr.contains(message), "{args:?}: {stderr}");
     assert!(!stderr.contains("panicked"), "{args:?}: {stderr}");
     assert!(out.stdout.is_empty(), "{args:?}");
 }
 
+/// What it was asked to do failed (1).
+#[track_caller]
+fn fails_with(args: &[&str], message: &str) {
+    fails(args, 1, message);
+}
+
+/// The command line is not understood (2).
+#[track_caller]
+fn refuses(args: &[&str], message: &str) {
+    fails(args, 2, message);
+}
+
 #[test]
-fn no_command_or_help_shows_the_usage() {
-    for args in [&[][..], &["--help"], &["demo", "-h"]] {
+fn no_command_shows_the_usage_and_help_is_asked_for() {
+    refuses(&[], "Usage: stvtf <COMMAND>");
+    for args in [&["--help"][..], &["demo", "-h"]] {
         let out = run(args);
-        assert_eq!(out.status.code(), Some(2), "{args:?}");
-        assert!(String::from_utf8_lossy(&out.stderr).contains("stvtf connect HOST:PORT"), "{args:?}");
-        assert!(out.stdout.is_empty(), "{args:?}");
+        assert!(out.status.success(), "{args:?}");
+        assert!(String::from_utf8_lossy(&out.stdout).contains("Usage: stvtf"), "{args:?}");
     }
 }
 
 #[test]
 fn bad_arguments_say_what_is_wrong() {
-    fails_with(&["frobnicate", "x"], "unknown command");
-    fails_with(&["demo"], "demo needs an argument");
-    fails_with(&["demo", "a.dem", "--hz"], "--hz needs a value");
-    fails_with(&["demo", "a.dem", "b.dem"], "unexpected argument");
-    fails_with(&["demo", "a.dem", "--record", "x"], "demo does not take --record");
-    fails_with(&["connect", "127.0.0.1:1", "--hz", "fast"], "--hz fast: not a number");
-    fails_with(&["connect", "127.0.0.1:1", "--crc", "xyz"], "--crc xyz: not hex");
-    fails_with(&["connect", "127.0.0.1:1", "--seconds", "soon"], "--seconds soon: not a number");
-    fails_with(&["connect", "127.0.0.1:1", "--seconds", "-1"], "must be 0 or more");
+    refuses(&["frobnicate", "x"], "unrecognized subcommand");
+    refuses(&["demo"], "required arguments were not provided");
+    refuses(&["demo", "a.dem", "--hz"], "a value is required for '--hz");
+    refuses(&["demo", "a.dem", "b.dem"], "unexpected argument 'b.dem'");
+    refuses(&["demo", "a.dem", "--record", "x"], "unexpected argument '--record'");
+    refuses(&["connect", "127.0.0.1:1", "--hz", "fast"], "invalid value 'fast' for '--hz <HZ>': not a number");
+    refuses(&["connect", "127.0.0.1:1", "--crc", "xyz"], "invalid value 'xyz' for '--crc <HEX>': not hex");
+    refuses(&["connect", "127.0.0.1:1", "--seconds", "soon"], "not a number");
+    refuses(&["connect", "127.0.0.1:1", "--seconds", "-1"], "must be 0 or more");
     let cap = fixture("bots_cp_badlands.cap");
     for slots in ["0", "256"] {
-        fails_with(&["relay", &cap, "--relay-password", "x", "--relay-slots", slots], "must be 1 to 255");
+        refuses(&["relay", &cap, "--relay-password", "x", "--relay-slots", slots], "must be 1 to 255");
     }
-    fails_with(&["relay", &cap, "--relay-password", "x", "--relay-slots", "many"], "not a number");
+    refuses(&["relay", &cap, "--relay-password", "x", "--relay-slots", "many"], "not a number");
     for speed in ["0", "-1", "inf"] {
-        let args = ["relay", &cap, "--relay-password", "x", "--listen", "127.0.0.1:0", "--speed", speed];
-        fails_with(&args, "--speed must be over 0");
+        refuses(
+            &["relay", &cap, "--relay-password", "x", "--listen", "127.0.0.1:0", "--speed", speed],
+            "must be over 0",
+        );
     }
     fails_with(&["relay", &cap, "--relay-password", "x", "--listen", "not an address"], "binding not an address");
 }

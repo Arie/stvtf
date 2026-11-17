@@ -53,11 +53,11 @@ const DEFAULT_SILENCE: Duration = Duration::from_secs(15);
 /// Snapshots per second unless asked otherwise.
 pub const DEFAULT_SNAPSHOT_HZ: f32 = 20.0;
 
-/// A snapshot rate as given on a command line: a number, 0 or more (0 disables snapshots).
+/// A snapshot rate as written: a number, 0 or more (0 disables snapshots).
 pub fn parse_snapshot_hz(hz: &str) -> crate::Result<f32> {
-    let parsed: f32 = hz.parse().map_err(|_| anyhow::anyhow!("--hz {hz}: not a number"))?;
+    let parsed: f32 = hz.parse().map_err(|_| anyhow::anyhow!("not a number"))?;
     if !parsed.is_finite() || parsed < 0.0 {
-        return Err(anyhow::anyhow!("--hz must be 0 or more").into());
+        return Err(anyhow::anyhow!("must be 0 or more").into());
     }
     Ok(parsed)
 }
