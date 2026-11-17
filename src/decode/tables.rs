@@ -10,7 +10,7 @@
 use crate::net::bits::BitBuf;
 use crate::net::messages::SVC_UPDATESTRINGTABLE;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::Message;
 use tf_demo_parser::demo::message::stringtable::UpdateStringTableMessage;
@@ -92,10 +92,29 @@ pub(crate) struct BeamModel {
     pub(crate) load: Option<BitBuf>,
 }
 
+/// Where a game client puts each `instancebaseline` entry, by server index: past its end goes
+/// at its end. Baselines are found by name, so moving them is safe.
+#[derive(Default, Clone, Debug)]
+pub(crate) struct Placed {
+    table: Option<u8>,
+    at: HashMap<u16, u16>,
+    next: u16,
+}
+
+impl Placed {
+    fn place(&mut self, i: u16) -> u16 {
+        *self.at.entry(i).or_insert_with(|| {
+            self.next += 1;
+            self.next - 1
+        })
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Tables {
     /// By table id.
     by_id: Vec<Table>,
+    placed: Placed,
     /// How many updates rewrote an entry of a kept table.
     rewritten: u32,
     /// The best of [`BEAM_SPRITES`] loaded: its rank there and its model index.
@@ -105,6 +124,48 @@ pub(crate) struct Tables {
 }
 
 impl Tables {
+    /// Renumbers `instancebaseline` entries as a game client places them; the moved updates.
+    pub(crate) fn place(&mut self, messages: &mut [Message<'_>]) -> Vec<usize> {
+        let mut changed = Vec::new();
+        let mut id = self.by_id.len();
+        for (k, msg) in messages.iter_mut().enumerate() {
+            match msg {
+                Message::CreateStringTable(t) => {
+                    if t.table.name == "instancebaseline" {
+                        self.placed = Placed { table: u8::try_from(id).ok(), ..Placed::default() };
+                        for (i, _) in &mut t.table.entries {
+                            *i = self.placed.place(*i);
+                        }
+                    }
+                    id += 1;
+                }
+                Message::UpdateStringTable(u) if Some(u.table_id) == self.placed.table => {
+                    let mut moved = false;
+                    for (i, _) in &mut u.entries {
+                        let to = self.placed.place(*i);
+                        moved |= to != *i;
+                        *i = to;
+                    }
+                    if moved {
+                        changed.push(k);
+                    }
+                }
+                _ => {}
+            }
+        }
+        changed
+    }
+
+    /// Baseline placement.
+    pub(crate) fn placed(&self) -> Placed {
+        self.placed.clone()
+    }
+
+    /// Placement for streams already placed.
+    pub(crate) fn set_placed(&mut self, placed: Placed) {
+        self.placed = placed;
+    }
+
     /// Takes the string table messages among a stream's.
     pub(crate) fn note(&mut self, messages: &[Message<'_>]) {
         for msg in messages {
@@ -197,6 +258,12 @@ impl Tables {
         let entry = StringTableEntry { text: Some(Cow::Borrowed(BEAM_SPRITES[0])), extra_data: None };
         let msg = UpdateStringTableMessage { entries: vec![(slot, entry)], table_id: u8::try_from(id).ok()? };
         Some(BeamModel { index: slot, load: Some(super::encode_message(SVC_UPDATESTRINGTABLE, &msg, state)?) })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn names_for_tests(&self, name: &str) -> Option<BTreeMap<u16, Option<String>>> {
+        let t = self.by_id.iter().find(|t| t.name == name)?;
+        Some(t.values.as_ref()?.iter().map(|(i, v)| (*i, v.text.clone())).collect())
     }
 
     /// How many entries of `userinfo` and `instancebaseline` were rewritten so far: a client with

@@ -16,7 +16,7 @@ mod notes;
 mod props;
 mod tables;
 mod voice_out;
-pub(crate) use tables::{BeamModel, ModelsSent};
+pub(crate) use tables::{BeamModel, ModelsSent, Placed};
 pub(crate) use voice_out::{steam_voice, voice_runs};
 mod world;
 
@@ -117,9 +117,16 @@ pub(crate) struct Lifecycle {
     /// Where each message of the stream is, in order. After a decode error the rest of the
     /// stream is one span of type [`UNPARSED`].
     pub spans: Vec<Span>,
+    /// The stream if the decoder rewrote it; `spans` are of it.
+    pub stream: Option<BitBuf>,
 }
 
 impl Lifecycle {
+    /// The stream to pass on.
+    pub fn bits<'a>(&'a self, fed: &'a BitBuf) -> &'a BitBuf {
+        self.stream.as_ref().unwrap_or(fed)
+    }
+
     /// `bits`, the stream this came from, up to the end of its last message: what follows is
     /// padding, and followed by more it would be read as messages.
     pub fn cut(&self, bits: &BitBuf) -> BitBuf {
@@ -447,11 +454,13 @@ impl Decoder {
                 }
             }
         }
+        self.place_baselines(&mut life, &data[..nbytes], &mut messages, &parsed_spans);
         // Applied once the packet is: a new class's baseline may come in the same packet, before
         // the entities that need it.
         let frames = if self.world.is_some() { entity_frames(&messages) } else { Vec::new() };
         self.tables.note(&messages);
-        self.note_round(&messages, &parsed_spans, &life.spans, &data[..nbytes]);
+        let bytes = life.stream.as_ref().map_or(&data[..nbytes], BitBuf::bytes);
+        self.note_round(&messages, &parsed_spans, &life.spans, bytes);
         let mut has_entities = false;
         for msg in &messages {
             match msg {
@@ -604,6 +613,29 @@ impl Decoder {
         self.tables.set_back(&later.tables, self.handler.get_parser_state())
     }
 
+    /// Places `instancebaseline` entries as a game client does; rewrites the stream if any moved.
+    fn place_baselines(&mut self, life: &mut Lifecycle, data: &[u8], messages: &mut [Message<'_>], spans_of: &[usize]) {
+        let moved = self.tables.place(messages);
+        if !moved.is_empty() {
+            replace_messages(life, data, &moved, spans_of, messages, self.handler.get_parser_state());
+        }
+    }
+
+    /// Baseline placement.
+    pub(crate) fn placed(&self) -> Placed {
+        self.tables.placed()
+    }
+
+    /// Placement for streams already placed.
+    pub(crate) fn set_placed(&mut self, placed: Placed) {
+        self.tables.set_placed(placed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn table_names_for_tests(&self, name: &str) -> Option<std::collections::BTreeMap<u16, Option<String>>> {
+        self.tables.names_for_tests(name)
+    }
+
     #[cfg(test)]
     pub(crate) fn parser_state_for_tests(&self) -> &ParserState {
         self.handler.get_parser_state()
@@ -625,6 +657,31 @@ impl Decoder {
     pub(crate) fn panicked(&self) -> bool {
         self.panicked
     }
+}
+
+/// `data` with the `moved` updates re-encoded.
+fn replace_messages(
+    life: &mut Lifecycle,
+    data: &[u8],
+    moved: &[usize],
+    spans_of: &[usize],
+    messages: &[Message<'_>],
+    state: &ParserState,
+) {
+    let mut w = BitWriter::new();
+    let mut spans = Vec::with_capacity(life.spans.len());
+    for (n, span) in life.spans.iter().enumerate() {
+        let encoded = moved.iter().find(|&&k| spans_of[k] == n).and_then(|&k| match &messages[k] {
+            Message::UpdateStringTable(u) => encode_message(crate::net::messages::SVC_UPDATESTRINGTABLE, u, state),
+            _ => None,
+        });
+        let msg = encoded.unwrap_or_else(|| BitReader::slice(data, span.bits.clone()));
+        let start = w.nbits();
+        w.write_buf(&msg);
+        spans.push(Span { id: span.id, bits: start..w.nbits() });
+    }
+    life.spans = spans;
+    life.stream = Some(w.finish());
 }
 
 /// `msg` as a message stream of it alone, its type `svc` first.
@@ -737,6 +794,11 @@ pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Line)) -> 
 }
 
 #[cfg(test)]
+fn tests_tables() -> Tables {
+    crate::watch::tables(crate::CURRENT_BUILD, None).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -763,7 +825,7 @@ mod tests {
     }
 
     fn tables() -> Tables {
-        crate::watch::tables(crate::CURRENT_BUILD, None).unwrap()
+        tests_tables()
     }
 
     #[test]
@@ -848,6 +910,87 @@ mod tests {
             }
         }
         assert_eq!(full_updates, 1);
+    }
+}
+
+#[cfg(test)]
+mod baseline_tests {
+    use super::*;
+    use crate::net::messages::{SVC_CREATESTRINGTABLE, SVC_UPDATESTRINGTABLE};
+    use std::borrow::Cow;
+    use tf_demo_parser::demo::message::stringtable::{CreateStringTableMessage, UpdateStringTableMessage};
+    use tf_demo_parser::demo::packet::stringtable::{ExtraData, StringTable, StringTableEntry};
+
+    fn entry(class: &str, data: u8) -> StringTableEntry<'static> {
+        let data = BitReadStream::new(BitReadBuffer::new_owned(vec![data], LittleEndian));
+        StringTableEntry { text: Some(Cow::Owned(class.into())), extra_data: Some(ExtraData::new(data)) }
+    }
+
+    /// Creates `instancebaseline` with 42 entries.
+    fn created(dec: &mut Decoder) -> BitBuf {
+        let table = StringTable {
+            name: "instancebaseline".into(),
+            entries: (0..42).map(|i| (i, entry(&i.to_string(), 0))).collect(),
+            max_entries: 1024,
+            fixed_user_data_size: None,
+            client_entries: None,
+            compressed: false,
+        };
+        let msg = CreateStringTableMessage { table };
+        let bits = encode_message(SVC_CREATESTRINGTABLE, &msg, dec.parser_state_for_tests()).unwrap();
+        let life = dec.feed(bits.bytes(), bits.nbits());
+        assert!(life.stream.is_none(), "in order: as it came");
+        bits
+    }
+
+    /// An update's stream as passed on.
+    fn update(dec: &mut Decoder, entries: Vec<(u16, StringTableEntry<'static>)>) -> BitBuf {
+        let msg = UpdateStringTableMessage { entries, table_id: 0 };
+        let bits = encode_message(SVC_UPDATESTRINGTABLE, &msg, dec.parser_state_for_tests()).unwrap();
+        let life = dec.feed(bits.bytes(), bits.nbits());
+        life.bits(&bits).clone()
+    }
+
+    fn indices(dec: &Decoder, bits: &BitBuf) -> Vec<u16> {
+        let mut s = BitReadStream::new(BitReadBuffer::new(bits.bytes(), LittleEndian));
+        let t = MessageType::read(&mut s).unwrap();
+        let Message::UpdateStringTable(u) = Message::from_type(t, &mut s, dec.parser_state_for_tests()).unwrap() else {
+            panic!()
+        };
+        u.entries.iter().map(|(i, _)| *i).collect()
+    }
+
+    /// An entry past the count goes at the client's end; later ones follow it.
+    #[test]
+    fn baselines_go_where_a_game_client_puts_them() {
+        let mut dec = Decoder::new(&tests_tables(), 0.0).unwrap();
+        created(&mut dec);
+
+        let gap = update(&mut dec, vec![(39, entry("234", 1)), (54, entry("88", 1))]);
+        assert_eq!(indices(&dec, &gap), [39, 42], "where the client puts it");
+        let skipped = update(&mut dec, vec![(42, entry("89", 1))]);
+        assert_eq!(indices(&dec, &skipped), [43], "after it");
+        let again = update(&mut dec, vec![(54, entry("88", 2)), (55, entry("90", 2))]);
+        assert_eq!(indices(&dec, &again), [42, 44]);
+        let names = dec.table_names_for_tests("instancebaseline").unwrap();
+        let at = |i: u16| names.get(&i).cloned().flatten();
+        assert_eq!((at(42), at(43), at(44)), (Some("88".into()), Some("89".into()), Some("90".into())));
+    }
+
+    /// A checkpoint's placed streams, then the demo's own.
+    #[test]
+    fn a_decoder_fed_placed_streams_goes_on_placing_the_servers() {
+        let mut dec = Decoder::new(&tests_tables(), 0.0).unwrap();
+        let mut passed = vec![created(&mut dec)];
+        passed.push(update(&mut dec, vec![(54, entry("88", 1))]));
+        passed.push(update(&mut dec, vec![(42, entry("89", 1))]));
+        let mut later = Decoder::new(&tests_tables(), 0.0).unwrap();
+        for bits in &passed {
+            later.feed(bits.bytes(), bits.nbits());
+        }
+        later.set_placed(dec.placed());
+        let again = update(&mut later, vec![(54, entry("88", 2)), (42, entry("89", 2))]);
+        assert_eq!(indices(&later, &again), [42, 43]);
     }
 }
 

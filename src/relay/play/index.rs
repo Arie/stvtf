@@ -11,6 +11,7 @@
 
 use super::cursor::Cursor;
 use super::{NOT_A_FRAME, RECENT};
+use crate::decode::Placed;
 use crate::lock;
 use crate::net::bits::BitBuf;
 use anyhow::Result;
@@ -40,6 +41,8 @@ pub(super) struct Checkpoint {
     paused: bool,
     /// The last round start, win panel or game over event.
     round: Option<BitBuf>,
+    /// Baseline placement.
+    placed: Placed,
 }
 
 impl Checkpoint {
@@ -150,6 +153,7 @@ impl Cursor {
             offset: self.offset,
             paused: self.paused,
             round: self.dec.round_event(),
+            placed: self.dec.placed(),
         })
     }
 
@@ -165,6 +169,7 @@ impl Cursor {
         }
         c.dec.take_output();
         c.dec.set_round_event(mark.round.clone());
+        c.dec.set_placed(mark.placed.clone());
         c.reader.seek_to(mark.pos)?;
         c.next = None;
         c.next_pos = mark.pos;

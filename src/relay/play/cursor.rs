@@ -161,7 +161,7 @@ impl Cursor {
         let Some(Packet::Message { tick, data }) = self.next.take() else { return None };
         let bits = BitBuf::from_bytes(data);
         let life = self.dec.feed(bits.bytes(), bits.nbits());
-        let (bits, life) = without_signon(&bits, &life);
+        let (bits, life) = without_signon(life.bits(&bits), &life);
         self.dec.take_output();
         self.offset = i64::from(self.dec.server_tick()) - i64::from(tick);
         self.started = true;
@@ -222,6 +222,7 @@ fn feed_signon(dec: &mut Decoder, signon: Vec<Vec<u8>>, hub: Option<&Mutex<Hub>>
     for data in signon {
         let bits = BitBuf::from_bytes(data);
         let life = dec.feed(bits.bytes(), bits.nbits());
+        let bits = life.bits(&bits).clone();
         if let Some(info) = &life.server_info {
             server = Some(info.clone());
         }
@@ -310,7 +311,7 @@ fn without(bits: &BitBuf, life: &Lifecycle, drop: impl Fn(&Span) -> bool) -> (Bi
         w.write_range(bits.bytes(), span.bits.clone());
         spans.push(Span { id: span.id, bits: start..w.nbits() });
     }
-    (w.finish(), Lifecycle { spans, ..life.clone() })
+    (w.finish(), Lifecycle { spans, stream: None, ..life.clone() })
 }
 
 /// String table changes as messages of their own.

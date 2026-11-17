@@ -399,7 +399,7 @@ impl<'o> Session<'o> {
     fn feed(&mut self, stream: &MsgStream, dec: &mut Decoder, emit: &mut dyn FnMut(Line)) {
         let life = dec.feed(stream.bits.bytes(), stream.bits.nbits());
         if let Some(tap) = self.tap {
-            tap.stream(&stream.bits, stream.reliable, &life);
+            tap.stream(life.bits(&stream.bits), stream.reliable, &life);
         }
         self.lifecycle(life, emit);
     }

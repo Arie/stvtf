@@ -564,6 +564,59 @@ fn client_tables_are_the_demos(relay: &Relay, p: &Player<'_>, signon: usize) -> 
     c.dec.set_tables_back(&client.dec).filter(Vec::is_empty).map(drop)
 }
 
+/// A game client's `table` from the backlog at `signon`, if it differs from the demo's.
+fn game_client_table_differs(relay: &Relay, player: &Player<'_>, signon: usize, table: &str) -> Option<String> {
+    use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
+    use tf_demo_parser::demo::message::MessageType;
+    let cur = player.cur.as_ref().unwrap();
+    let state = cur.dec.parser_state_for_tests();
+    let hub = relay.hub();
+    let mut names: Vec<Vec<Option<String>>> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    let mut misplaced = Vec::new();
+    for i in signon..hub.backlog.len() {
+        let bits = &hub.backlog.get(i).unwrap().bits;
+        let mut stream = BitReadStream::new(BitReadBuffer::new(bits.bytes(), LittleEndian));
+        let Ok(kind) = MessageType::read(&mut stream) else { continue };
+        match Message::from_type(kind, &mut stream, state) {
+            Ok(Message::ServerInfo(_)) => {
+                names.clear();
+                ids.clear();
+                misplaced.clear();
+            }
+            Ok(Message::CreateStringTable(created)) => {
+                ids.push(created.table.name.to_string());
+                names.push(created.table.entries.iter().map(|(_, e)| e.text.as_deref().map(str::to_string)).collect());
+            }
+            Ok(Message::UpdateStringTable(update)) => {
+                let id = usize::from(update.table_id);
+                let Some(have) = names.get_mut(id) else { continue };
+                for (index, entry) in &update.entries {
+                    if usize::from(*index) < have.len() {
+                        continue;
+                    }
+                    if usize::from(*index) != have.len() {
+                        misplaced.push((ids[id].clone(), *index, have.len()));
+                    }
+                    have.push(entry.text.as_deref().map(str::to_string));
+                }
+            }
+            _ => {}
+        }
+    }
+    let client: std::collections::BTreeMap<u16, Option<String>> =
+        ids.iter().position(|name| name == table).map_or_default(|id| {
+            names[id].iter().enumerate().map(|(i, name)| (u16::try_from(i).unwrap(), name.clone())).collect()
+        });
+    let demo = cur.dec.table_names_for_tests(table).unwrap_or_default();
+    let wrong: Vec<_> = demo
+        .iter()
+        .filter(|(i, name)| client.get(i) != Some(name))
+        .map(|(i, name)| (*i, name.clone(), client.get(i).cloned()))
+        .collect();
+    (!wrong.is_empty() || !misplaced.is_empty()).then(|| format!("demo vs client {wrong:?}, misplaced {misplaced:?}"))
+}
+
 /// Far ahead, back, and ahead again from a checkpoint: the clients' string tables are the demo's
 /// each time, and the checkpoint gives them only the changes past those they had.
 #[test]
@@ -608,7 +661,38 @@ fn a_jump_ahead_from_a_checkpoint_gives_the_clients_only_the_table_changes_passe
     assert!(relay.hub().backlog.len() - sent <= passed, "none of those before");
 }
 
-/// A demo that does not open is tried again five times a second: the log says why once.
+/// Far ahead, then back to the start: the clients' tables are the demo's.
+#[test]
+fn far_ahead_and_back_to_the_start_leaves_the_clients_with_the_demos_tables() {
+    let path = crate::fixture("pl_upward.dem");
+    let mut b = bench_with_one_in();
+    let first = upward_until(|c| c.started);
+    let from = i64::from(first.dec.server_tick());
+    let (relay, _, mut want) = relay_playing(&mut b, first, 0);
+    relay.hub().start_playing();
+    let c = Cursor::open(&path, &relay.hub).unwrap();
+    let signon = relay.hub().backlog.len();
+    let mut p = Player::new(&relay);
+    p.start_demo(c);
+    want.paused = true;
+    let mut go = |p: &mut Player<'_>, tick: i64| {
+        want.tick = u32::try_from(tick).unwrap();
+        want.at = Instant::now();
+        for _ in 0..20 {
+            p.step(&want).unwrap();
+        }
+    };
+    go(&mut p, from + 13_000);
+    assert!(client_tables_are_the_demos(&relay, &p, signon).is_some(), "ahead");
+    assert_eq!(game_client_table_differs(&relay, &p, 0, "instancebaseline"), None, "ahead");
+    go(&mut p, 0);
+    assert!(client_tables_are_the_demos(&relay, &p, signon).is_some(), "back at the start");
+    assert_eq!(game_client_table_differs(&relay, &p, 0, "instancebaseline"), None, "back at the start");
+    go(&mut p, from + 400);
+    assert!(client_tables_are_the_demos(&relay, &p, signon).is_some(), "on from the start");
+    assert_eq!(game_client_table_differs(&relay, &p, 0, "instancebaseline"), None, "on from the start");
+}
+
 #[test]
 fn a_demo_that_cannot_be_played_is_logged_once_until_the_reason_changes() {
     let mut b = bench_with_one_in();
