@@ -239,6 +239,25 @@ impl Decoder {
         self.world.as_ref()?.delta_message(self.handler.get_parser_state(), from, self.server_tick())
     }
 
+    /// A demo's string tables as its recording started (`data`, its packet of them), as a message
+    /// stream of what they have over this decoder's (see [`tables::Tables::up_to`]); none when
+    /// nothing, or it does not parse.
+    pub(crate) fn snapshot_stream(&self, data: &[u8]) -> Option<BitBuf> {
+        use tf_demo_parser::demo::packet::stringtable::StringTable;
+        let mut s = BitReadStream::new(BitReadBuffer::new(data, LittleEndian));
+        let count: u8 = s.read().ok()?;
+        let snapshot: Vec<StringTable<'_>> = s.read_sized(usize::from(count)).ok()?;
+        let msgs = self.tables.up_to(&snapshot, self.handler.get_parser_state());
+        if msgs.is_empty() {
+            return None;
+        }
+        let mut w = BitWriter::new();
+        for m in &msgs {
+            w.write_buf(m);
+        }
+        Some(w.finish())
+    }
+
     /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
     /// tick): those after it, each as played if the client still has the frame it builds on, else
     /// (from a live server, a frame a few ticks back) rewritten as a delta from `key`, or failing

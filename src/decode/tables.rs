@@ -14,7 +14,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::Message;
 use tf_demo_parser::demo::message::stringtable::UpdateStringTableMessage;
-use tf_demo_parser::demo::packet::stringtable::{ExtraData, StringTableEntry};
+use tf_demo_parser::demo::packet::stringtable::{ExtraData, StringTable, StringTableEntry};
+
+/// Entries in one message of a snapshot's: well within its length.
+const SNAPSHOT_ENTRIES: usize = 64;
 
 /// The tables whose values are kept.
 fn kept(name: &str) -> bool {
@@ -272,6 +275,29 @@ impl Tables {
         self.rewritten
     }
 
+    /// `svc_UpdateStringTable`s that bring a client with these tables to `snapshot`, a demo's
+    /// tables as its recording started: the entries they lack, and those of the kept tables whose
+    /// values differ. A player's demo starts well after its signon.
+    pub(crate) fn up_to(&self, snapshot: &[StringTable<'_>], state: &ParserState) -> Vec<BitBuf> {
+        let mut out = Vec::new();
+        for (id, (ours, theirs)) in self.by_id.iter().zip(snapshot).enumerate() {
+            let Ok(table_id) = u8::try_from(id) else { break };
+            if ours.name != theirs.name {
+                continue;
+            }
+            let differs = |i: &u16, e: &StringTableEntry<'_>| {
+                !ours.entries.contains(i)
+                    || ours.values.as_ref().is_some_and(|v| v.get(i).is_none_or(|w| !w.same(&value(e))))
+            };
+            let entries: Vec<_> = theirs.entries.iter().filter(|(i, e)| differs(i, e)).cloned().collect();
+            for some in entries.chunks(SNAPSHOT_ENTRIES) {
+                let msg = UpdateStringTableMessage { entries: some.to_vec(), table_id };
+                out.extend(super::encode_message(SVC_UPDATESTRINGTABLE, &msg, state));
+            }
+        }
+        out
+    }
+
     /// `svc_UpdateStringTable`s that set a client with the tables of `later` back to these: the
     /// entries whose values differ, as they are here. Entries only `later` has stay, as a slot or
     /// class not used yet. None if one does not encode, or the tables are not the same ones.
@@ -316,7 +342,6 @@ mod tests {
     use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
     use tf_demo_parser::demo::message::MessageType;
     use tf_demo_parser::demo::message::stringtable::{CreateStringTableMessage, StringTableMeta};
-    use tf_demo_parser::demo::packet::stringtable::StringTable;
 
     fn entry(text: &str, data: &[u8]) -> StringTableEntry<'static> {
         let data = BitReadStream::new(BitReadBuffer::new_owned(data.to_vec(), LittleEndian));

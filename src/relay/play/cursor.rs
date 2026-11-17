@@ -86,13 +86,13 @@ impl Cursor {
     fn open_with(path: &Path, hub: Option<&Mutex<Hub>>) -> Result<Cursor> {
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
         let mut reader = demo::Reader::new(file)?;
-        let (signon, tables, next) = read_signon(path, &mut reader)?;
+        let (signon, snapshot, tables, next) = read_signon(path, &mut reader)?;
         if Some(tables.sendtable_crc()) != *OUR_CRC {
             bail!("the demo is of a TF2 build with other class tables, which a game client cannot play");
         }
         let mut dec = Decoder::new(&tables, 0.0)?;
         dec.keep_world();
-        let server = feed_signon(&mut dec, signon, hub);
+        let server = feed_signon(&mut dec, signon, snapshot.as_deref(), hub);
         Ok(Cursor {
             path: path.to_owned(),
             server,
@@ -190,16 +190,20 @@ impl Cursor {
     }
 }
 
-/// A demo's signon packets, read up to its first frame, its data tables, and that frame if it is
-/// written.
-fn read_signon(path: &Path, reader: &mut demo::Reader<File>) -> Result<(Vec<Vec<u8>>, Tables, Option<Packet>)> {
+/// A demo's signon packets, read up to its first frame, its string tables as recording started,
+/// its data tables, and that frame if it is written.
+type Signon = (Vec<Vec<u8>>, Option<Vec<u8>>, Tables, Option<Packet>);
+
+fn read_signon(path: &Path, reader: &mut demo::Reader<File>) -> Result<Signon> {
     let mut signon = Vec::new();
+    let mut snapshot = None;
     let mut tables = None;
     let mut synced = false;
     let next = loop {
         match reader.next_packet()? {
             Next::Packet(Packet::Signon { data, .. }) => signon.push(data),
             Next::Packet(Packet::DataTables { .. }) => tables = Some(tables_of(path, reader)?),
+            Next::Packet(Packet::StringTables { data, .. }) => snapshot = Some(data),
             Next::Packet(p @ Packet::Message { .. }) => break Some(p),
             Next::Packet(Packet::SyncTick { .. }) => synced = true,
             Next::Packet(_) => {}
@@ -211,12 +215,17 @@ fn read_signon(path: &Path, reader: &mut demo::Reader<File>) -> Result<(Vec<Vec<
         }
     };
     let tables = tables.context("the demo has no data tables")?;
-    Ok((signon, tables, next))
+    Ok((signon, snapshot, tables, next))
 }
 
 /// Decodes the `signon` packets, and passes them to `hub` if any, with the spawn count a game
-/// client takes.
-fn feed_signon(dec: &mut Decoder, signon: Vec<Vec<u8>>, hub: Option<&Mutex<Hub>>) -> Option<(i32, String)> {
+/// client takes; then what the string tables had more as recording started (`snapshot`).
+fn feed_signon(
+    dec: &mut Decoder,
+    signon: Vec<Vec<u8>>,
+    snapshot: Option<&[u8]>,
+    hub: Option<&Mutex<Hub>>,
+) -> Option<(i32, String)> {
     let mut spawncount = None;
     let mut server = None;
     for data in signon {
@@ -237,6 +246,14 @@ fn feed_signon(dec: &mut Decoder, signon: Vec<Vec<u8>>, hub: Option<&Mutex<Hub>>
         let mut h = lock(hub);
         h.upstream_stream(&bits, Part::Reliable, &life);
         h.upstream_flush();
+    }
+    if let Some(bits) = snapshot.and_then(|d| dec.snapshot_stream(d)) {
+        let life = dec.feed(bits.bytes(), bits.nbits());
+        if let Some(hub) = hub {
+            let mut h = lock(hub);
+            h.upstream_stream(life.bits(&bits), Part::Reliable, &life);
+            h.upstream_flush();
+        }
     }
     server
 }
