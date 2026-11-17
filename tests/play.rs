@@ -192,10 +192,13 @@ fn at_the_end_of_a_demo_playback_rests() {
 fn a_client_follows_a_jump_ahead() {
     let demo = demo_snapshots();
     let first = *demo.keys().next().unwrap();
-    let playback = Playback::new(want(first + 5 * SECOND, false, false));
+    let start = want(first + 5 * SECOND, false, false);
+    let playback = Playback::new(start.clone());
     let got = watching(&playback, Duration::ZERO, |seen| {
         wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
-        let before = snapshots(seen).iter().map(|(_, s)| s.tick).max().unwrap();
+        // The moment wanted then, which the relay may have reached ahead of what the client saw (a
+        // slow machine has it catch up in jumps of its own): it plays nothing past it.
+        let before = start.tick + (start.at.elapsed().as_secs_f64() * start.speed / TICK) as u32;
         playback.set_want(want(first + 100 * SECOND, false, false));
         let jumped = Instant::now();
         wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick >= first + 100 * SECOND));
