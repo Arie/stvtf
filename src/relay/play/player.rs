@@ -463,6 +463,7 @@ impl Player<'_> {
         }
         self.follow_pause(want);
         self.jump_ahead(want, target, jump)?;
+        self.relay.hub().rekey_unacked(Instant::now());
         if !self.relay.hub().wants_keyframe() {
             self.frame_waited = None;
         } else if self.send_keyframe(interval).is_break() {

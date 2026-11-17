@@ -348,6 +348,17 @@ impl Hub {
         self.with_next.extend(msgs);
     }
 
+    /// A client whose full update went unacked for [`KEY_WAIT`] waits for another: it was lost,
+    /// and with playback paused no frame comes to tell.
+    pub(super) fn rekey_unacked(&mut self, now: Instant) {
+        for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
+            if c.keyed.is_some_and(|at| now.duration_since(at) > KEY_WAIT) {
+                trace!("{} did not ack its full update: another", c.name.escape_debug());
+                c.set_phase(Phase::WaitingFull, now);
+            }
+        }
+    }
+
     /// What a client gets after every full update from now on, in place of what it got before.
     pub(super) fn set_notes(&mut self, notes: Vec<BitBuf>) {
         self.notes = notes;
