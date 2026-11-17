@@ -1,10 +1,11 @@
 //! A snapshot: the full state of the match.
 
+use serde::{Deserialize, Deserializer, Serialize};
+
 use super::{
     BuildingKind, Class, Condition, FlagStatus, MedigunKind, PlayerId, Position, ProjectileKind, Resist, Round, Team,
     Ubered,
 };
-use serde::{Deserialize, Deserializer, Serialize};
 
 /// Reads a field that may be null into `Some`, so `Option<Option<T>>` tells absent (None) from
 /// null (`Some(None)`); use with `#[serde(default)]`.

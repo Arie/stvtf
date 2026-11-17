@@ -3,20 +3,20 @@
 //! a fake server sends a capture's real packets, renumbered, and answers -1 by going back to the
 //! capture's full update. Ticks go back with it, which is how a test sees that it came.
 
-use crate::capture;
-use crate::decode::Decoder;
-use crate::net::compress;
-use crate::net::handshake::{self, FromClient};
-use crate::net::messages;
-use crate::net::netchan::{self, Kind};
-use crate::net::receiver::Receiver;
-use crate::net::split::SplitReassembler;
-use crate::output::{Line, Status};
-use crate::relay::{ClientMsg, Relay, RelayConfig, client_messages};
-use crate::watch::{self, Watch};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+
+use crate::capture;
+use crate::decode::Decoder;
+use crate::net::handshake::{self, FromClient};
+use crate::net::netchan::{self, Kind};
+use crate::net::receiver::Receiver;
+use crate::net::split::SplitReassembler;
+use crate::net::{compress, messages};
+use crate::output::{Line, Status};
+use crate::relay::{ClientMsg, Relay, RelayConfig, client_messages};
+use crate::watch::{self, Watch};
 
 /// A bound on what should take moments.
 const LIMIT: Duration = Duration::from_secs(30);
@@ -45,7 +45,7 @@ struct Recording {
 
 impl Recording {
     fn read() -> Self {
-        let bytes = std::fs::read(crate::fixture("bots_cp_badlands.cap")).unwrap();
+        let bytes = std::fs::read(crate::testing::fixture("bots_cp_badlands.cap")).unwrap();
         let records = capture::read(&bytes).unwrap();
         let challenge = records[0].challenge().unwrap();
         let now = Instant::now();

@@ -1,19 +1,20 @@
 //! A demo being read and decoded, frame by frame.
 
-use super::{NOT_A_FRAME, RECENT};
-use crate::decode::{Decoder, Lifecycle, Span, Tables};
-use crate::demo::{self, Next, Packet};
-use crate::lock;
-use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::{self, NET_SIGNONSTATE, TYPE_BITS};
-use crate::relay::Hub;
-use crate::relay::hub::Part;
-use anyhow::{Context, Result, bail};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
+
+use anyhow::{Context, Result, bail};
+
+use super::tuning::{NOT_A_FRAME, RECENT};
+use crate::decode::{Decoder, Lifecycle, Span, Tables};
+use crate::demo::{self, Next, Packet};
+use crate::net::bits::{BitBuf, BitReader, BitWriter};
+use crate::net::messages::{self, NET_SIGNONSTATE, TYPE_BITS};
+use crate::relay::hub::{Hub, Part};
+use crate::sync::lock;
 
 /// The `SendTable` CRC of this build's class tables, which a game client builds its classes from.
 static OUR_CRC: LazyLock<Option<u32>> = LazyLock::new(|| {

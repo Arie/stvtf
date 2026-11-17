@@ -1,14 +1,16 @@
 //! The periodic snapshot of everything on the map.
 
+use std::collections::HashSet;
+
+use tf_demo_parser::demo::data::game_state::{Building, Player};
+use tf_demo_parser::demo::parser::analyser::{Class, Team};
+
 use super::Extractor;
 use super::convert::{
     alive, builder_entity, building_kind_of, class, conditions, player_id, team, team_num, uber_charge, ubered, xyz,
 };
 use super::state::{Pose, Stats, TrainWatcher};
 use crate::output::{self as out, Line, PlayerId, round1, round2, round3};
-use std::collections::HashSet;
-use tf_demo_parser::demo::data::game_state::{Building, Player};
-use tf_demo_parser::demo::parser::analyser::{Class, Team};
 
 /// `CObjectSentrygun` `m_iState` while shooting at a target.
 const SENTRY_STATE_ATTACKING: i64 = 2;

@@ -88,8 +88,9 @@ impl std::error::Error for Error {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use anyhow::Context;
+
+    use super::*;
 
     #[test]
     fn an_error_says_what_and_why_and_is_of_its_cause() {

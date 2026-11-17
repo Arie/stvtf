@@ -1,106 +1,23 @@
-//! Feeds network message streams into tf-demo-parser.
-//!
-//! A `SourceTV` client gets no send tables over the wire (the server expects the
-//! client to build them from its own game DLL, checked by the `SendTable` CRC), so
-//! the tables come from any demo recorded on the same server build. Each network
-//! message stream is then wrapped as a demo `Message` packet and handed to the
-//! same `DemoHandler` a demo file would use.
+//! The decoder: a connection's messages, as the game state and the lines of it.
 
-pub(crate) mod beams;
-mod crc;
-mod detail;
-mod extract;
-pub(crate) mod lights;
-mod modes;
-mod notes;
-mod props;
-mod tables;
-mod voice_out;
-pub(crate) use tables::{BeamModel, ModelsSent, Placed};
-pub(crate) use voice_out::{steam_voice, voice_runs};
-mod world;
-
-use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::{SVC_GAMEEVENT, Signon, TYPE_BITS};
-use crate::output::Line;
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
-use extract::Extractor;
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
-use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::generated::SignOnState;
 use tf_demo_parser::demo::message::{Message, MessageType};
 use tf_demo_parser::demo::packet::Packet;
-use tf_demo_parser::demo::packet::datatable::DataTablePacket;
 use tf_demo_parser::demo::packet::message::{MessagePacket, MessagePacketMeta};
-use tf_demo_parser::demo::parser::DemoHandler;
-use tf_demo_parser::demo::parser::Parse;
-use tf_demo_parser::demo::parser::RawPacketStream;
+use tf_demo_parser::demo::parser::{DemoHandler, Parse};
 
-/// The entity class tables of one server build, taken from a demo of that build.
-pub struct Tables {
-    header: Header,
-    datatables: DataTablePacket,
-    crc: u32,
-    /// The data tables packet's bytes, for a demo written with them.
-    raw: Vec<u8>,
-}
-
-impl Tables {
-    /// Reads the tables from a demo file (any STV or POV demo of the build).
-    pub fn from_demo(path: &std::path::Path) -> crate::Result<Tables> {
-        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        Self::from_demo_bytes(&bytes)
-    }
-
-    /// Reads the tables from demo bytes; everything after the data tables is ignored.
-    pub fn from_demo_bytes(bytes: &[u8]) -> crate::Result<Tables> {
-        let mut stream = BitReadStream::new(BitReadBuffer::new(bytes, LittleEndian));
-        let header = Header::read(&mut stream)?;
-        let handler = DemoHandler::with_analyser(tf_demo_parser::demo::parser::NullHandler);
-        let mut packets = RawPacketStream::new(stream);
-        while let Some(packet) = packets.next(handler.get_parser_state())? {
-            if let Packet::DataTables(dt) = packet {
-                let crc = crc::sendtable_crc(&dt)?;
-                return Ok(Tables { header, datatables: dt, crc, raw: raw_datatables(bytes)? });
-            }
-        }
-        Err(anyhow::anyhow!("no data tables in demo").into())
-    }
-
-    /// The server class names (`CTFPlayer`, …), in class id order.
-    pub fn class_names(&self) -> impl Iterator<Item = &str> {
-        self.datatables.server_classes.iter().map(|c| c.name.as_str())
-    }
-
-    /// The number of send tables.
-    pub fn send_table_count(&self) -> usize {
-        self.datatables.tables.len()
-    }
-
-    /// The data tables packet as a demo of the build has it.
-    pub fn datatables_bytes(&self) -> &[u8] {
-        &self.raw
-    }
-
-    /// The `SendTable` CRC of the build, as the server checks it at signon.
-    pub fn sendtable_crc(&self) -> u32 {
-        self.crc
-    }
-}
-
-/// The data of the first data tables packet of a demo.
-fn raw_datatables(bytes: &[u8]) -> Result<Vec<u8>> {
-    let mut r = crate::demo::Reader::new(std::io::Cursor::new(bytes))?;
-    loop {
-        match r.next_packet()? {
-            crate::demo::Next::Packet(crate::demo::Packet::DataTables { data, .. }) => return Ok(data),
-            crate::demo::Next::Packet(_) => {}
-            _ => bail!("no data tables in demo"),
-        }
-    }
-}
+use super::Tables;
+use super::extract::Extractor;
+#[cfg(test)]
+use super::props_index_for_tests;
+pub(crate) use super::tables::Placed;
+use crate::net::bits::{BitBuf, BitReader, BitWriter};
+use crate::net::messages::{SVC_GAMEEVENT, Signon, TYPE_BITS};
+use crate::output::Line;
 
 /// What the session needs to know from the streams it just fed.
 #[derive(Default, Debug, Clone)]
@@ -145,27 +62,13 @@ pub(crate) struct Span {
 /// The type of a span that could not be decoded.
 pub(crate) const UNPARSED: u8 = u8::MAX;
 
-/// The index of prop `id` in class `class`'s table, if it has it.
-#[cfg(test)]
-pub(crate) fn props_index_for_tests(
-    state: &ParserState,
-    class: u16,
-    id: tf_demo_parser::demo::sendprop::SendPropIdentifier,
-) -> Option<u32> {
-    props::prop_index(state.send_tables.get(usize::from(class))?, id)
-}
-
-/// A Steam voice packet's `SteamID64`, sample rate and Opus frames.
-#[cfg(test)]
-pub(crate) fn steam_voice_for_tests(data: &[u8]) -> Option<(u64, u16, Vec<Vec<u8>>)> {
-    extract::steam_voice_parts(data)
-}
-
 /// `svc_GameEvent`: its length's bits, then the event id's.
-const GAMEEVENT_LENGTH_BITS: usize = 11;
-const EVENT_ID_BITS: usize = 9;
+pub(super) const GAMEEVENT_LENGTH_BITS: usize = 11;
+
+pub(super) const EVENT_ID_BITS: usize = 9;
+
 /// `svc_PacketEntities`: its entry count's bits (`MAX_EDICT_BITS`).
-const ENTRY_COUNT_BITS: usize = 11;
+pub(super) const ENTRY_COUNT_BITS: usize = 11;
 
 /// A frame's entities: in full, or as a delta from the frame at a server tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,23 +81,23 @@ pub(crate) enum Entities {
 pub(crate) struct Baselines(Box<[tf_demo_parser::demo::parser::state::Baseline; 2]>);
 
 pub(crate) struct Decoder {
-    handler: DemoHandler<Extractor>,
-    snapshot_hz: f32,
-    snapshots: SnapshotClock,
-    parse_errors: u64,
+    pub(super) handler: DemoHandler<Extractor>,
+    pub(super) snapshot_hz: f32,
+    pub(super) snapshots: SnapshotClock,
+    pub(super) parse_errors: u64,
     /// The parser panicked on some input; its state can no longer be trusted.
-    panicked: bool,
+    pub(super) panicked: bool,
     /// Entities have come in full since this decoder started: until then a delta has no base.
-    seen_full_update: bool,
+    pub(super) seen_full_update: bool,
     /// Kept only when asked for: what a full update is written from.
-    world: Option<world::World>,
+    pub(super) world: Option<super::world::World>,
     /// The string tables, as far as a jump back needs them (see `tables`).
-    tables: tables::Tables,
+    pub(super) tables: super::tables::Tables,
     /// The last round start, win panel or game over event (see [`Decoder::round_event`]).
-    round: Option<BitBuf>,
+    pub(super) round: Option<BitBuf>,
     /// The stream is a player's game's, not a `SourceTV`'s.
-    players_own: bool,
-    out: Vec<Line>,
+    pub(super) players_own: bool,
+    pub(super) out: Vec<Line>,
 }
 
 impl Decoder {
@@ -210,7 +113,7 @@ impl Decoder {
             panicked: false,
             seen_full_update: false,
             world: None,
-            tables: tables::Tables::default(),
+            tables: super::tables::Tables::default(),
             round: None,
             players_own: false,
             out: Vec::new(),
@@ -219,7 +122,7 @@ impl Decoder {
 
     /// Keeps every entity's props from the next full update on, for [`Decoder::keyframe`].
     pub(crate) fn keep_world(&mut self) {
-        self.world.get_or_insert_with(world::World::default);
+        self.world.get_or_insert_with(super::world::World::default);
     }
 
     /// `net_Tick` and every entity in full, of the frame that `next` (the next frame's message
@@ -246,7 +149,7 @@ impl Decoder {
     }
 
     /// A demo's string tables as its recording started (`data`, its packet of them), as a message
-    /// stream of what they have over this decoder's (see [`tables::Tables::up_to`]); none when
+    /// stream of what they have over this decoder's (see [`super::tables::Tables::up_to`]); none when
     /// nothing, or it does not parse.
     pub(crate) fn snapshot_stream(&self, data: &[u8]) -> Option<BitBuf> {
         use tf_demo_parser::demo::packet::stringtable::StringTable;
@@ -265,7 +168,7 @@ impl Decoder {
     }
 
     /// Takes the stream's `ServerInfo`: its count of map loads and map.
-    fn server_info(&mut self, i: &tf_demo_parser::demo::message::ServerInfoMessage) -> (i32, String) {
+    pub(super) fn server_info(&mut self, i: &tf_demo_parser::demo::message::ServerInfoMessage) -> (i32, String) {
         self.players_own = !i.stv;
         if let (true, Some(w)) = (self.players_own, &mut self.world) {
             w.set_player(u32::from(i.player_slot) + 1);
@@ -286,7 +189,7 @@ impl Decoder {
 
     /// Whether the stream's entity messages are for no client as they are (see `world`).
     pub(crate) fn own_baselines(&self) -> bool {
-        self.world.as_ref().is_some_and(world::World::own_baselines)
+        self.world.as_ref().is_some_and(super::world::World::own_baselines)
     }
 
     /// The stream's own baselines, for a decoder that goes on from here.
@@ -361,7 +264,7 @@ impl Decoder {
 
     /// The server tick of the frame the entities in message stream `data` build on, if they are a
     /// delta; it is read, not decoded into anything.
-    fn delta_base(&self, data: &[u8]) -> Option<u32> {
+    pub(super) fn delta_base(&self, data: &[u8]) -> Option<u32> {
         self.find_message(data, MessageType::PacketEntities, |stream, state| {
             let pe = tf_demo_parser::demo::message::packetentities::PacketEntitiesMessage::parse(stream, state).ok()?;
             pe.delta.map(u32::from)
@@ -370,7 +273,7 @@ impl Decoder {
 
     /// `read` of the first message of type `kind` in message stream `data`, the ones before it
     /// skipped.
-    fn find_message<T>(
+    pub(super) fn find_message<T>(
         &self,
         data: &[u8],
         kind: MessageType,
@@ -418,15 +321,15 @@ impl Decoder {
 
     /// Every entity as the world has it.
     #[cfg(test)]
-    pub(crate) fn world_dump(&self) -> std::collections::BTreeMap<u32, world::Dumped> {
-        self.world.as_ref().map_or_default(world::World::dump)
+    pub(crate) fn world_dump(&self) -> std::collections::BTreeMap<u32, super::world::Dumped> {
+        self.world.as_ref().map_or_default(super::world::World::dump)
     }
 
     /// [`Decoder::world_dump`] to compare two decoders, one started from a full update: without
     /// the weapons' `m_bResetParity`, which a full update gives as a client starts with it, nor a
     /// player's own demo's player's origin for the other players, which it gives as their own.
     #[cfg(test)]
-    pub(crate) fn world_compared(&self) -> std::collections::BTreeMap<u32, world::Dumped> {
+    pub(crate) fn world_compared(&self) -> std::collections::BTreeMap<u32, super::world::Dumped> {
         let state = self.handler.get_parser_state();
         let parity = tf_demo_parser::demo::sendprop::SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
         let mut dump = self.world_dump();
@@ -449,7 +352,7 @@ impl Decoder {
     /// The entities the keyframe would hold.
     #[cfg(test)]
     pub(crate) fn world_len(&self) -> usize {
-        self.world.as_ref().map_or(0, world::World::len)
+        self.world.as_ref().map_or(0, super::world::World::len)
     }
 
     /// Feeds one message stream (bit packed from bit 0) and returns its lifecycle messages.
@@ -471,7 +374,7 @@ impl Decoder {
         })
     }
 
-    fn feed_inner(&mut self, data: &[u8], nbits: usize) -> Lifecycle {
+    pub(super) fn feed_inner(&mut self, data: &[u8], nbits: usize) -> Lifecycle {
         let mut life = Lifecycle::default();
         if nbits < TYPE_BITS {
             return life;
@@ -518,7 +421,7 @@ impl Decoder {
                 Ok(None) => {}
                 Err(e) => {
                     life.spans.push(Span { id: UNPARSED, bits: start..nbits });
-                    if extract::debug("errors") {
+                    if super::extract::debug("errors") {
                         let tick = self.handler.borrow_output().server_tick;
                         eprintln!("decode error at tick {tick}, bit {start} of {nbits}, message id {id}: {e}");
                     }
@@ -582,7 +485,7 @@ impl Decoder {
     }
 
     /// Keeps the last event that decides whether the round's win panel shows (see `round`).
-    fn note_round(&mut self, messages: &[Message<'_>], spans_of: &[usize], spans: &[Span], data: &[u8]) {
+    pub(super) fn note_round(&mut self, messages: &[Message<'_>], spans_of: &[usize], spans: &[Span], data: &[u8]) {
         use tf_demo_parser::demo::gameevent_gen::GameEventType as E;
         for (m, &i) in messages.iter().zip(spans_of) {
             if let Message::GameEvent(e) = m
@@ -651,7 +554,7 @@ impl Decoder {
     }
 
     /// `event` as an `svc_GameEvent`, if the demo's event list has its kind.
-    fn game_event(&self, event: tf_demo_parser::demo::gameevent_gen::GameEvent) -> Option<BitBuf> {
+    pub(super) fn game_event(&self, event: tf_demo_parser::demo::gameevent_gen::GameEvent) -> Option<BitBuf> {
         use tf_demo_parser::demo::message::gameevent::GameEventMessage;
         let state = self.handler.get_parser_state();
         let event_type = event.event_type();
@@ -688,7 +591,13 @@ impl Decoder {
     }
 
     /// Places `instancebaseline` entries as a game client does; rewrites the stream if any moved.
-    fn place_baselines(&mut self, life: &mut Lifecycle, data: &[u8], messages: &mut [Message<'_>], spans_of: &[usize]) {
+    pub(super) fn place_baselines(
+        &mut self,
+        life: &mut Lifecycle,
+        data: &[u8],
+        messages: &mut [Message<'_>],
+        spans_of: &[usize],
+    ) {
         let moved = self.tables.place(messages);
         if !moved.is_empty() {
             replace_messages(life, data, &moved, spans_of, messages, self.handler.get_parser_state());
@@ -734,7 +643,7 @@ impl Decoder {
 }
 
 /// `data` with the `moved` updates re-encoded.
-fn replace_messages(
+pub(super) fn replace_messages(
     life: &mut Lifecycle,
     data: &[u8],
     moved: &[usize],
@@ -759,7 +668,11 @@ fn replace_messages(
 }
 
 /// `msg` as a message stream of it alone, its type `svc` first.
-fn encode_message(svc: u32, msg: &impl tf_demo_parser::demo::parser::Encode, state: &ParserState) -> Option<BitBuf> {
+pub(super) fn encode_message(
+    svc: u32,
+    msg: &impl tf_demo_parser::demo::parser::Encode,
+    state: &ParserState,
+) -> Option<BitBuf> {
     let mut bytes = Vec::new();
     let nbits = {
         let mut s = bitbuffer::BitWriteStream::new(&mut bytes, LittleEndian);
@@ -773,7 +686,7 @@ fn encode_message(svc: u32, msg: &impl tf_demo_parser::demo::parser::Encode, sta
 }
 
 /// The entities messages among `messages`.
-fn entity_frames(
+pub(super) fn entity_frames(
     messages: &[Message<'_>],
 ) -> Vec<tf_demo_parser::demo::message::packetentities::PacketEntitiesMessage> {
     messages
@@ -787,12 +700,12 @@ fn entity_frames(
 
 /// Whether the `svc_PacketEntities` at `stream`, just past its type, is a delta: after its entry
 /// count comes whether a base tick follows.
-fn is_delta(stream: &BitReadStream<'_, LittleEndian>) -> bool {
+pub(super) fn is_delta(stream: &BitReadStream<'_, LittleEndian>) -> bool {
     let mut peek = stream.clone();
     peek.skip_bits(ENTRY_COUNT_BITS).is_ok() && peek.read_bool().unwrap_or(false)
 }
 
-fn signon(s: &SignOnState) -> Signon {
+pub(super) fn signon(s: &SignOnState) -> Signon {
     match s {
         SignOnState::None => Signon::None,
         SignOnState::Challenge => Signon::Challenge,
@@ -809,7 +722,7 @@ fn signon(s: &SignOnState) -> Signon {
 /// snapshots. Rounded up, so the rate stays at or under `hz`; the tolerance, a hundred-thousandth
 /// of the ratio, keeps a rate that divides the tick rate (64 Hz on 128 ticks) from rounding up
 /// over float error.
-fn snapshot_every(hz: f32, interval: f32) -> u32 {
+pub(super) fn snapshot_every(hz: f32, interval: f32) -> u32 {
     if hz <= 0.0 { 0 } else { (1.0 / (f64::from(interval) * f64::from(hz)) * (1.0 - 1e-5)).ceil().max(1.0) as u32 }
 }
 
@@ -818,16 +731,16 @@ fn snapshot_every(hz: f32, interval: f32) -> u32 {
 /// counting from a late frame would skip the next one (frames every 3 ticks at `every` 4 would
 /// give a snapshot every 6).
 #[derive(Default)]
-struct SnapshotClock {
+pub(super) struct SnapshotClock {
     /// The tick of the last snapshot and the tick the next is due.
-    last: Option<(u32, u32)>,
+    pub(super) last: Option<(u32, u32)>,
 }
 
 impl SnapshotClock {
     /// Whether a frame at server tick `now` gets a snapshot. The tick restarts at a map load, so
     /// a tick before the last snapshot is due too; one a whole interval late (a stall) starts
     /// the count again from `now`.
-    fn due(&mut self, now: u32, every: u32) -> bool {
+    pub(super) fn due(&mut self, now: u32, every: u32) -> bool {
         if every == 0 {
             return false;
         }
@@ -843,404 +756,5 @@ impl SnapshotClock {
         };
         self.last = Some((now, next.saturating_add(every)));
         true
-    }
-}
-
-/// Runs a demo file through the same extractor a live session uses, passing events and
-/// snapshots (at most `snapshot_hz` per second; 0 disables them) to `emit`.
-pub fn demo_file(bytes: &[u8], snapshot_hz: f32, emit: &mut dyn FnMut(Line)) -> crate::Result<()> {
-    let demo = tf_demo_parser::Demo::new(bytes);
-    let parser = tf_demo_parser::DemoParser::new_with_analyser(demo.get_stream(), Extractor::default());
-    let (_header, mut ticker) = parser.ticker()?;
-    let mut snapshots = SnapshotClock::default();
-    while ticker.tick()? {
-        let x = ticker.state();
-        x.announce();
-        for line in x.drain() {
-            emit(line);
-        }
-        let now = x.server_tick;
-        if now > 0 && snapshots.due(now, snapshot_every(snapshot_hz, x.interval())) {
-            emit(Line::Snapshot(x.snapshot()));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn tests_tables() -> Tables {
-    crate::builds::tables(crate::builds::CURRENT, None).unwrap()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn snapshot_timing() {
-        let sent = |frames: &[u32], every| {
-            let mut clock = SnapshotClock::default();
-            frames.iter().copied().filter(|&t| clock.due(t, every)).collect::<Vec<_>>()
-        };
-        assert_eq!(sent(&[5, 6, 7, 8, 9, 10, 11], 3), [5, 8, 11]);
-        let every_third: Vec<u32> = (1..=8).map(|n| n * 3).collect();
-        assert_eq!(sent(&every_third, 4), [3, 9, 12, 15, 21, 24], "frames 3 ticks apart: one per 4 ticks");
-        assert_eq!(sent(&[4, 8, 13, 17, 21, 25], 4), [4, 8, 13, 17, 21, 25], "every frame of a slower STV");
-        assert_eq!(sent(&[5, 6, 100, 101, 103], 3), [5, 100, 103], "after a stall, counted from there");
-        assert_eq!(sent(&[500, 501, 2, 3, 5], 3), [500, 2, 5], "tick restarted at a map load");
-        assert_eq!(sent(&[u32::MAX - 1, u32::MAX], 3), [u32::MAX - 1, u32::MAX], "saturates near u32::MAX");
-        assert_eq!(sent(&[5, 6], 0), [] as [u32; 0], "disabled");
-        assert_eq!(snapshot_every(20.0, 0.015), 4, "16.7/s: never over the cap");
-        assert_eq!(snapshot_every(33.32, 0.015), 3, "just over a whole tick ratio still rounds up");
-        assert_eq!(snapshot_every(20.0, 1.0 / 128.0), 7, "128-tick server");
-        assert_eq!(snapshot_every(64.0, 1.0 / 128.0), 2, "an exact divisor stays exact");
-        assert_eq!(snapshot_every(1000.0, 0.015), 1, "every tick");
-        assert_eq!(snapshot_every(0.0, 0.015), 0);
-    }
-
-    fn tables() -> Tables {
-        tests_tables()
-    }
-
-    #[test]
-    fn tables_come_only_from_a_readable_demo() {
-        assert!(Tables::from_demo(std::path::Path::new("/nonexistent.dem")).is_err());
-        assert!(Tables::from_demo_bytes(b"not a demo").is_err());
-    }
-
-    /// Read from `g_SendTableCRC` in that build's `engine_srv.so`.
-    #[test]
-    fn the_crc_is_the_engines() {
-        assert_eq!(tables().sendtable_crc(), 0x5FCD_4733);
-        let full_demo = Tables::from_demo(&crate::fixture("pl_upward.dem")).unwrap();
-        assert_eq!(full_demo.sendtable_crc(), 0x5FCD_4733, "any demo of the build");
-    }
-
-    #[test]
-    fn a_message_that_does_not_parse_counts_and_asks_for_a_full_update() {
-        let tables = tables();
-        let mut dec = Decoder::new(&tables, 0.0).unwrap();
-        let life = dec.feed(&[0xff; 64], 64 * 8);
-        assert!(life.lost_frame);
-        assert!(dec.parse_errors() >= 1);
-        assert_eq!(life.spans.last().map(|s| s.id), Some(UNPARSED));
-    }
-
-    #[test]
-    fn too_few_bits_for_a_message_are_nothing() {
-        let tables = tables();
-        let mut dec = Decoder::new(&tables, 0.0).unwrap();
-        let life = dec.feed(&[0xff], 3);
-        assert!(!life.lost_frame && life.spans.is_empty());
-        assert_eq!(dec.parse_errors(), 0);
-    }
-
-    /// The server tells us to leave in a message the parser has no type for.
-    #[test]
-    fn a_disconnect_gives_its_reason() {
-        let tables = tables();
-        let mut dec = Decoder::new(&tables, 0.0).unwrap();
-        let bye = crate::net::messages::disconnect("Server shutting down");
-        let life = dec.feed(bye.bytes(), bye.nbits());
-        assert_eq!(life.disconnect.as_deref(), Some("Server shutting down"));
-    }
-
-    #[test]
-    fn signon_states_map_one_to_one() {
-        let want = [
-            (SignOnState::None, Signon::None),
-            (SignOnState::Challenge, Signon::Challenge),
-            (SignOnState::Connected, Signon::Connected),
-            (SignOnState::New, Signon::New),
-            (SignOnState::PreSpawn, Signon::PreSpawn),
-            (SignOnState::Spawn, Signon::Spawn),
-            (SignOnState::Full, Signon::Full),
-            (SignOnState::ChangeLevel, Signon::ChangeLevel),
-        ];
-        for (state, signon_state) in want {
-            assert_eq!(signon(&state), signon_state);
-        }
-    }
-
-    /// What makes a session ask for a full update: nothing in a signon that was going well.
-    #[test]
-    fn a_delta_before_the_first_full_update_asks_for_nothing() {
-        use crate::net::netchan::{self, Kind};
-        use crate::net::receiver::Receiver;
-        let bytes = std::fs::read(crate::fixture("delta_before_full_update.cap")).unwrap();
-        let records = crate::capture::read(&bytes).unwrap();
-        let challenge = records[0].challenge().unwrap();
-        let tables = tables();
-        let mut dec = Decoder::new(&tables, 0.0).unwrap();
-        let mut rx = Receiver::new(Some(challenge));
-        let now = std::time::Instant::now();
-        let mut full_updates = 0;
-        for r in records.iter().skip(1).filter(|r| netchan::classify(r.data) != Kind::Oob) {
-            let Some(got) = rx.feed(r.data, now) else { continue };
-            for s in &got.streams {
-                let life = dec.feed(s.bits.bytes(), s.bits.nbits());
-                assert!(!life.lost_frame, "after {full_updates} full updates");
-                full_updates += usize::from(life.full_update);
-            }
-        }
-        assert_eq!(full_updates, 1);
-    }
-}
-
-#[cfg(test)]
-mod baseline_tests {
-    use super::*;
-    use crate::net::messages::{SVC_CREATESTRINGTABLE, SVC_UPDATESTRINGTABLE};
-    use std::borrow::Cow;
-    use tf_demo_parser::demo::message::stringtable::{CreateStringTableMessage, UpdateStringTableMessage};
-    use tf_demo_parser::demo::packet::stringtable::{ExtraData, StringTable, StringTableEntry};
-
-    fn entry(class: &str, data: u8) -> StringTableEntry<'static> {
-        let data = BitReadStream::new(BitReadBuffer::new_owned(vec![data], LittleEndian));
-        StringTableEntry { text: Some(Cow::Owned(class.into())), extra_data: Some(ExtraData::new(data)) }
-    }
-
-    /// Creates `instancebaseline` with 42 entries.
-    fn created(dec: &mut Decoder) -> BitBuf {
-        let table = StringTable {
-            name: "instancebaseline".into(),
-            entries: (0..42).map(|i| (i, entry(&i.to_string(), 0))).collect(),
-            max_entries: 1024,
-            fixed_user_data_size: None,
-            client_entries: None,
-            compressed: false,
-        };
-        let msg = CreateStringTableMessage { table };
-        let bits = encode_message(SVC_CREATESTRINGTABLE, &msg, dec.parser_state_for_tests()).unwrap();
-        let life = dec.feed(bits.bytes(), bits.nbits());
-        assert!(life.stream.is_none(), "in order: as it came");
-        bits
-    }
-
-    /// An update's stream as passed on.
-    fn update(dec: &mut Decoder, entries: Vec<(u16, StringTableEntry<'static>)>) -> BitBuf {
-        let msg = UpdateStringTableMessage { entries, table_id: 0 };
-        let bits = encode_message(SVC_UPDATESTRINGTABLE, &msg, dec.parser_state_for_tests()).unwrap();
-        let life = dec.feed(bits.bytes(), bits.nbits());
-        life.bits(&bits).clone()
-    }
-
-    fn indices(dec: &Decoder, bits: &BitBuf) -> Vec<u16> {
-        let mut s = BitReadStream::new(BitReadBuffer::new(bits.bytes(), LittleEndian));
-        let t = MessageType::read(&mut s).unwrap();
-        let Message::UpdateStringTable(u) = Message::from_type(t, &mut s, dec.parser_state_for_tests()).unwrap() else {
-            panic!()
-        };
-        u.entries.iter().map(|(i, _)| *i).collect()
-    }
-
-    /// An entry past the count goes at the client's end; later ones follow it.
-    #[test]
-    fn baselines_go_where_a_game_client_puts_them() {
-        let mut dec = Decoder::new(&tests_tables(), 0.0).unwrap();
-        created(&mut dec);
-
-        let gap = update(&mut dec, vec![(39, entry("234", 1)), (54, entry("88", 1))]);
-        assert_eq!(indices(&dec, &gap), [39, 42], "where the client puts it");
-        let skipped = update(&mut dec, vec![(42, entry("89", 1))]);
-        assert_eq!(indices(&dec, &skipped), [43], "after it");
-        let again = update(&mut dec, vec![(54, entry("88", 2)), (55, entry("90", 2))]);
-        assert_eq!(indices(&dec, &again), [42, 44]);
-        let names = dec.table_names_for_tests("instancebaseline").unwrap();
-        let at = |i: u16| names.get(&i).cloned().flatten();
-        assert_eq!((at(42), at(43), at(44)), (Some("88".into()), Some("89".into()), Some("90".into())));
-    }
-
-    /// A checkpoint's placed streams, then the demo's own.
-    #[test]
-    fn a_decoder_fed_placed_streams_goes_on_placing_the_servers() {
-        let mut dec = Decoder::new(&tests_tables(), 0.0).unwrap();
-        let mut passed = vec![created(&mut dec)];
-        passed.push(update(&mut dec, vec![(54, entry("88", 1))]));
-        passed.push(update(&mut dec, vec![(42, entry("89", 1))]));
-        let mut later = Decoder::new(&tests_tables(), 0.0).unwrap();
-        for bits in &passed {
-            later.feed(bits.bytes(), bits.nbits());
-        }
-        later.set_placed(dec.placed());
-        let again = update(&mut later, vec![(54, entry("88", 2)), (42, entry("89", 2))]);
-        assert_eq!(indices(&later, &again), [42, 43]);
-    }
-}
-
-#[cfg(test)]
-mod keyframe_tests {
-    use super::*;
-    use crate::demo::{Next, Packet, Reader};
-    use std::collections::BTreeMap;
-
-    use crate::net::messages::{SVC_CREATESTRINGTABLE, SVC_UPDATESTRINGTABLE};
-
-    /// The demo's tables, signon streams and frames.
-    fn packets(path: &str) -> (Tables, Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        let tables = Tables::from_demo(std::path::Path::new(&path)).unwrap();
-        let mut r = Reader::new(std::fs::File::open(path).unwrap()).unwrap();
-        let (mut signon, mut frames) = (Vec::new(), Vec::new());
-        while let Next::Packet(p) = r.next_packet().unwrap() {
-            match p {
-                Packet::Signon { data, .. } => signon.push(data),
-                Packet::Message { data, .. } => frames.push(data),
-                _ => {}
-            }
-        }
-        (tables, signon, frames)
-    }
-
-    /// What of a snapshot comes from the entities alone: the rest (scores, a dead player's last
-    /// place, respawn times, health, who left) is gathered from events and frames a late decoder
-    /// never saw. Players are by id, to compare those both know.
-    fn entities(lines: Vec<Line>) -> Vec<(u32, BTreeMap<u16, String>, serde_json::Value)> {
-        lines
-            .into_iter()
-            .filter_map(|l| match l {
-                Line::Snapshot(s) => Some(s),
-                _ => None,
-            })
-            .map(|s| {
-                let players = s.players.iter().map(|p| (p.id.0, format!("{:?} {:?}", p.class, p.team))).collect();
-                (s.tick, players, serde_json::json!([s.buildings, s.projectiles, s.objectives]))
-            })
-            .collect()
-    }
-
-    fn assert_same_world(a: &Decoder, b: &Decoder, what: &str) {
-        let (a, b) = (a.world_compared(), b.world_compared());
-        assert_eq!(a.len(), b.len(), "{what}: entities");
-        for (k, x) in &a {
-            assert_eq!(Some(x), b.get(k), "{what}: entity {k}");
-        }
-    }
-
-    #[test]
-    fn a_decoder_started_from_a_keyframe_follows_as_one_from_the_start() {
-        // A live session recorded as a demo too: its deltas build on frames a few ticks back.
-        let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
-        let recorded = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
-        let demos = ["pl_upward.dem", "ctf_turbine.dem", "pd_watergate.dem", "sd_doomsday.dem"]
-            .map(|name| crate::fixture(name).display().to_string())
-            .into_iter()
-            .chain([recorded.display().to_string()]);
-        for demo in demos {
-            follows_from_a_keyframe(&demo, 1, 2);
-        }
-    }
-
-    /// A live recording of one's own, keyframes at several points.
-    #[test]
-    #[ignore = "a demo in STVTF_KEYFRAME_DEMO"]
-    fn a_decoder_follows_a_given_demo_from_keyframes() {
-        let demo = std::env::var("STVTF_KEYFRAME_DEMO").unwrap();
-        for at in 1..8 {
-            follows_from_a_keyframe(&demo, at, 8);
-        }
-    }
-
-    /// Starts a decoder from a keyframe `at`/`of` into `demo` and follows it to the end.
-    fn follows_from_a_keyframe(demo: &str, at: usize, of: usize) {
-        {
-            let (tables, signon, frames) = packets(demo);
-            let mut whole = Decoder::new(&tables, 1000.0).unwrap();
-            whole.keep_world();
-            assert!(whole.keyframe(None).is_none(), "{demo}: nothing before the first full update");
-            for s in &signon {
-                whole.feed(s, s.len() * 8);
-            }
-            // The string table changes so far, as the relay's log keeps them for a late client.
-            let half = frames.len() * at / of;
-            let mut tables_since = Vec::new();
-            let mut ticks = Vec::new();
-            for f in &frames[..half] {
-                let life = whole.feed(f, f.len() * 8);
-                ticks.push(whole.server_tick());
-                for span in life
-                    .spans
-                    .iter()
-                    .filter(|s| matches!(u32::from(s.id), SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE))
-                {
-                    tables_since.push(BitReader::slice(f, span.bits.clone()));
-                }
-            }
-            // Of the frame the next builds on.
-            let (key_tick, key) = whole.keyframe(Some(&frames[half])).expect("a keyframe");
-            assert!(whole.world_len() > 50, "{demo}: {} entities", whole.world_len());
-            whole.take_output();
-
-            let mut late = Decoder::new(&tables, 1000.0).unwrap();
-            late.keep_world();
-            for s in &signon {
-                late.feed(s, s.len() * 8);
-            }
-            for t in &tables_since {
-                late.feed(t.bytes(), t.nbits());
-            }
-            let life = late.feed(key.bytes(), key.nbits());
-            assert!(life.full_update && !life.lost_frame, "{demo}");
-            // Then the frames played since the one it is of, as the relay sends them with it.
-            let recent: Vec<(u32, BitBuf)> =
-                frames[..half].iter().zip(&ticks).map(|(f, t)| (*t, BitBuf::from_bytes(f.clone()))).collect();
-            for f in whole.catch_up(key_tick, &recent) {
-                let life = late.feed(f.bytes(), f.nbits());
-                assert!(!life.lost_frame, "{demo}: a frame sent with the keyframe builds on one the client lacks");
-            }
-            // A demo's next frame builds on the last: the keyframe is of where `whole` is. (A live
-            // session's builds on one a few ticks back, which the keyframe is of instead.)
-            if whole.delta_base(&frames[half]) == Some(whole.server_tick()) {
-                assert_same_world(&whole, &late, &format!("{demo} at the keyframe"));
-            }
-            late.take_output();
-
-            for f in &frames[half..] {
-                whole.feed(f, f.len() * 8);
-                let life = late.feed(f, f.len() * 8);
-                assert!(!life.lost_frame, "{demo}: every delta after builds on it");
-            }
-            assert_same_world(&whole, &late, &format!("{demo} at the end"));
-            let (a, b) = (entities(whole.take_output()), entities(late.take_output()));
-            assert!(a.len() > 10, "{demo}");
-            assert_eq!(a.len(), b.len(), "{demo}");
-            for ((tick, pa, xa), (_, pb, xb)) in a.iter().zip(&b) {
-                assert_eq!(xa, xb, "{demo} at tick {tick}");
-                for (id, p) in pa {
-                    if let Some(q) = pb.get(id) {
-                        assert_eq!(p, q, "{demo} at tick {tick}: player {id}");
-                    }
-                }
-                assert!(pb.keys().filter(|id| pa.contains_key(id)).count() >= pa.len().min(4), "{demo}: players known");
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod speed {
-    use super::*;
-    use crate::demo::{Next, Packet, Reader};
-
-    #[test]
-    #[ignore = "a demo in STVTF_SPEED_DEMO"]
-    fn decoding_speed() {
-        let path = std::env::var("STVTF_SPEED_DEMO").unwrap();
-        let tables = Tables::from_demo(std::path::Path::new(&path)).unwrap();
-        for world in [false, true] {
-            let mut r = Reader::new(std::fs::File::open(&path).unwrap()).unwrap();
-            let mut dec = Decoder::new(&tables, 0.0).unwrap();
-            if world {
-                dec.keep_world();
-            }
-            let t = std::time::Instant::now();
-            let mut n = 0;
-            while let Next::Packet(p) = r.next_packet().unwrap() {
-                if let Packet::Signon { data, .. } | Packet::Message { data, .. } = p {
-                    dec.feed(&data, data.len() * 8);
-                    n += 1;
-                }
-            }
-            eprintln!("world {world}: {n} packets in {:.1} s", t.elapsed().as_secs_f32());
-        }
     }
 }

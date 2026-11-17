@@ -1,10 +1,11 @@
 //! What the extractor keeps per entity between updates.
 
-use super::MAX_TEAMS;
-use crate::decode::modes::Placed;
-use crate::output as out;
 use tf_demo_parser::demo::data::game_state::Player;
 use tf_demo_parser::demo::vector::Vector;
+
+use super::limits::MAX_TEAMS;
+use crate::decode::modes::Placed;
+use crate::output as out;
 
 /// Unattended cap progress decays over `mp_capdeteriorate_time` (default 90 s).
 const CAP_DECAY_SECONDS: f32 = 90.0;

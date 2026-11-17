@@ -1,12 +1,13 @@
 //! Beams drawn in the world for the clients of a relay (`TE_BeamPoints`), as the game's own
 //! temp entities: a room's strokes, seen in TF2.
 
-use super::{BeamModel, Decoder, ModelsSent};
-use crate::net::bits::BitBuf;
-use crate::net::messages::SVC_TEMPENTITIES;
 use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage};
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
+
+use super::{BeamModel, Decoder, ModelsSent};
+use crate::net::bits::BitBuf;
+use crate::net::messages::SVC_TEMPENTITIES;
 
 /// Beams in one message: well under a datagram, as some go unreliably.
 const PER_MESSAGE: usize = 16;
@@ -104,7 +105,7 @@ impl Decoder {
             .chunks(PER_MESSAGE)
             .map(|chunk| {
                 let msg = TempEntitiesMessage { events: chunk.iter().map(event).collect::<Option<_>>()? };
-                super::encode_message(SVC_TEMPENTITIES, &msg, state)
+                super::decoder::encode_message(SVC_TEMPENTITIES, &msg, state)
             })
             .collect()
     }

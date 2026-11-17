@@ -1,113 +1,35 @@
-//! A `SourceTV` relay: the connection a watch already has, passed on to the TF2 clients (or
-//! stvtf watchers) that connect to us, as `tv_relay` does. It costs the server no slot.
-//!
-//! Nothing is re-encoded: every client gets the server's own message bits.
-//!
-//! - Signon: the reliable messages of the server's signon go into a backlog replayed to each
-//!   client, stopping after each `net_SignonState` until the client echoes it, as a server
-//!   waits. After signon only string table messages join it, so a late client still gets
-//!   the tables as they are now; other reliable messages go to the clients already in.
-//! - Entities: the server deltas each frame from the one we last acked, so a client can only
-//!   follow from a full update on. The datagrams since the last full update are kept while
-//!   few, and a client ready for entities gets them at once; once there are too many, it makes
-//!   us ask the server for a full update (tick ack -1). From then on every datagram's
-//!   unreliable part goes to the client unchanged. A client that loses a frame asks for a full
-//!   update, and we ask the server.
-//! - A map change re-runs the server's signon on our connection: the backlog starts again, and
-//!   every client signs on again with it.
-//! - A client in the game gets one packet per server datagram, as from the server itself.
-//! - Reliable messages go one transfer at a time, the next when the last is acked, so they can
-//!   reach a client up to about a round trip behind the datagrams: 12 ticks at most, on 8% of
-//!   a capture's lines, with 200 ms of ping. Their own order stays.
-//!
-//! Connectionless replies are never larger than what asked for them, unless the address proved
-//! it is real by answering a challenge, so the relay cannot be used to reflect traffic.
+//! A relay bound to its port: its settings, and serving a watch, a capture or a demo to its clients.
 
-use crate::capture::{self, Record};
-use crate::decode::{Lifecycle, Tables};
-use crate::lock;
-use crate::net::MAX_DATAGRAM;
-use crate::net::bits::BitBuf;
-use crate::output::{Line, Status};
-use crate::session::{self, Options, Tap};
-use crate::watch::{Watch, WatchError};
-use anyhow::{Context, Result};
-#[cfg(fuzzing)]
-use client::Client;
-use client::Phase;
-use hub::Hub;
 use std::fmt;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-// Logged through `tracing`: info a line a client, a jump or a failure; debug
-// (`RUST_LOG=stvtf::relay=debug`) also handshakes, signon timing and what each client is sent.
+use anyhow::{Context, Result};
 
-/// A client's address as it is logged: without the end of it, the port kept to tell two apart.
-pub(crate) fn masked_addr(addr: SocketAddr) -> String {
-    match addr.ip() {
-        std::net::IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            format!("{a}.{b}.{c}.x:{}", addr.port())
-        }
-        std::net::IpAddr::V6(ip) => {
-            format!("{:x}:{:x}:{:x}::x:{}", ip.segments()[0], ip.segments()[1], ip.segments()[2], addr.port())
-        }
-    }
-}
-
-mod admission;
-mod backlog;
-mod client;
-mod client_msg;
-mod handover;
-mod hub;
-mod out;
-mod play;
-mod server_msg;
-mod transfer;
-pub(crate) use client_msg::{ClientMsg, client_messages};
-pub use handover::Handover;
-pub use play::{Beam, Camera, Light, Note, Playback, VoiceIn, Want};
-
-/// How often the trace sums up what each client was sent.
-const TRACE_EVERY: Duration = Duration::from_secs(5);
-
-/// TF2's spectator panel.
-const SPECTATORS: &str = "specgui";
-/// How long after a HUD reset, and after going into the game, a client gets the notes again.
-const NOTES_AFTER_RESET: Duration = Duration::from_millis(300);
-const NOTES_AFTER_ENTERING: Duration = Duration::from_secs(2);
+use super::client::Phase;
+pub use super::handover::Handover;
+use super::hub::Hub;
+use super::tuning::{FULL_UPDATE_GAP, READ_POLL};
+use crate::capture::{self, Record};
+use crate::decode::{Lifecycle, Tables};
+use crate::net::MAX_DATAGRAM;
+use crate::net::bits::BitBuf;
+use crate::output::{Line, Status};
+use crate::session::{self, Options, Tap};
+use crate::sync::lock;
+use crate::watch::{Watch, WatchError};
 
 /// Clients a relay takes unless told otherwise.
 pub const DEFAULT_SLOTS: usize = 10;
+
 /// The most clients a relay takes: a slot count fits the `A2S_INFO` reply's byte.
 pub const MAX_SLOTS: usize = 255;
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
-/// A client in its signon may be silent this long: a game client loading a map sends nothing.
-const SIGNON_TIMEOUT: Duration = Duration::from_secs(120);
-/// How long another signon waits for the clients in one: a caster does not wait on a slow
-/// viewer, who is dropped and retries.
-const SIGNON_HOLD: Duration = Duration::from_secs(30);
-/// A client hears from us at least this often, so its connection does not time out.
-const KEEPALIVE: Duration = Duration::from_millis(100);
-const READ_POLL: Duration = Duration::from_millis(5);
-/// A client acks -1 until the full update it asked for arrives; only after this long is it
-/// asking for another.
-const FULL_UPDATE_GRACE: Duration = Duration::from_secs(1);
-/// How long a client has to ack a full update before it is sent another: no delta goes to it
-/// until it has, as it would crash on one from a frame it lacks.
-const KEY_WAIT: Duration = Duration::from_millis(if cfg!(test) { 30 } else { 600 });
-/// Datagrams kept since the last full update, for clients that join after it.
-const MAX_SINCE_FULL: usize = 64;
-/// After a full update, the next is asked of the server no sooner than this, however many
-/// clients want one: each costs the server a full snapshot.
-const FULL_UPDATE_GAP: Duration = Duration::from_secs(2);
+
 /// Characters of a generated password.
-const PASSWORD_LEN: usize = 10;
+pub(super) const PASSWORD_LEN: usize = 10;
 
 /// Where a relay listens and whom it lets in. `Debug` keeps the password out of logs.
 #[derive(Clone)]
@@ -147,13 +69,13 @@ pub fn random_password() -> String {
 
 /// A relay: a socket clients connect to, fed by one upstream session.
 pub struct Relay {
-    sock: UdpSocket,
+    pub(super) sock: UdpSocket,
     /// The port clients connect to: which relay a log line is of.
-    port: u16,
-    hub: Mutex<Hub>,
+    pub(super) port: u16,
+    pub(super) hub: Mutex<Hub>,
     /// Clients were taken over (see [`Relay::take_over`]), and where their playback was: the
     /// player goes on from there.
-    taken_over: Mutex<Option<handover::TakenOver>>,
+    pub(super) taken_over: Mutex<Option<super::handover::TakenOver>>,
 }
 
 impl Relay {
@@ -165,14 +87,14 @@ impl Relay {
         Ok(Relay { sock, port, hub, taken_over: Mutex::new(None) })
     }
 
-    /// Takes in the clients a relay on this address handed over (see [`Playback::hand_over`]),
+    /// Takes in the clients a relay on this address handed over (see [`Playback::hand_over`](super::Playback::hand_over)),
     /// before [`Relay::play`]: they go on where they were with a full update, or failing that
     /// sign on again, connected still. False if the handover does not read: they are not taken.
     pub fn take_over(&self, h: &Handover) -> bool {
         if self.hub().take_over(h, Instant::now()).is_none() {
             return false;
         }
-        *lock(&self.taken_over) = Some(handover::TakenOver(h.played.clone()));
+        *lock(&self.taken_over) = Some(super::handover::TakenOver(h.played.clone()));
         true
     }
 
@@ -190,7 +112,7 @@ impl Relay {
         self.hub().clients.len()
     }
 
-    fn hub(&self) -> MutexGuard<'_, Hub> {
+    pub(super) fn hub(&self) -> MutexGuard<'_, Hub> {
         lock(&self.hub)
     }
 
@@ -242,13 +164,13 @@ impl Relay {
         })?)
     }
 
-    fn announce(&self, emit: &mut dyn FnMut(Line)) -> Result<()> {
+    pub(super) fn announce(&self, emit: &mut dyn FnMut(Line)) -> Result<()> {
         emit(Line::Status(Status::Relay { listen: self.local_addr()?.to_string() }));
         Ok(())
     }
 
     /// Serves clients on another thread while `upstream` runs.
-    fn serving<T>(&self, stop: &AtomicBool, upstream: impl FnOnce() -> T) -> T {
+    pub(super) fn serving<T>(&self, stop: &AtomicBool, upstream: impl FnOnce() -> T) -> T {
         let done = AtomicBool::new(false);
         std::thread::scope(|s| {
             s.spawn(|| self.serve_clients(stop, &done));
@@ -258,7 +180,7 @@ impl Relay {
         })
     }
 
-    fn serve_clients(&self, stop: &AtomicBool, done: &AtomicBool) {
+    pub(super) fn serve_clients(&self, stop: &AtomicBool, done: &AtomicBool) {
         let mut buf = vec![0u8; MAX_DATAGRAM];
         let _ = self.sock.set_read_timeout(Some(READ_POLL));
         while !stop.load(Ordering::Relaxed) && !done.load(Ordering::Relaxed) {
@@ -278,7 +200,7 @@ impl Relay {
 
 impl Tap for Relay {
     fn stream(&self, bits: &BitBuf, reliable: bool, life: &Lifecycle) {
-        let part = if reliable { hub::Part::Reliable } else { hub::Part::Unreliable };
+        let part = if reliable { super::hub::Part::Reliable } else { super::hub::Part::Unreliable };
         self.hub().upstream_stream(bits, part, life);
     }
 
@@ -296,41 +218,3 @@ impl Tap for Relay {
         self.hub().admission.build = build.to_string();
     }
 }
-
-/// A relay with one client in, for `crate::fuzzing`.
-#[cfg(fuzzing)]
-pub(crate) struct FuzzBench {
-    hub: Hub,
-    client: SocketAddr,
-    challenge: u32,
-    now: Instant,
-}
-
-#[cfg(fuzzing)]
-impl FuzzBench {
-    pub(crate) fn new() -> Self {
-        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let client: SocketAddr = "127.0.0.1:9".parse().unwrap();
-        let config = RelayConfig { password: String::new(), ..RelayConfig::new("127.0.0.1:0") };
-        let mut hub = Hub::new(sock, &config);
-        let now = Instant::now();
-        let challenge = hub.admission.challenge(client);
-        hub.clients.insert(client, Client::new("fuzz".to_string(), challenge, 1, now));
-        FuzzBench { hub, client, challenge, now }
-    }
-
-    pub(crate) fn challenge(&self) -> u32 {
-        self.challenge
-    }
-
-    pub(crate) fn datagram(&mut self, data: &[u8]) {
-        self.hub.datagram(self.client, data, self.now);
-    }
-
-    pub(crate) fn service(&mut self) {
-        self.hub.service(self.now);
-    }
-}
-
-#[cfg(test)]
-mod tests;

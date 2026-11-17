@@ -1,12 +1,13 @@
 //! Who is let in: challenges, connects and `A2S_INFO`, the packets outside a connection.
 
-use super::client::Client;
-use super::{MAX_SLOTS, RelayConfig, masked_addr};
-use crate::net::handshake::{self, FromClient};
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 use std::net::SocketAddr;
 use std::time::Instant;
+
+use super::client::Client;
+use super::{MAX_SLOTS, RelayConfig, masked_addr};
+use crate::net::handshake::{self, FromClient};
 
 pub(super) struct Admission {
     password: String,

@@ -2,15 +2,16 @@
 //! frame per datagram, every message as the server sent it. A new connection (a reconnect, a new
 //! map) starts a new file, with the signon that connection got.
 
+use std::fs::File;
+use std::io::BufWriter;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use super::{Header, HeldTables, Writer};
 use crate::decode::{Lifecycle, Tables};
 use crate::net::bits::{BitBuf, BitWriter};
 use crate::net::messages::{NET_TICK, SVC_PACKETENTITIES};
 use crate::session::Tap;
-use std::fs::File;
-use std::io::BufWriter;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 /// The header's counts are written again this often; every frame reaches the file at once, so a
 /// file being written can be played while it grows.
@@ -53,7 +54,7 @@ impl Recorder {
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        crate::lock(&self.state)
+        crate::sync::lock(&self.state)
     }
 }
 
@@ -183,12 +184,13 @@ impl Drop for Recorder {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+
     use super::*;
     use crate::capture;
     use crate::output::Line;
     use crate::session::{self, Options};
-    use std::path::PathBuf;
-    use std::sync::atomic::AtomicBool;
 
     /// Files in a folder of their own, named after their first tick.
     struct Folder(PathBuf);
@@ -207,7 +209,7 @@ pub(crate) mod tests {
     /// demo's file.
     pub(crate) fn record_capture(name: &str, opt: &Options) -> (Vec<Line>, PathBuf) {
         static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let bytes = std::fs::read(crate::fixture(name)).unwrap();
+        let bytes = std::fs::read(crate::testing::fixture(name)).unwrap();
         let records = capture::read(&bytes).unwrap();
         let tables = crate::builds::tables(crate::builds::CURRENT, None).unwrap();
         let mut want = Vec::new();
@@ -251,7 +253,7 @@ pub(crate) mod tests {
         while let crate::demo::Next::Packet(p) = r.next_packet().unwrap() {
             match p {
                 crate::demo::Packet::Signon { data, .. } => {
-                    kinds.push(if crate::demo::opens_with_classes(&data) { "classes" } else { "signon" });
+                    kinds.push(if crate::demo::tables::opens_with_classes(&data) { "classes" } else { "signon" });
                 }
                 crate::demo::Packet::DataTables { .. } => kinds.push("tables"),
                 _ => break,

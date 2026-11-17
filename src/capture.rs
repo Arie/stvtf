@@ -4,14 +4,16 @@
 //! kind 1 = inbound datagram, kind 2 = session start (data = u32 challenge).
 //! Only inbound traffic is recorded, so the password (sent outbound) never is.
 
-use crate::decode::Tables;
-use crate::output::Line;
-use crate::session::{self, Options};
-use anyhow::{Context, Result};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::Instant;
+
+use anyhow::{Context, Result};
+
+use crate::decode::Tables;
+use crate::output::Line;
+use crate::session::{self, Options};
 
 pub(crate) const MAGIC: &[u8; 8] = b"STVMAPC1";
 /// A record's header: receive time (u64 microseconds), kind (u8), data length (u32).

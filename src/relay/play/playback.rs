@@ -1,12 +1,13 @@
 //! Where playback should be, and what the clients are to see besides the demo: the control surface.
 
-use super::{Beam, Light, Note, VoiceIn, voice};
-use crate::lock;
-use crate::relay::Handover;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
+
+use super::{Beam, Light, Note, VoiceIn, voice};
+use crate::relay::Handover;
+use crate::sync::lock;
 
 /// Where playback should be: at `tick` (a server tick of `demo`) at the instant `at`, going on
 /// from there at `speed` unless paused.

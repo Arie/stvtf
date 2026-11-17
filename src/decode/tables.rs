@@ -7,14 +7,16 @@
 //! A client that has the tables of a later moment is set back with `svc_UpdateStringTable`s of the
 //! entries that differ ([`Tables::set_back`]).
 
-use crate::net::bits::BitBuf;
-use crate::net::messages::SVC_UPDATESTRINGTABLE;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
+
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::Message;
 use tf_demo_parser::demo::message::stringtable::UpdateStringTableMessage;
 use tf_demo_parser::demo::packet::stringtable::{ExtraData, StringTable, StringTableEntry};
+
+use crate::net::bits::BitBuf;
+use crate::net::messages::SVC_UPDATESTRINGTABLE;
 
 /// Entries in one message of a snapshot's: well within its length.
 const SNAPSHOT_ENTRIES: usize = 64;
@@ -260,7 +262,7 @@ impl Tables {
         }
         let entry = StringTableEntry { text: Some(Cow::Borrowed(BEAM_SPRITES[0])), extra_data: None };
         let msg = UpdateStringTableMessage { entries: vec![(slot, entry)], table_id: u8::try_from(id).ok()? };
-        Some(BeamModel { index: slot, load: Some(super::encode_message(SVC_UPDATESTRINGTABLE, &msg, state)?) })
+        Some(BeamModel { index: slot, load: Some(super::decoder::encode_message(SVC_UPDATESTRINGTABLE, &msg, state)?) })
     }
 
     #[cfg(test)]
@@ -292,7 +294,7 @@ impl Tables {
             let entries: Vec<_> = theirs.entries.iter().filter(|(i, e)| differs(i, e)).cloned().collect();
             for some in entries.chunks(SNAPSHOT_ENTRIES) {
                 let msg = UpdateStringTableMessage { entries: some.to_vec(), table_id };
-                out.extend(super::encode_message(SVC_UPDATESTRINGTABLE, &msg, state));
+                out.extend(super::decoder::encode_message(SVC_UPDATESTRINGTABLE, &msg, state));
             }
         }
         out
@@ -323,7 +325,7 @@ impl Tables {
                 continue;
             }
             let msg = UpdateStringTableMessage { entries, table_id: u8::try_from(id).ok()? };
-            out.push(super::encode_message(SVC_UPDATESTRINGTABLE, &msg, state)?);
+            out.push(super::decoder::encode_message(SVC_UPDATESTRINGTABLE, &msg, state)?);
         }
         Some(out)
     }
@@ -338,10 +340,11 @@ fn value(e: &StringTableEntry<'_>) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
     use tf_demo_parser::demo::message::MessageType;
     use tf_demo_parser::demo::message::stringtable::{CreateStringTableMessage, StringTableMeta};
+
+    use super::*;
 
     fn entry(text: &str, data: &[u8]) -> StringTableEntry<'static> {
         let data = BitReadStream::new(BitReadBuffer::new_owned(data.to_vec(), LittleEndian));

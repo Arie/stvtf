@@ -1,15 +1,26 @@
-use super::convert::*;
-use super::events::*;
-use super::state::*;
-use super::*;
-use crate::decode::modes::Placed;
-use crate::output::{ChatColor, ChatKind, ChatPart, Condition, Resist, Ubered, round1};
-use tf_demo_parser::demo::data::game_state::{PlayerClassData, PlayerCondition, ProjectileType};
+use tf_demo_parser::ParserState;
+use tf_demo_parser::demo::data::game_state::{
+    PlayerClassData, PlayerCondition, PlayerState, Projectile, ProjectileType,
+};
 use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::message::PacketEntitiesMessage;
 use tf_demo_parser::demo::message::packetentities::{EntityId, PacketEntity, UpdateType};
 use tf_demo_parser::demo::message::usermessage::{ChatMessageKind, UserMessage};
-use tf_demo_parser::demo::parser::analyser::Team;
+use tf_demo_parser::demo::parser::analyser::{Class, Team};
+
+use super::convert::{building_kind, medigun_kind, projectile_kind, resist, strip_colors, team_num, *};
+use super::events::*;
+use super::extractor::Extractor;
+use super::limits::{
+    COND_BITS, COND_WORDS, FLAMETHROWER_FIRING, MY_WEAPON_SLOTS, PROP_MY_WEAPONS, RESIST_BLAST, RESIST_BULLET,
+};
+use super::state::{Charge, ControlPoint, Flag, Medigun, RoundTimer, Sentry, StopwatchRules, TeamScore};
+use crate::DEFAULT_TICK_INTERVAL;
+use crate::decode::modes::Placed;
+use crate::output::{
+    self as out, BuildingKind, ChatColor, ChatKind, ChatPart, Condition, Line, MedigunKind, PlayerId, ProjectileKind,
+    Resist, Round, Ubered, round1,
+};
 
 fn say_text2(kind: ChatMessageKind, from: &str, text: &str) -> Vec<Line> {
     let mut x = Extractor::default();
@@ -80,10 +91,11 @@ fn a_reused_entity_slot_forgets_the_medic_charge() {
 /// A pyro's firing flamethrower whose slot becomes a medigun with no delete between is gone.
 #[test]
 fn a_slot_taken_over_by_another_class_keeps_nothing_of_the_old_one() {
-    use crate::decode::props::prop_id;
     use tf_demo_parser::demo::message::packetentities::BaselineIndex;
     use tf_demo_parser::demo::packet::datatable::{ClassId, ServerClass};
     use tf_demo_parser::demo::sendprop::{SendProp, SendPropValue};
+
+    use crate::decode::props::prop_id;
 
     let mut state = ParserState::new(24, |_| true, false);
     state.server_classes = ["CTFFlameThrower", "CWeaponMedigun"]
@@ -296,10 +308,11 @@ mod flag_tests {
 }
 
 mod frame_tests {
-    use super::*;
     use tf_demo_parser::demo::data::ServerTick;
     use tf_demo_parser::demo::message::packetentities::BaselineIndex;
     use tf_demo_parser::demo::packet::datatable::{ClassId, ServerClassName};
+
+    use super::*;
 
     fn update(id: u32, update_type: UpdateType) -> PacketEntity {
         PacketEntity {
@@ -402,9 +415,10 @@ mod frame_tests {
 }
 
 mod medic_tests {
-    use super::*;
     use tf_demo_parser::demo::data::game_state::Player;
     use tf_demo_parser::demo::parser::analyser::UserInfo;
+
+    use super::*;
 
     fn with_medic(charge: u8, releasing: bool) -> Extractor {
         let mut x = Extractor::default();
@@ -653,10 +667,11 @@ mod cap_tests {
 }
 
 mod voice_tests {
-    use super::*;
     use tf_demo_parser::demo::data::game_state::Player;
     use tf_demo_parser::demo::message::voice::VoiceDataMessage;
     use tf_demo_parser::demo::parser::analyser::UserInfo;
+
+    use super::*;
 
     /// A packet from `client`'s slot saying it is `SteamID` `[U:1:145702602]`: 24 kHz unless
     /// `rateless`, one Opus frame of three bytes, a CRC.

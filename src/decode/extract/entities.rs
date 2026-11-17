@@ -1,23 +1,26 @@
 //! Entity updates: per-class handlers that read the props of one entity.
 
+use std::collections::HashSet;
+
+use tf_demo_parser::ParserState;
+use tf_demo_parser::demo::data::game_state::Building;
+use tf_demo_parser::demo::message::packetentities::{EntityId, UpdateType};
+use tf_demo_parser::demo::message::{PacketEntitiesMessage, PacketEntity};
+use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
+
 use super::convert::{alive, builder_entity, flag_status, round_from_raw};
-use super::state::{ControlPoint, Pose, Weapon};
-use super::{
-    COND_WORDS, Extractor, FLAMETHROWER_AIRBLAST, MAX_CONTROL_POINTS, MAX_TEAMS, MY_WEAPON_SLOTS, PROP_MY_WEAPONS,
-    debug, debug_entity,
+use super::debug::debug_entity;
+use super::limits::{
+    COND_WORDS, FLAMETHROWER_AIRBLAST, MAX_CONTROL_POINTS, MAX_TEAMS, MY_WEAPON_SLOTS, PROP_MY_WEAPONS,
 };
+use super::state::{ControlPoint, Pose, Weapon};
+use super::{Extractor, debug};
 use crate::decode::modes;
 use crate::decode::props::{
     BLUE_SLOT, EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, RED_SLOT, as_float, as_int, opt_handle, prop_id,
     prop_vec, team_byte,
 };
 use crate::output::{self as out, Airblast, BuildingKind, Line};
-use std::collections::HashSet;
-use tf_demo_parser::ParserState;
-use tf_demo_parser::demo::data::game_state::Building;
-use tf_demo_parser::demo::message::packetentities::{EntityId, UpdateType};
-use tf_demo_parser::demo::message::{PacketEntitiesMessage, PacketEntity};
-use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
 /// `Weapon::clip` of a weapon without a clip.
 const NO_CLIP: i64 = -1;

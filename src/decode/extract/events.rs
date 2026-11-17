@@ -1,5 +1,11 @@
 //! Game events, temp entities and user messages: the discrete lines.
 
+use tf_demo_parser::ParserState;
+use tf_demo_parser::demo::gameevent_gen::{GameEvent, PlayerDeathEvent};
+use tf_demo_parser::demo::message::TempEntitiesMessage;
+use tf_demo_parser::demo::message::usermessage::UserMessage;
+use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier};
+
 use super::convert::{
     building_kind, chat_kind, class_num, color_parts, medigun_kind, opt_user, strip_colors, team_num, xyz,
 };
@@ -8,11 +14,6 @@ use super::{Extractor, debug};
 use crate::decode::detail;
 use crate::decode::props::{origin_parts, prop_f, prop_i, prop_id, prop_vec};
 use crate::output::{self as out, BannerKind, ChatKind, Line, PlayerId, round1};
-use tf_demo_parser::ParserState;
-use tf_demo_parser::demo::gameevent_gen::{GameEvent, PlayerDeathEvent};
-use tf_demo_parser::demo::message::TempEntitiesMessage;
-use tf_demo_parser::demo::message::usermessage::UserMessage;
-use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier};
 
 /// TF2 sets `DMG_ACID` on critical hits.
 const DMG_CRIT: u32 = 1 << 20;

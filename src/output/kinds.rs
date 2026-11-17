@@ -1,8 +1,9 @@
 //! The ids, teams, classes and other kinds the lines name.
 
+use std::fmt;
+
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
-use std::fmt;
 
 /// A player's user id: what events call `player`, `attacker`, `victim` and so on. Not an entity
 /// index; a user id is not reused while the server runs.

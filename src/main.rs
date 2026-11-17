@@ -1,15 +1,15 @@
-use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use stvtf::capture;
+
+use anyhow::{Context, Result};
+use clap::{Args, Parser, Subcommand};
 use stvtf::decode::{self, Tables};
 use stvtf::output::Stamped;
 use stvtf::relay::{DEFAULT_SLOTS, MAX_SLOTS, Playback, Relay, RelayConfig, Want};
 use stvtf::watch::{self, Watch};
-use stvtf::{Line, Options};
+use stvtf::{Line, Options, capture};
 
 /// Headless TF2 `SourceTV` spectator emitting top-down overview data as JSON lines.
 #[derive(Parser)]
@@ -271,8 +271,9 @@ fn relay_config(to: &RelayTo, listen: &str) -> RelayConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::CommandFactory;
+
+    use super::*;
 
     #[test]
     fn the_command_line_is_well_formed() {

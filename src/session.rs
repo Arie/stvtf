@@ -11,6 +11,14 @@
 //! The same driver runs live (a socket) and offline (a recorded capture, nothing sent),
 //! so replays and tests exercise exactly the code a live session runs.
 
+use std::collections::HashSet;
+use std::io::ErrorKind;
+use std::net::UdpSocket;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+
 use crate::capture::Recorder;
 use crate::decode::{Decoder, Lifecycle, Tables};
 use crate::net::bits::BitBuf;
@@ -20,12 +28,6 @@ use crate::net::netchan::{self, OutHeader};
 use crate::net::receiver::{MsgStream, Receiver};
 use crate::net::reliable;
 use crate::output::{Line, Status};
-use anyhow::Result;
-use std::collections::HashSet;
-use std::io::ErrorKind;
-use std::net::UdpSocket;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 /// How a session behaves.
 #[derive(Debug, Clone)]
@@ -52,6 +54,10 @@ const DEFAULT_SILENCE: Duration = Duration::from_secs(15);
 
 /// Snapshots per second unless asked otherwise.
 pub const DEFAULT_SNAPSHOT_HZ: f32 = 20.0;
+
+/// Seconds per server tick (TF2's 66.67 per second) until the server's own value arrives in
+/// [`crate::output::Server::tick_interval`].
+pub const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
 /// A snapshot rate as written: a number, 0 or more (0 disables snapshots).
 pub fn parse_snapshot_hz(hz: &str) -> crate::Result<f32> {
@@ -648,12 +654,13 @@ const PACE_POLL: Duration = Duration::from_millis(2);
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{End, Fatal, Next, Options, Session, drive, finish, replay};
     use crate::decode::Lifecycle;
     use crate::net::messages::{self, Signon};
     use crate::net::netchan::{self, OutHeader};
     use crate::output::{Line, Status};
-    use std::time::Duration;
 
     #[test]
     fn a_lost_frame_asks_for_a_full_update_until_one_comes() {
@@ -786,7 +793,7 @@ mod tests {
     /// was lost: it counts as if it came next.
     #[test]
     fn a_packet_read_while_connecting_is_decoded_first() {
-        let bytes = std::fs::read(crate::fixture("bots_cp_badlands.cap")).unwrap();
+        let bytes = std::fs::read(crate::testing::fixture("bots_cp_badlands.cap")).unwrap();
         let records = crate::capture::read(&bytes).unwrap();
         let challenge = records[0].challenge().unwrap();
         let datagrams: Vec<&[u8]> = records[1..].iter().map(|r| r.data).take(200).collect();

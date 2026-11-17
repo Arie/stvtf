@@ -11,35 +11,25 @@ pub mod builds;
 pub mod capture;
 pub mod decode;
 pub mod demo;
-mod error;
-#[cfg(fuzzing)]
-pub mod fuzzing;
-#[cfg(test)]
-mod hostile;
-mod net;
 pub mod output;
-#[cfg(test)]
-mod recovery;
 pub mod relay;
-mod session;
 pub mod watch;
 
-pub use error::{Error, ErrorKind, Result};
-pub use output::Line;
-pub use session::DEFAULT_SNAPSHOT_HZ;
-pub use session::{Fatal, Options, parse_snapshot_hz};
+mod error;
+mod net;
+mod session;
+mod sync;
 
-/// Seconds per server tick (TF2's 66.67 per second) until the server's own value arrives in
-/// [`output::Server::tick_interval`].
-pub const DEFAULT_TICK_INTERVAL: f32 = 0.015;
+pub use self::error::{Error, ErrorKind, Result};
+pub use self::output::Line;
+pub use self::session::{DEFAULT_SNAPSHOT_HZ, DEFAULT_TICK_INTERVAL, Fatal, Options, parse_snapshot_hz};
 
-/// Locks `m`, whatever a thread that panicked with it left.
-fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+#[cfg(fuzzing)]
+pub mod fuzzing;
 
-/// A file in `tests/fixtures`.
 #[cfg(test)]
-fn fixture(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")).join(name)
-}
+mod hostile;
+#[cfg(test)]
+mod recovery;
+#[cfg(test)]
+mod testing;

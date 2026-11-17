@@ -9,17 +9,19 @@
 //! The checkpoints are made on the side, by a thread decoding the whole demo as soon as playback
 //! opens it, and following it as it grows (a live match). Relays playing the same demo share them.
 
-use super::cursor::Cursor;
-use super::{NOT_A_FRAME, RECENT};
-use crate::decode::{Baselines, Placed};
-use crate::lock;
-use crate::net::bits::BitBuf;
-use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
+
+use anyhow::Result;
+
+use super::cursor::Cursor;
+use super::tuning::{NOT_A_FRAME, RECENT};
+use crate::decode::{Baselines, Placed};
+use crate::net::bits::BitBuf;
+use crate::sync::lock;
 
 /// Server ticks between checkpoints: 30 s on a 66-tick server.
 const EVERY: u32 = 2000;
@@ -208,7 +210,7 @@ mod tests {
 
     #[test]
     fn relays_on_one_demo_share_its_index() {
-        let path = crate::fixture("ctf_turbine.dem");
+        let path = crate::testing::fixture("ctf_turbine.dem");
         let a = Index::shared(&path);
         let b = Index::shared(&path);
         assert!(Arc::ptr_eq(&a, &b));
@@ -219,7 +221,7 @@ mod tests {
 
     #[test]
     fn a_cursor_from_a_checkpoint_is_as_one_from_the_start_there() {
-        let path = crate::fixture("pl_upward.dem");
+        let path = crate::testing::fixture("pl_upward.dem");
         let index = Arc::new(Index { path: path.clone(), marks: Mutex::new(Vec::new()), stop: AtomicBool::new(false) });
         index_demo(&path, &Arc::downgrade(&index), 300).unwrap();
         let marks = index.marks.lock().unwrap().clone();
@@ -244,9 +246,9 @@ mod tests {
     fn a_cursor_from_a_checkpoint_reads_on_as_one_from_the_start() {
         let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
         let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
-        let demo = crate::fixture("pl_upward.dem");
+        let demo = crate::testing::fixture("pl_upward.dem");
         // A player's own: its entities enter on baselines of its own, which a checkpoint keeps.
-        let pov = crate::fixture("pov_koth_viaduct.dem");
+        let pov = crate::testing::fixture("pov_koth_viaduct.dem");
         for path in [demo, live, pov] {
             let index =
                 Arc::new(Index { path: path.clone(), marks: Mutex::new(Vec::new()), stop: AtomicBool::new(false) });

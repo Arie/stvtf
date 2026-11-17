@@ -1,25 +1,29 @@
+use std::time::{Duration, Instant};
+
+use tf_demo_parser::demo::gameevent_gen::GameEvent;
+use tf_demo_parser::demo::message::Message;
+
 use super::beams::past_beams;
 use super::cursor::{Cursor, without_cues};
 use super::index::Index;
-use super::*;
+use super::playback::{Playback, Want};
+use super::player::Player;
+use super::tuning::{FRAME_WAIT, NOT_A_FRAME};
+use crate::decode::beams::Beam;
 use crate::decode::{BeamModel, Entities, ModelsSent, Span};
 use crate::demo::Packet;
 use crate::net::bits::{BitBuf, BitWriter};
-use crate::net::messages::{self, SVC_USERMESSAGE, Signon, TYPE_BITS};
+use crate::net::messages::{self, SVC_GAMEEVENT, SVC_TEMPENTITIES, SVC_USERMESSAGE, Signon, TYPE_BITS};
 use crate::net::receiver::Receiver;
+use crate::relay::Relay;
 use crate::relay::client::Phase;
 use crate::relay::hub::Part;
 use crate::relay::server_msg::vgui_menu;
 use crate::relay::tests::Bench;
-use std::time::{Duration, Instant};
-
-use crate::net::messages::{SVC_GAMEEVENT, SVC_TEMPENTITIES};
-use tf_demo_parser::demo::gameevent_gen::GameEvent;
-use tf_demo_parser::demo::message::Message;
 
 /// `pl_upward.dem` decoded until `done`.
 pub(super) fn upward_until(done: impl Fn(&Cursor) -> bool) -> Cursor {
-    let path = crate::fixture("pl_upward.dem");
+    let path = crate::testing::fixture("pl_upward.dem");
     let mut c = Cursor::open_detached(&path).unwrap();
     while !done(&c) {
         match c.next_tick() {
@@ -102,9 +106,10 @@ fn the_clock_is_put_past_beams_it_would_go_back_under() {
 
 #[test]
 fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
-    use crate::decode::beams::{BASE, POINTS};
     use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
     use tf_demo_parser::demo::vector::Vector;
+
+    use crate::decode::beams::{BASE, POINTS};
     let c = upward_until(|c| c.started);
     let beam = Beam {
         from: [1.0, 2.0, 3.0],
@@ -173,7 +178,7 @@ fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
 
 #[test]
 fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
-    let path = crate::fixture("pl_upward.dem");
+    let path = crate::testing::fixture("pl_upward.dem");
     let mut c = Cursor::open_detached(&path).unwrap();
     let mut cues = 0;
     // Ten seconds in, with the players there.
@@ -217,7 +222,7 @@ fn upward_with_changelevel() -> (Cursor, Vec<u8>) {
         ids.push(span.id);
         if i == 0 {
             w.write_buf(&messages::signonstate(Signon::ChangeLevel, 3));
-            w.write_buf(&vgui_menu(crate::relay::SPECTATORS, true));
+            w.write_buf(&vgui_menu(crate::relay::tuning::SPECTATORS, true));
             ids.push(u8::try_from(SVC_USERMESSAGE).unwrap());
         }
     }
@@ -318,7 +323,7 @@ fn follow_as_a_game_client(b: &Bench, reader: &Cursor) -> (usize, usize) {
 /// A relay with the bench's hub, its client in the game, and a player of `c` toward `tick`.
 fn relay_playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
     let config = crate::relay::RelayConfig::new("127.0.0.1:0");
-    let spare = crate::relay::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
+    let spare = crate::relay::hub::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
     let hub = std::mem::replace(&mut b.hub, spare);
     let relay = Relay {
         sock: std::net::UdpSocket::bind("127.0.0.1:0").unwrap(),
@@ -385,7 +390,7 @@ fn a_live_recording_plays_on_after_a_full_update() {
 /// with no more than a client has ends with the same entities, looking where the player did.
 #[test]
 fn a_players_own_demo_plays_to_a_client_that_has_only_its_signon() {
-    let path = crate::fixture("pov_koth_viaduct.dem");
+    let path = crate::testing::fixture("pov_koth_viaduct.dem");
     let mut c = Cursor::open_detached(&path).unwrap();
     while c.recent.len() < 120 {
         match c.next_tick() {
@@ -672,7 +677,7 @@ fn game_client_table_differs(relay: &Relay, player: &Player<'_>, signon: usize, 
 /// each time, and the checkpoint gives them only the changes past those they had.
 #[test]
 fn a_jump_ahead_from_a_checkpoint_gives_the_clients_only_the_table_changes_passed_over() {
-    let path = crate::fixture("pl_upward.dem");
+    let path = crate::testing::fixture("pl_upward.dem");
     let mut b = bench_with_one_in();
     let first = upward_until(|c| c.started);
     let from = i64::from(first.dec.server_tick());
@@ -715,7 +720,7 @@ fn a_jump_ahead_from_a_checkpoint_gives_the_clients_only_the_table_changes_passe
 /// Far ahead, then back to the start: the clients' tables are the demo's.
 #[test]
 fn far_ahead_and_back_to_the_start_leaves_the_clients_with_the_demos_tables() {
-    let path = crate::fixture("pl_upward.dem");
+    let path = crate::testing::fixture("pl_upward.dem");
     let mut b = bench_with_one_in();
     let first = upward_until(|c| c.started);
     let from = i64::from(first.dec.server_tick());
@@ -785,7 +790,7 @@ fn a_demo_that_will_never_open_is_not_tried_again() {
 /// A relay playing `pl_upward.dem` some way in, its one client in the game with all it was sent
 /// acked; the player, what it wants, and where the backlog's signon ends.
 fn upward_played_to_a_client(b: &mut Bench) -> (Relay, Want, usize) {
-    let path = crate::fixture("pl_upward.dem");
+    let path = crate::testing::fixture("pl_upward.dem");
     let first = upward_until(|c| c.started);
     let from = i64::from(first.dec.server_tick());
     let (relay, _, mut want) = relay_playing(b, first, 0);
@@ -861,7 +866,7 @@ fn clients_handed_over_sign_on_again_when_the_room_is_on_another_demo() {
     let dir = std::env::temp_dir().join(format!("stvtf-other-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     want.demo = dir.join("other.dem");
-    std::fs::copy(crate::fixture("pl_upward.dem"), &want.demo).unwrap();
+    std::fs::copy(crate::testing::fixture("pl_upward.dem"), &want.demo).unwrap();
     let playback = Playback::new(want.clone());
     let mut p = Player::new(&next);
     assert!(p.open_wanted(&want, &playback).is_continue());
@@ -913,7 +918,7 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
     let playback = Playback::new(want.clone());
     // The same server and load, begun before where playback is.
     want.demo = dir.join("next.dem");
-    std::fs::copy(crate::fixture("pl_upward.dem"), &want.demo).unwrap();
+    std::fs::copy(crate::testing::fixture("pl_upward.dem"), &want.demo).unwrap();
     let at = p.cur.as_ref().unwrap().tick();
     assert!(p.open_wanted(&want, &playback).is_continue());
     {
@@ -933,7 +938,7 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
     // With the relay's laser where one coming in later gets it too; not with it elsewhere.
     let laser = p.cur.as_ref().unwrap().dec.beam_model(None, ModelsSent::default()).unwrap();
     let again = dir.join("again.dem");
-    std::fs::copy(crate::fixture("pl_upward.dem"), &again).unwrap();
+    std::fs::copy(crate::testing::fixture("pl_upward.dem"), &again).unwrap();
     p.laser = Some(laser.index + 1);
     assert!(!p.goes_on_into(&again), "the laser elsewhere");
     p.laser = Some(laser.index);
@@ -941,8 +946,8 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
     assert_eq!(p.laser, Some(laser.index));
     assert!(relay.hub().backlog.has_table_change(&laser.load.unwrap()), "for those to come");
     // Another map: not the same load.
-    assert!(!p.goes_on_into(&crate::fixture("pass_stadium.dem")));
-    want.demo = crate::fixture("pass_stadium.dem");
+    assert!(!p.goes_on_into(&crate::testing::fixture("pass_stadium.dem")));
+    want.demo = crate::testing::fixture("pass_stadium.dem");
     assert!(p.open_wanted(&want, &playback).is_continue());
     assert!(relay.hub().clients.values().next().unwrap().reconnecting);
     std::fs::remove_dir_all(&dir).unwrap();
@@ -956,7 +961,7 @@ fn going_into_a_demo_played_before_starts_from_its_checkpoints() {
     let dir = std::env::temp_dir().join(format!("stvtf-goes-back-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let next = dir.join("next.dem");
-    std::fs::copy(crate::fixture("pl_upward.dem"), &next).unwrap();
+    std::fs::copy(crate::testing::fixture("pl_upward.dem"), &next).unwrap();
     let went = |with_checkpoints: bool| {
         let mut b = bench_with_one_in();
         let (relay, mut want) = upward_playing_to_a_client(&mut b);

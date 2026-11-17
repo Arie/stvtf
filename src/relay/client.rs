@@ -1,15 +1,17 @@
 //! A client of the relay: where it is in signon and what it is still to be sent.
 
+use std::collections::VecDeque;
+use std::net::SocketAddr;
+use std::time::Instant;
+
 use super::backlog::Backlog;
 use super::transfer::Outgoing;
-use super::{ClientMsg, FULL_UPDATE_GRACE, NOTES_AFTER_ENTERING, client_messages};
+use super::tuning::{FULL_UPDATE_GRACE, NOTES_AFTER_ENTERING};
+use super::{ClientMsg, client_messages};
 use crate::net::bits::BitBuf;
 use crate::net::messages::{self, Signon};
 use crate::net::netchan::Header;
 use crate::net::receiver::{Received, Receiver};
-use std::collections::VecDeque;
-use std::net::SocketAddr;
-use std::time::Instant;
 
 /// Frames remembered as sent to a client, at most: as many as a game client keeps.
 const MAX_FRAMES_SENT: usize = 128;

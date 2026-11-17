@@ -1,12 +1,13 @@
 //! Sending clients their packets.
 
+use std::net::{SocketAddr, UdpSocket};
+use std::time::Instant;
+
 use super::client::Client;
 use crate::net::bits::BitBuf;
 use crate::net::netchan::{self, OutHeader};
 use crate::net::reliable::SUBCHANNELS;
 use crate::net::{compress, split};
-use std::net::{SocketAddr, UdpSocket};
-use std::time::Instant;
 
 /// Whether a client gets a packet that would carry nothing: a keepalive, or an ack of its
 /// reliable data.

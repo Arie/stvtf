@@ -4,13 +4,14 @@
 //!
 //! Auth is the anonymous HASHEDCDKEY path, which `SourceTV` accepts without Steam.
 
-use super::{MAX_DATAGRAM, messages, netchan};
-use anyhow::{Context, Result, anyhow, bail};
 use std::fmt;
-
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, anyhow, bail};
+
+use super::{MAX_DATAGRAM, messages, netchan};
 
 pub const PROTOCOL_VERSION: i32 = 24;
 const AUTH_HASHEDCDKEY: u32 = 2;

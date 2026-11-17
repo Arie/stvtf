@@ -1,9 +1,10 @@
 //! Voice from outside the match (a team's Discord, through stv.tf), sent to the clients in the game
 //! as a player's own: `svc_VoiceData` in their slot, in Steam's framing, as it comes.
 
-use super::player::Player;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+use super::player::Player;
 
 /// The most voice waiting to be sent; past it the oldest goes.
 pub(super) const MAX_QUEUED: usize = 512;
@@ -155,8 +156,9 @@ impl Player<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::upward_until;
     use tf_demo_parser::demo::message::Message;
+
+    use super::super::tests::upward_until;
 
     fn voice_data(dec: &crate::decode::Decoder, msg: &crate::net::bits::BitBuf) -> (u8, Vec<u8>) {
         let state = dec.parser_state_for_tests();

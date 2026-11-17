@@ -1,6 +1,13 @@
 //! A playing relay's clients handed to the process after it: where each connection is and all
 //! they were sent since their signon, so the next relay goes on with a full update and no signon.
 
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::time::Instant;
+
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+
 use super::backlog::Backlog;
 use super::client::{Client, Phase};
 use super::hub::Hub;
@@ -8,11 +15,6 @@ use super::out::Empty;
 use crate::decode::ModelsSent;
 use crate::net::bits::{BitBuf, BitReader};
 use crate::net::messages::{self, Signon};
-use base64::Engine;
-use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::time::Instant;
 
 /// What a client left out of a handover is told, in its console.
 const RESTARTING: &str = "stv.tf: restarting, retry";

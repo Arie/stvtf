@@ -1,6 +1,15 @@
 //! Heals, blast jumps, pickups, the game modes' events and the HUD's messages: game events and
 //! user messages turned into lines.
 
+use std::collections::HashMap;
+
+use bitbuffer::{BitRead, LittleEndian};
+use tf_demo_parser::demo::gameevent_gen::GameEvent;
+use tf_demo_parser::demo::gamevent::{GameEventEntry, GameEventType, GameEventValue, GameEventValueType, RawGameEvent};
+use tf_demo_parser::demo::message::usermessage::UserMessage;
+use tf_demo_parser::demo::parser::analyser::Class;
+use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
+
 use super::extract::{building_kind, opt_user, strip_colors, team_num};
 use super::props::{origin_parts, prop, prop_id, prop_vec};
 use crate::output::{
@@ -11,13 +20,6 @@ use crate::output::{
     Stun, TeamLeaderKilled, Teleported, TimeRemaining, Tournament, Upgrade, VoiceCommand, VoteCast, VoteFailed,
     VoteOptions, VotePassed, VoteStarted, round1, round2,
 };
-use bitbuffer::{BitRead, LittleEndian};
-use std::collections::HashMap;
-use tf_demo_parser::demo::gameevent_gen::GameEvent;
-use tf_demo_parser::demo::gamevent::{GameEventEntry, GameEventType, GameEventValue, GameEventValueType, RawGameEvent};
-use tf_demo_parser::demo::message::usermessage::UserMessage;
-use tf_demo_parser::demo::parser::analyser::Class;
-use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 
 /// The field names of each game event tf-demo-parser has no type for, from the demo's own event
 /// list, as tf-demo-parser keeps them (hashed): their values come in that order.
@@ -495,8 +497,9 @@ fn raw_user_message(kind: u8, data: &mut Stream<'_>, look: &Lookup<'_>) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tf_demo_parser::demo::message::usermessage::VoiceSubtitleMessage;
+
+    use super::*;
 
     /// Runs `f` with lookups that know players by `user` and nobody's class, at tick 3.
     fn with_lookup<R>(

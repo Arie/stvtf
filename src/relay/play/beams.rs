@@ -1,13 +1,15 @@
 //! Kept beams shown again as they run out, and the clients' clock put past them.
 
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
+
 use super::playback::Versioned;
 use super::player::Player;
-use super::{Beam, FLUSH, KEPT_BURST, KEPT_EVERY, KEPT_RATE, NAP, Playback, SET_BACK};
+use super::tuning::{FLUSH, KEPT_BURST, KEPT_EVERY, KEPT_RATE, NAP, SET_BACK};
+use super::{Beam, Playback};
 use crate::decode::BeamModel;
 use crate::net::bits::BitBuf;
 use crate::net::messages;
-use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 /// The kept beams shown: which of them were last handed over, when each was last sent, and
 /// how many may be sent now (refilled at [`KEPT_RATE`]).

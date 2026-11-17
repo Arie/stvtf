@@ -4,12 +4,13 @@
 //! before touching any state, drop stale sequences, parse the reliable region,
 //! then cut the unreliable tail out at the bit where the reliable region ended.
 
+use std::time::Instant;
+
 use super::bits::{BitBuf, BitReader};
 use super::compress;
 use super::netchan::{self, Header, Kind};
 use super::reliable::{self, Reassembler};
 use super::split::SplitReassembler;
-use std::time::Instant;
 
 #[derive(Debug)]
 pub struct MsgStream {

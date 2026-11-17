@@ -1,21 +1,24 @@
 //! The player: playing demos to the clients where playback wants them, jumping when off.
 
-use super::beams::Kept;
-use super::cursor::{Cursor, owned};
-use super::index::Index;
-use super::{
-    CUE_EVERY, Camera, FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, PAST_INDEXES, Playback,
-    RETRY, Want, light, notes, voice,
-};
-use crate::decode::{BeamModel, ModelsSent};
-use crate::lock;
-use crate::relay::handover::{Played, TakenOver};
-use crate::relay::{Handover, Hub, Relay};
-use anyhow::Result;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use anyhow::Result;
+
+use super::beams::Kept;
+use super::cursor::{Cursor, owned};
+use super::index::Index;
+use super::tuning::{
+    CUE_EVERY, FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, PAST_INDEXES, RETRY,
+};
+use super::{Camera, Playback, Want, light, notes, voice};
+use crate::decode::{BeamModel, ModelsSent};
+use crate::relay::handover::{Played, TakenOver};
+use crate::relay::hub::Hub;
+use crate::relay::{Handover, Relay};
+use crate::sync::lock;
 
 pub(super) struct Player<'r> {
     pub(super) relay: &'r Relay,
@@ -494,7 +497,7 @@ impl Player<'_> {
         }
         self.last_target = Some(target);
         if tracing::enabled!(tracing::Level::DEBUG)
-            && self.traced.is_none_or(|t| t.elapsed() >= crate::relay::TRACE_EVERY)
+            && self.traced.is_none_or(|t| t.elapsed() >= crate::relay::tuning::TRACE_EVERY)
         {
             self.traced = Some(Instant::now());
             let tick = self.cur.as_ref().map_or(0, Cursor::tick);

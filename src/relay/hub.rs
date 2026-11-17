@@ -1,22 +1,24 @@
 //! The hub: the clients, the backlog and the datagrams, shared by the upstream and client
 //! threads.
 
+use std::collections::HashMap;
+use std::net::{SocketAddr, UdpSocket};
+use std::time::Instant;
+
 use super::admission::Admission;
 use super::backlog::{Backlog, Delivery};
 use super::client::{Client, Phase};
 use super::out::{Empty, Out};
 use super::server_msg::{is_table_change, set_pause, signon_state, table_changes, vgui_menu};
-use super::{
-    CLIENT_TIMEOUT, KEEPALIVE, KEY_WAIT, MAX_SINCE_FULL, NOTES_AFTER_RESET, RelayConfig, SIGNON_HOLD, SIGNON_TIMEOUT,
-    SPECTATORS, TRACE_EVERY, masked_addr,
+use super::tuning::{
+    CLIENT_TIMEOUT, KEEPALIVE, KEY_WAIT, MAX_SINCE_FULL, NOTES_AFTER_RESET, SIGNON_HOLD, SIGNON_TIMEOUT, SPECTATORS,
+    TRACE_EVERY,
 };
+use super::{RelayConfig, masked_addr};
 use crate::decode::Lifecycle;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::messages::{self, SVC_PACKETENTITIES, SVC_SERVERINFO, Signon};
 use crate::net::netchan;
-use std::collections::HashMap;
-use std::net::{SocketAddr, UdpSocket};
-use std::time::Instant;
 
 /// What a client dropped for a signon it did not finish in time is told, in its console.
 const SLOW_SIGNON: &str = "stv.tf: took too long to load, retry";

@@ -1,17 +1,18 @@
 //! Conversions from parser values to output values.
 
-use super::{COND_BITS, COND_WORDS, RESIST_BLAST, RESIST_BULLET};
-use crate::decode::props::handle_entity;
-use crate::output::{
-    self as out, BuildingKind, ChatColor, ChatKind, ChatPart, Condition, MedigunKind, PlayerId, Position,
-    ProjectileKind, Resist, Round, Ubered, round1,
-};
 use tf_demo_parser::demo::data::game_state::{
     Building, Player, PlayerClassData, PlayerCondition, PlayerState, ProjectileType,
 };
 use tf_demo_parser::demo::message::usermessage::ChatMessageKind;
 use tf_demo_parser::demo::parser::analyser::{Class, Team, UserId};
 use tf_demo_parser::demo::vector::Vector;
+
+use super::limits::{COND_BITS, COND_WORDS, RESIST_BLAST, RESIST_BULLET};
+use crate::decode::props::handle_entity;
+use crate::output::{
+    self as out, BuildingKind, ChatColor, ChatKind, ChatPart, Condition, MedigunKind, PlayerId, Position,
+    ProjectileKind, Resist, Round, Ubered, round1,
+};
 
 /// Condition numbers: 0-31 and the four `Ex` words.
 const COND_NUMBERS: u8 = (COND_BITS * (COND_WORDS - 1)) as u8;

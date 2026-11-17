@@ -1,9 +1,11 @@
 //! The TF2 server builds whose data is compiled in, and the send tables of any build.
 
+use std::path::Path;
+
+use anyhow::anyhow;
+
 use crate::decode::Tables;
 use crate::{Error, ErrorKind};
-use anyhow::anyhow;
-use std::path::Path;
 
 /// The newest TF2 server build compiled in. A build with no data compiled in gets its tables.
 pub const CURRENT: &str = BUILDS[0].0;

@@ -1,16 +1,16 @@
 //! Entry points for the fuzz targets in `fuzz/`, which `cargo fuzz` builds with `cfg(fuzzing)`.
 //! The parsers are private, and in any other build this module does not exist.
 
-use crate::capture;
+use std::borrow::Cow;
+use std::sync::LazyLock;
+use std::time::Instant;
+
 use crate::decode::{Decoder, Tables};
 use crate::net::bits::BitBuf;
 use crate::net::handshake;
 use crate::net::netchan::{self, FLAG_CHALLENGE, FLAG_RELIABLE, Kind};
 use crate::net::receiver::Receiver;
-use crate::relay;
-use std::borrow::Cow;
-use std::sync::LazyLock;
-use std::time::Instant;
+use crate::{capture, relay};
 
 const CHALLENGE: u32 = 7;
 /// In a piece's first byte: the piece goes as it is, not sealed around the rest.

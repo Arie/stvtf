@@ -1,11 +1,12 @@
 //! The messages a client sends: the few the relay acts on, the rest read past.
 
+use anyhow::{Result, bail};
+
 use crate::net::bits::{BitBuf, BitReader};
 use crate::net::messages::{
     CLC_BASELINEACK, CLC_CLIENTINFO, CLC_CMDKEYVALUES, CLC_LISTENEVENTS, CLC_MOVE, CLC_RESPONDCVARVALUE, CLC_VOICEDATA,
     NET_DISCONNECT, NET_FILE, NET_NOP, NET_SETCONVAR, NET_SIGNONSTATE, NET_STRINGCMD, NET_TICK, Signon, TYPE_BITS,
 };
-use anyhow::{Result, bail};
 
 /// Longest string read from a client message.
 const MAX_STRING: usize = 4096;

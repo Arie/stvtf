@@ -11,14 +11,16 @@
 //! acked them) has entities enter on them, which a client started from a full update lacks: none of
 //! its entity messages are for a client then, each is written anew (see [`World::own_baselines`]).
 
-use crate::net::bits::{BitBuf, BitWriter};
-use crate::net::messages::{self, SVC_PACKETENTITIES};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
+
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::message::packetentities::{BaselineIndex, PacketEntitiesMessage, PacketEntity, UpdateType};
 use tf_demo_parser::demo::packet::datatable::ClassId;
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
+
+use crate::net::bits::{BitBuf, BitWriter};
+use crate::net::messages::{self, SVC_PACKETENTITIES};
 
 /// Ticks of frames kept for a delta to a client to build on: 3 s of a 66.67-tick server's, more
 /// than a client's ack takes to come.
@@ -352,7 +354,7 @@ impl World {
             base_line: BaselineIndex::First,
             updated_base_line: false,
         };
-        super::encode_message(SVC_PACKETENTITIES, &msg, state)
+        super::decoder::encode_message(SVC_PACKETENTITIES, &msg, state)
     }
 
     /// By entity index, the props that changed from one kept frame to the next between `from` and
@@ -540,7 +542,7 @@ fn packet_entity(
 fn encode(state: &ParserState, msg: &PacketEntitiesMessage, tick: u32) -> Option<BitBuf> {
     let mut w = BitWriter::new();
     w.write_buf(&messages::tick(tick as i32));
-    w.write_buf(&super::encode_message(SVC_PACKETENTITIES, msg, state)?);
+    w.write_buf(&super::decoder::encode_message(SVC_PACKETENTITIES, msg, state)?);
     Some(w.finish())
 }
 

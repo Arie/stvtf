@@ -1,14 +1,8 @@
-//! Turns parser state into the lines the overview consumes: periodic snapshots
-//! plus discrete events (kills, damage, shots, explosions, ubers, rounds, chat...).
+//! The extractor: the game's messages and entities, as the lines of the match.
 
-use super::detail;
-use super::modes::Modes;
-use super::props::RED_SLOT;
-use crate::DEFAULT_TICK_INTERVAL;
-use crate::output::{self as out, BuildingKind, Line, MedigunKind, PlayerId, Position, ProjectileKind, Round};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::LazyLock;
+
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::data::game_state::{GameState, Player, PlayerState, Projectile};
@@ -22,74 +16,34 @@ use tf_demo_parser::demo::parser::MessageHandler;
 use tf_demo_parser::demo::parser::analyser::Class;
 use tf_demo_parser::demo::parser::gamestateanalyser::GameStateAnalyser;
 use tf_demo_parser::demo::parser::handler::BorrowMessageHandler;
-use tf_demo_parser::demo::sendprop::SendPropIdentifier;
 use tf_demo_parser::demo::vector::Vector;
 
-mod convert;
-mod entities;
-mod events;
-mod snapshot;
-mod state;
-mod stopwatch;
-#[cfg(test)]
-mod tests;
-mod voice;
-
-pub(super) use convert::{building_kind, opt_user, strip_colors, team_num, xyz};
-use convert::{medigun_kind, player_id, projectile_kind, resist, uber_charge};
-use state::{
+use super::super::detail;
+use super::super::modes::Modes;
+use super::super::props::RED_SLOT;
+use super::convert::{medigun_kind, player_id, projectile_kind, resist, uber_charge};
+pub(super) use super::convert::{team_num, xyz};
+use super::debug;
+use super::limits::{
+    COND_WORDS, FLAMETHROWER_FIRING, FLAMETHROWER_STARTING, FULL_CHARGE, MY_WEAPON_SLOTS, SECONDS_PER_MINUTE,
+};
+use super::state::{
     Charge, ControlPoint, Flag, Flamethrower, Medigun, Pose, RoundTimer, Sentry, Stats, StopwatchRules, TeamScore,
     TrainWatcher, Weapon,
 };
-
-/// `CTFObjectiveResource` has room for this many control points, and its per team arrays for
-/// this many teams: element `team * MAX_CONTROL_POINTS + point` (`TEAM_ARRAY`).
-const MAX_CONTROL_POINTS: usize = 8;
-const MAX_TEAMS: usize = 4;
-/// A player's condition words: `m_nPlayerCond` and `_condition_bits` (both conditions 0-31),
-/// then `m_nPlayerCondEx..Ex4`, 32 conditions each.
-const COND_WORDS: usize = 6;
-const COND_BITS: usize = 32;
-/// A medigun's charge when full, in percent.
-const FULL_CHARGE: u8 = 100;
-const SECONDS_PER_MINUTE: f32 = 60.0;
-
-/// `STVTF_DEBUG`, read once: a server class, temp entity class, `ent:N`, `gameevents`,
-/// `convars` or `errors`.
-static DEBUG: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("STVTF_DEBUG").ok());
-
-/// Whether `STVTF_DEBUG` asks for this topic.
-pub(crate) fn debug(topic: &str) -> bool {
-    DEBUG.as_deref() == Some(topic)
-}
-
-/// The entity `STVTF_DEBUG=ent:N` asks to trace.
-fn debug_entity() -> Option<u32> {
-    DEBUG.as_deref()?.strip_prefix("ent:")?.parse().ok()
-}
-
-/// `m_hMyWeapons` has `MAX_WEAPONS` slots.
-const MY_WEAPON_SLOTS: usize = 48;
-static PROP_MY_WEAPONS: LazyLock<[SendPropIdentifier; MY_WEAPON_SLOTS]> =
-    LazyLock::new(|| std::array::from_fn(|i| SendPropIdentifier::new("m_hMyWeapons", &format!("{i:03}"))));
-/// `m_iWeaponState`: idle, starting to fire, firing, airblast.
-const FLAMETHROWER_STARTING: i64 = 1;
-const FLAMETHROWER_FIRING: i64 = 2;
-const FLAMETHROWER_AIRBLAST: i64 = 3;
-/// `m_nChargeResistType`: bullet, blast, fire.
-const RESIST_BULLET: i64 = 0;
-const RESIST_BLAST: i64 = 1;
+use crate::DEFAULT_TICK_INTERVAL;
+use crate::output::{self as out, BuildingKind, Line, MedigunKind, PlayerId, Position, ProjectileKind, Round};
 
 /// The per-entity maps, declared once so that forgetting an entity forgets it in each of them.
 macro_rules! per_entity {
     ($($(#[$doc:meta])* $field:ident: $map:ty,)*) => {
         #[derive(Default)]
-        struct Entities {
-            $($(#[$doc])* $field: $map,)*
+        pub(super) struct Entities {
+            $($(#[$doc])* pub(super) $field: $map,)*
         }
 
         impl Entities {
-            fn forget(&mut self, idx: u32) {
+            pub(super) fn forget(&mut self, idx: u32) {
                 $(self.$field.remove(&idx);)*
             }
         }
@@ -126,59 +80,59 @@ per_entity! {
 
 #[derive(Default)]
 pub(crate) struct Extractor {
-    gs: GameStateAnalyser,
+    pub(super) gs: GameStateAnalyser,
     /// Latest server tick seen in a `net_Tick`.
     pub(crate) server_tick: u32,
-    events: RefCell<Vec<Line>>,
-    world_sent: Cell<bool>,
+    pub(super) events: RefCell<Vec<Line>>,
+    pub(super) world_sent: Cell<bool>,
     /// A delta came from a frame never seen: the entities may be missing what it held.
-    lost_frame: Cell<bool>,
-    control_points: Vec<ControlPoint>,
-    num_control_points: usize,
+    pub(super) lost_frame: Cell<bool>,
+    pub(super) control_points: Vec<ControlPoint>,
+    pub(super) num_control_points: usize,
     /// Per server class id: whether its send table has an item definition index.
-    weapon_classes: Vec<Option<bool>>,
-    class_names: Vec<String>,
+    pub(super) weapon_classes: Vec<Option<bool>>,
+    pub(super) class_names: Vec<String>,
     /// Seconds per tick from `ServerInfo`.
-    tick_interval: Option<f32>,
+    pub(super) tick_interval: Option<f32>,
     /// The server's player slots, once it said.
-    max_players: u8,
+    pub(super) max_players: u8,
     /// King of the hill: each team's own timer, which runs while that team holds the point.
-    koth_timers: [Option<u32>; 2],
-    stopwatch: StopwatchRules,
-    round_state: Round,
+    pub(super) koth_timers: [Option<u32>; 2],
+    pub(super) stopwatch: StopwatchRules,
+    pub(super) round_state: Round,
     /// Server time the match started (`m_flMapResetTime`) and the current round went live.
-    match_start: f32,
-    round_live_since: Option<f32>,
+    pub(super) match_start: f32,
+    pub(super) round_live_since: Option<f32>,
     /// When the live round ended (win, stalemate): its time stops there.
-    round_ended_at: Option<f32>,
-    state_transition: f32,
+    pub(super) round_ended_at: Option<f32>,
+    pub(super) state_transition: f32,
     /// `mp_timelimit` (minutes) and `mp_winlimit`, replicated to clients as convars.
-    time_limit: Option<f32>,
-    win_limit: Option<i64>,
+    pub(super) time_limit: Option<f32>,
+    pub(super) win_limit: Option<i64>,
     /// `player_spawn` arrives before the player's new position: held until the next entity update.
-    pending_spawns: Vec<(u16, out::Spawn)>,
+    pub(super) pending_spawns: Vec<(u16, out::Spawn)>,
     /// The entities in each recent frame, by server tick, to find the ones a delta drops silently.
-    frames: VecDeque<(u32, HashSet<u32>)>,
+    pub(super) frames: VecDeque<(u32, HashSet<u32>)>,
     /// Players who disconnected: the server keeps their slot, and so their entity and info, for
     /// a while after. A user id is not reused while the server runs.
-    left: HashSet<u16>,
+    pub(super) left: HashSet<u16>,
     /// Whether the game is paused, as last told.
-    paused: bool,
+    pub(super) paused: bool,
     /// Scoreboard lines from the player resource, by player entity.
-    stats: HashMap<u32, Stats>,
+    pub(super) stats: HashMap<u32, Stats>,
     /// Engineers carrying a building: player entity -> the building's entity.
-    carried: HashMap<u32, u32>,
+    pub(super) carried: HashMap<u32, u32>,
     /// What each building entity is: a carried building is not sent while it is carried.
-    building_kinds: HashMap<u32, BuildingKind>,
+    pub(super) building_kinds: HashMap<u32, BuildingKind>,
     /// What is known about each entity, forgotten together when it goes.
-    ents: Entities,
+    pub(super) ents: Entities,
     /// Pass time, robot and player destruction, Mann vs. Machine.
-    modes: Modes,
-    raw_names: detail::RawNames,
+    pub(super) modes: Modes,
+    pub(super) raw_names: detail::RawNames,
 }
 
 impl Extractor {
-    fn state(&self) -> &GameState {
+    pub(super) fn state(&self) -> &GameState {
         &self.gs.state
     }
 
@@ -187,13 +141,13 @@ impl Extractor {
         self.tick_interval.unwrap_or(DEFAULT_TICK_INTERVAL)
     }
 
-    fn projectile_kind(&self, pr: &Projectile) -> ProjectileKind {
+    pub(super) fn projectile_kind(&self, pr: &Projectile) -> ProjectileKind {
         projectile_kind(pr.ty, self.class_names.get(usize::from(pr.class)).map_or("", String::as_str))
     }
 
     /// While running, the last state transition is when the round went live; a win or
     /// stalemate stops its clock and the next pre-round clears it.
-    fn track_round_time(&mut self) {
+    pub(super) fn track_round_time(&mut self) {
         let now = self.server_time();
         match self.round_state {
             Round::Running => (self.round_live_since, self.round_ended_at) = (Some(self.state_transition), None),
@@ -204,24 +158,24 @@ impl Extractor {
     }
 
     /// Seconds left of `mp_timelimit`, which counts from the start of the match.
-    fn time_left(&self) -> Option<f32> {
+    pub(super) fn time_left(&self) -> Option<f32> {
         let limit = self.time_limit?;
         (self.match_start > 0.0)
             .then(|| (limit * SECONDS_PER_MINUTE - (self.server_time() - self.match_start)).max(0.0))
     }
 
     /// Server time at the latest tick, in seconds: what the game's own times count in.
-    fn server_time(&self) -> f32 {
+    pub(super) fn server_time(&self) -> f32 {
         self.server_tick as f32 * self.interval()
     }
 
-    fn round_time(&self) -> Option<f32> {
+    pub(super) fn round_time(&self) -> Option<f32> {
         let now = self.server_time();
         self.round_live_since.map(|t| (self.round_ended_at.unwrap_or(now) - t).max(0.0))
     }
 
     /// `uber_ready` when a medic's charge fills up, `uber_ended` when a released charge runs out.
-    fn medic_changes(&mut self) {
+    pub(super) fn medic_changes(&mut self) {
         let mut events = Vec::new();
         for p in &self.gs.state.players {
             let ent = u32::from(p.entity);
@@ -251,37 +205,37 @@ impl Extractor {
 
     /// The entities `track_frame` drops when a frame leaves them out: projectiles, buildings,
     /// flags (player destruction's pickups) and the game modes' entities.
-    fn tracked(&self) -> impl Iterator<Item = u32> + '_ {
+    pub(super) fn tracked(&self) -> impl Iterator<Item = u32> + '_ {
         let state = &self.gs.state;
         (state.projectiles.keys().chain(state.buildings.keys()).map(|id| u32::from(*id)))
             .chain(self.ents.flags.keys().copied())
             .chain(self.modes.ids())
     }
 
-    fn forget_entity(&mut self, idx: u32) {
+    pub(super) fn forget_entity(&mut self, idx: u32) {
         self.ents.forget(idx);
         self.modes.forget(idx);
     }
 
-    fn player_by_user(&self, user_id: u16) -> Option<&Player> {
+    pub(super) fn player_by_user(&self, user_id: u16) -> Option<&Player> {
         self.state().players.iter().find(|p| p.info.as_ref().is_some_and(|i| u16::from(i.user_id) == user_id))
     }
 
-    fn player_by_entity(&self, ent: u32) -> Option<&Player> {
+    pub(super) fn player_by_entity(&self, ent: u32) -> Option<&Player> {
         self.state().players.iter().find(|p| u32::from(p.entity) == ent)
     }
 
-    fn entity_of_user(&self, user_id: u16) -> Option<u32> {
+    pub(super) fn entity_of_user(&self, user_id: u16) -> Option<u32> {
         self.player_by_user(user_id).map(|p| u32::from(p.entity))
     }
 
-    fn medigun_owned_by(&self, player_ent: u32) -> Option<&Medigun> {
+    pub(super) fn medigun_owned_by(&self, player_ent: u32) -> Option<&Medigun> {
         let held = self.ents.my_weapons.get(&player_ent)?;
         held.iter().flatten().find_map(|w| self.ents.mediguns.get(w).filter(|m| m.owner == Some(player_ent)))
     }
 
     /// The team of a round timer: on king of the hill each team has its own.
-    fn timer_team(&self, idx: u32) -> out::Team {
+    pub(super) fn timer_team(&self, idx: u32) -> out::Team {
         match self.koth_timers.iter().position(|k| *k == Some(idx)) {
             Some(RED_SLOT) => out::Team::Red,
             Some(_) => out::Team::Blue,
@@ -290,7 +244,7 @@ impl Extractor {
     }
 
     /// Runs `f` with what the detail lines look up in the extractor.
-    fn with_lookup<R>(&self, f: impl FnOnce(&detail::Lookup<'_>) -> R) -> R {
+    pub(super) fn with_lookup<R>(&self, f: impl FnOnce(&detail::Lookup<'_>) -> R) -> R {
         let user_of_entity = |ent: u32| self.user_of_entity(ent);
         let class_of_user = |id: u16| self.player_by_user(id).map(|p| p.class);
         f(&detail::Lookup {
@@ -302,7 +256,7 @@ impl Extractor {
     }
 
     /// The control point at `index`, made when not seen yet; its progress rolled forward to now.
-    fn control_point_mut(&mut self, index: usize) -> &mut ControlPoint {
+    pub(super) fn control_point_mut(&mut self, index: usize) -> &mut ControlPoint {
         if self.control_points.len() <= index {
             self.control_points.resize(index + 1, ControlPoint::default());
         }
@@ -312,12 +266,12 @@ impl Extractor {
         cp
     }
 
-    fn weapon_of(&self, player_ent: u32) -> Option<out::Weapon> {
+    pub(super) fn weapon_of(&self, player_ent: u32) -> Option<out::Weapon> {
         let w = self.ents.weapons.get(self.ents.active_weapons.get(&player_ent)?)?;
         Some(out::Weapon { item: w.item, clip: (w.clip >= 0).then_some(w.clip) })
     }
 
-    fn medigun_of(&self, player_ent: u32) -> Option<out::Medigun> {
+    pub(super) fn medigun_of(&self, player_ent: u32) -> Option<out::Medigun> {
         let m = self.medigun_owned_by(player_ent)?;
         let kind = medigun_kind(m.item);
         Some(out::Medigun {
@@ -329,7 +283,7 @@ impl Extractor {
     }
 
     /// A pyro's flamethrower while it is firing.
-    fn flames_of(&self, player_ent: u32) -> Option<out::Flames> {
+    pub(super) fn flames_of(&self, player_ent: u32) -> Option<out::Flames> {
         let f =
             self.ents.flamethrowers.values().find(|f| {
                 f.owner == Some(player_ent) && matches!(f.state, FLAMETHROWER_STARTING | FLAMETHROWER_FIRING)
@@ -338,12 +292,12 @@ impl Extractor {
     }
 
     /// Queues an event.
-    fn push(&self, line: Line) {
+    pub(super) fn push(&self, line: Line) {
         self.events.borrow_mut().push(line);
     }
 
     /// The game paused or went on: a line when that changed.
-    fn set_pause(&mut self, p: &tf_demo_parser::demo::message::generated::SetPauseMessage) {
+    pub(super) fn set_pause(&mut self, p: &tf_demo_parser::demo::message::generated::SetPauseMessage) {
         if p.pause != self.paused {
             self.paused = p.pause;
             self.push(Line::Pause(out::Pause { tick: self.server_tick, paused: p.pause }));
@@ -354,11 +308,11 @@ impl Extractor {
     /// talking: the `SteamID` in the packet comes from the speaker's own client), else the one
     /// with that `SteamID`, and their own `SteamID`; and its Opus frames in base64. One without a
     /// sample rate or of another codec is passed over.
-    fn voice(&self, v: &tf_demo_parser::demo::message::voice::VoiceDataMessage<'_>) {
+    pub(super) fn voice(&self, v: &tf_demo_parser::demo::message::voice::VoiceDataMessage<'_>) {
         use base64::Engine;
         let mut s = v.data.clone();
         let bytes: Vec<u8> = (0..usize::from(v.length) / 8).map_while(|_| s.read_int::<u8>(8).ok()).collect();
-        let Some(voice) = voice::steam_voice(&bytes).filter(|v| v.rate > 0) else { return };
+        let Some(voice) = super::voice::steam_voice(&bytes).filter(|v| v.rate > 0) else { return };
         let claimed = format!("[U:1:{}]", voice.steamid & 0xFFFF_FFFF);
         let here = |i: &&tf_demo_parser::demo::parser::analyser::UserInfo| !self.left.contains(&u16::from(i.user_id));
         let info =
@@ -389,15 +343,15 @@ impl Extractor {
         self.lost_frame.take()
     }
 
-    fn user_pos(&self, user_id: u16) -> Option<Position> {
+    pub(super) fn user_pos(&self, user_id: u16) -> Option<Position> {
         self.player_by_user(user_id).map(|p| xyz(p.position))
     }
 
-    fn user_of_entity(&self, ent: u32) -> Option<PlayerId> {
+    pub(super) fn user_of_entity(&self, ent: u32) -> Option<PlayerId> {
         self.player_by_entity(ent).and_then(player_id)
     }
 
-    fn convars(&mut self, c: &SetConVarMessage) {
+    pub(super) fn convars(&mut self, c: &SetConVarMessage) {
         let dbg = debug("convars");
         for v in &c.vars {
             if dbg {
@@ -412,7 +366,7 @@ impl Extractor {
         }
     }
 
-    fn server_info(&mut self, info: &ServerInfoMessage) {
+    pub(super) fn server_info(&mut self, info: &ServerInfoMessage) {
         if info.interval_per_tick > 0.0 {
             self.tick_interval = Some(info.interval_per_tick);
         }
@@ -430,8 +384,8 @@ impl Extractor {
 }
 
 #[cfg(test)]
-pub(super) fn steam_voice_parts(data: &[u8]) -> Option<(u64, u16, Vec<Vec<u8>>)> {
-    voice::steam_voice(data).map(|v| (v.steamid, v.rate, v.frames))
+pub(in crate::decode) fn steam_voice_parts(data: &[u8]) -> Option<(u64, u16, Vec<Vec<u8>>)> {
+    super::voice::steam_voice(data).map(|v| (v.steamid, v.rate, v.frames))
 }
 
 impl MessageHandler for Extractor {

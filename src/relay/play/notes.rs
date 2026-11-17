@@ -2,12 +2,14 @@
 //! player, shown until hidden. A full update drops them, so the hub sends them again after every
 //! one; a note gone from the room is hidden.
 
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+
 use super::playback::Versioned;
 use super::player::Player;
 use crate::decode::Decoder;
 use crate::net::bits::BitBuf;
-use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 
 /// A note the clients in the game keep seeing, until replaced.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,10 +92,11 @@ impl Player<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::upward_until;
-    use super::*;
     use tf_demo_parser::demo::gameevent_gen::GameEvent;
     use tf_demo_parser::demo::message::Message;
+
+    use super::super::tests::upward_until;
+    use super::*;
 
     fn event(dec: &Decoder, msg: &BitBuf) -> GameEvent {
         let state = dec.parser_state_for_tests();

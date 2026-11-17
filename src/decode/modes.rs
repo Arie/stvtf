@@ -2,15 +2,17 @@
 //! robots and cores, the robot and player destruction logics' points, and Mann vs. Machine's tank
 //! and wave.
 
+use std::collections::BTreeMap;
+
+use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
+use tf_demo_parser::demo::vector::Vector;
+
 use super::extract::{team_num, xyz};
 use super::props::{
     BLUE_SLOT, EF_NODRAW, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, RED_SLOT, as_float, as_int, opt_handle, prop_id,
     saturating_u16, team_byte,
 };
 use crate::output::{Mvm, MvmClass, Objective, PlayerId, Points, round3};
-use std::collections::BTreeMap;
-use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
-use tf_demo_parser::demo::vector::Vector;
 
 const PROP_BALL_CARRIER: SendPropIdentifier = prop_id("DT_PasstimeBall", "m_hCarrier");
 const PROP_ROBOT_HEALTH: SendPropIdentifier = prop_id("DT_TFRobotDestruction_Robot", "m_iHealth");

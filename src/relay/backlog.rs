@@ -1,11 +1,12 @@
 //! The backlog: the reliable messages each client is given in order from its signon on, the
 //! server's signon and the string table changes since.
 
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+
 use super::client::{Client, Phase};
 use crate::net::bits::BitBuf;
 use crate::net::messages::Signon;
-use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 
 /// A reliable message a client signing on needs, and the signon state it waits for after it.
 pub(super) struct Entry {

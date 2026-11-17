@@ -1,8 +1,9 @@
 //! `-3 SNAP` datagrams are raw Snappy; compressed reliable transfers are
 //! Snappy or Valve LZSS depending on their magic.
 
-use super::netchan::{MARKER_COMPRESSED, SEQUENCE_LEN};
 use anyhow::{Result, bail};
+
+use super::netchan::{MARKER_COMPRESSED, SEQUENCE_LEN};
 
 const MAX_OUTPUT: usize = 1 << 22;
 /// A compressed block starts with its kind; LZSS's then has the uncompressed size (u32).

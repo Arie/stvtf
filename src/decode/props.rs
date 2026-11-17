@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn every_prop_identifier_names_a_known_prop() {
         let sources = [
-            include_str!("extract.rs"),
+            include_str!("extract/mod.rs"),
             include_str!("extract/convert.rs"),
             include_str!("extract/entities.rs"),
             include_str!("extract/events.rs"),

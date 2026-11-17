@@ -4,8 +4,9 @@
 //! | [u8 choked if CHOKED] | [u32 challenge if CHALLENGE]. The checksum covers
 //! everything after itself.
 
-use super::bits::{BitBuf, BitWriter};
 use anyhow::{Result, bail};
+
+use super::bits::{BitBuf, BitWriter};
 
 pub const FLAG_RELIABLE: u8 = 0x01;
 pub const FLAG_CHOKED: u8 = 0x10;

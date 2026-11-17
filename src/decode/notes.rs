@@ -1,8 +1,9 @@
 //! TF2's text bubble (the training annotation), for a room's notes.
 
+use tf_demo_parser::demo::gameevent_gen::{GameEvent, HideAnnotationEvent, ShowAnnotationEvent};
+
 use super::Decoder;
 use crate::net::bits::BitBuf;
-use tf_demo_parser::demo::gameevent_gen::{GameEvent, HideAnnotationEvent, ShowAnnotationEvent};
 
 /// A lifetime under 0: shown until hidden.
 const FOR_GOOD: f32 = -1.0;

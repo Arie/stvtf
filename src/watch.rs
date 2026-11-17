@@ -1,17 +1,19 @@
 //! Watching one `SourceTV` server: connect, follow the match, reconnect with backoff.
 
+use std::fmt;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, anyhow};
+
 use crate::capture::Recorder;
 use crate::decode::Tables;
 use crate::net::handshake::{self, GamePort, Rejected, Stopped, Wait};
 use crate::output::{Line, Status};
 use crate::relay::{Relay, RelayConfig};
 use crate::session::{self, DEFAULT_SNAPSHOT_HZ, End, Fatal, Options};
-use anyhow::{Context, Result, anyhow};
-use std::fmt;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);

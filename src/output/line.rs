@@ -1,37 +1,11 @@
-//! What stvtf produces: one [`Line`] per event, snapshot or status change.
-//!
-//! Each type serializes to the JSON the README's Output section describes (one object per line,
-//! tagged by `type`), and reads back from it, so saved output can be loaded into the same types.
+//! A line of output: one event or snapshot, and when it came.
 
 use serde::{Deserialize, Serialize};
 
-/// A position in Hammer units, rounded to a tenth.
-pub type Position = [f64; 3];
-
-/// To a tenth: positions, angles, seconds.
-pub fn round1(f: impl Into<f64>) -> f64 {
-    (f.into() * 10.0).round() / 10.0
-}
-
-/// To a hundredth: progress, screen positions.
-pub fn round2(f: impl Into<f64>) -> f64 {
-    (f.into() * 100.0).round() / 100.0
-}
-
-/// To a thousandth: rates, fractions.
-pub fn round3(f: impl Into<f64>) -> f64 {
-    (f.into() * 1000.0).round() / 1000.0
-}
-
-mod events;
-mod kinds;
-mod snapshot;
-#[cfg(test)]
-mod tests;
-
-pub use events::*;
-pub use kinds::*;
-pub use snapshot::*;
+pub use super::events::*;
+pub use super::kinds::*;
+pub use super::snapshot::*;
+use super::{Server, Status, World};
 
 /// The `Line` enum and its `tick()`: every line but a status carries the tick it happened at, so
 /// listing a variant once gives both.
@@ -244,88 +218,4 @@ pub struct Stamped {
     /// Receive time in Unix milliseconds; none offline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<u64>,
-}
-
-/// The connection's state (`type: status`, tagged by `state`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum Status {
-    /// Connecting to `server`, as a client of `build`.
-    Connecting {
-        /// The address connected to.
-        server: String,
-        /// The build offered to the server.
-        build: String,
-    },
-    /// Signon progress.
-    New,
-    /// Signon progress.
-    Prespawn,
-    /// Signon progress.
-    Spawn,
-    /// Data is flowing.
-    Full {
-        /// The map, once the server has said.
-        map: Option<String>,
-    },
-    /// The server announced a map change.
-    Changelevel,
-    /// Signon restarts for a new map: reset the view.
-    MapChange,
-    /// The session ended.
-    Disconnected {
-        /// Why.
-        reason: String,
-        /// Messages that could not be decoded.
-        decode_errors: u64,
-        /// Packets received.
-        packets: u64,
-        /// Packets lost.
-        lost: u64,
-    },
-    /// A host is fetching a recording to play: this much of it is there, where it knows.
-    Fetching {
-        /// Of a hundred.
-        percent: Option<u8>,
-    },
-    /// A host is decoding a recording it fetched.
-    Decoding,
-    /// A connection attempt failed; another follows.
-    ConnectFailed {
-        /// Why.
-        reason: String,
-    },
-    /// Watching ended for good. [`crate::watch::watch`] returns an error instead; a host that
-    /// reports that error to its own readers sends this.
-    GaveUp {
-        /// Why.
-        reason: String,
-    },
-    /// The relay is up: clients can watch through `listen` (see [`crate::relay`]).
-    Relay {
-        /// The address it listens on.
-        listen: String,
-    },
-}
-
-/// The server, at every signon.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[expect(missing_docs, reason = "the server's own values")]
-pub struct Server {
-    pub tick: u32,
-    pub map: String,
-    pub hostname: String,
-    /// Seconds per tick.
-    pub tick_interval: f64,
-    pub max_players: u8,
-    pub spawn_count: u32,
-}
-
-/// The world's bounds, once per map. They include the 3D skybox.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[expect(missing_docs, reason = "self-explanatory")]
-pub struct World {
-    pub tick: u32,
-    pub min: Position,
-    pub max: Position,
 }

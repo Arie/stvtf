@@ -3,9 +3,10 @@
 //! Header (12 bytes, LE): i32 -2 | i32 group id | u8 part count | u8 part number | u16 split size.
 //! The joined payload is a complete datagram again (usually `-3 SNAP`).
 
-use super::netchan::MARKER_SPLIT;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+use super::netchan::MARKER_SPLIT;
 
 /// After the split marker: i32 group, u8 parts, u8 this part's number, u16 part size.
 const GROUP_AT: usize = 4;

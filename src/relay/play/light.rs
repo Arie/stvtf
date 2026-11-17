@@ -2,9 +2,11 @@
 //! (and so to those who join), put out when the room has none. The clients have one such light:
 //! each sent takes the last one's place.
 
-use super::player::Player;
-use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+
+use super::player::Player;
 
 /// A light the clients in the game keep seeing, until replaced.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -65,12 +67,13 @@ impl Player<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::upward_until;
-    use crate::decode::lights::TABLE;
-    use crate::net::messages::{SVC_TEMPENTITIES, TYPE_BITS};
     use tf_demo_parser::demo::message::Message;
     use tf_demo_parser::demo::sendprop::{SendPropIdentifier, SendPropValue};
     use tf_demo_parser::demo::vector::Vector;
+
+    use super::super::tests::upward_until;
+    use crate::decode::lights::TABLE;
+    use crate::net::messages::{SVC_TEMPENTITIES, TYPE_BITS};
 
     #[test]
     fn a_light_reads_back_as_the_games_own_and_put_out_is_the_smallest_gone_at_once() {

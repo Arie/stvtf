@@ -1,12 +1,13 @@
 //! Frames played to the clients in the game, as they are where a game client can follow them.
 
+use std::time::Instant;
+
 use super::Camera;
 use super::cursor::{for_watchers, with_entities, without_cues, without_entities};
 use super::player::Player;
 use crate::decode::{Decoder, Entities};
 use crate::net::bits::BitBuf;
 use crate::relay::hub::{Part, Played};
-use std::time::Instant;
 
 impl Player<'_> {
     /// Plays the next frame to the clients (without the demo's camera cues when the room has its

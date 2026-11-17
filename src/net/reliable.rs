@@ -10,9 +10,10 @@
 //! ubit(26) nbytes
 //!     `num_fragments` * 256 bytes (the last fragment trimmed)
 
+use anyhow::{Result, bail};
+
 use super::bits::BitReader;
 use super::compress;
-use anyhow::{Result, bail};
 
 /// The netchannel's reliable subchannels, numbered in 3 bits.
 pub const SUBCHANNEL_BITS: usize = 3;

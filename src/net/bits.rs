@@ -1,7 +1,8 @@
 //! LSB-first bit reader and writer, matching Valve's `bf_read` / `bf_write`.
 
-use anyhow::{Result, bail};
 use std::ops::Range;
+
+use anyhow::{Result, bail};
 
 /// A bit stream packed from bit 0: `bytes` holds exactly `nbits` bits, the last byte
 /// possibly partial. Only `BitWriter`, `from_bytes` and `read_remaining` build one,

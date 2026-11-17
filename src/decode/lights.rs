@@ -2,12 +2,13 @@
 //! a room's spotlight, seen in TF2. A client has room for one such light: the next takes its
 //! place.
 
-use super::Decoder;
-use crate::net::bits::BitBuf;
-use crate::net::messages::SVC_TEMPENTITIES;
 use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage};
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
+
+use super::Decoder;
+use crate::net::bits::BitBuf;
+use crate::net::messages::SVC_TEMPENTITIES;
 
 pub(crate) const TABLE: &str = "DT_TEDynamicLight";
 /// The smallest a light is, and the longest it lasts, as the game sends them.
@@ -41,7 +42,7 @@ impl Decoder {
         }
         props.sort_by_key(|p| p.index);
         let event = EventInfo { class_id: u16::try_from(class).ok()?.into(), fire_delay: 0.0, reliable: false, props };
-        super::encode_message(SVC_TEMPENTITIES, &TempEntitiesMessage { events: vec![event] }, state)
+        super::decoder::encode_message(SVC_TEMPENTITIES, &TempEntitiesMessage { events: vec![event] }, state)
     }
 
     /// The light put out: the smallest, gone at once, in its place.
