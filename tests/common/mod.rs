@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::process::Command;
 use std::time::{Duration, Instant};
+
 use stvtf::decode::Tables;
 use stvtf::output::{PlayerId, Position, Status};
 use stvtf::{Line, Options, capture};

@@ -3,13 +3,14 @@
 
 mod common;
 
-use common::{LIMIT, OOB, challenge, fixture, gunzipped, stvtf};
-use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
+
+use common::{LIMIT, OOB, challenge, fixture, gunzipped, stvtf};
+use serde_json::Value;
 
 fn run(args: &[&str]) -> Output {
     stvtf().args(args).output().unwrap()

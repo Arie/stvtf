@@ -63,8 +63,9 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use demo::{CMD_INFO, DATA_TABLES, MAGIC, SIGNON, STRING_TABLES, SYNC_TICK};
+
+    use super::*;
 
     fn packet(out: &mut Vec<u8>, cmd: u8, tick: i32) {
         out.push(cmd);

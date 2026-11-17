@@ -5,8 +5,9 @@
 
 mod common;
 
-use common::of;
 use std::sync::LazyLock;
+
+use common::of;
 use stvtf::Line;
 use stvtf::output::{FlagAction, FlagStatus, Objective, PlayerId, Position, Round, Snapshot, Team};
 

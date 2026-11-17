@@ -16,10 +16,11 @@
 #[path = "common/demo.rs"]
 mod demo;
 
-use anyhow::{Context, Result, bail, ensure};
-use demo::{DATA_TABLES, DURATION, FRAMES, HEADER, TICKS, packets};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use anyhow::{Context, Result, bail, ensure};
+use demo::{DATA_TABLES, DURATION, FRAMES, HEADER, TICKS, packets};
 use stvtf::decode::Tables;
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");

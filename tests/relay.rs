@@ -3,15 +3,15 @@
 
 mod common;
 
-use common::{A2S_INFO, LIMIT, OOB, fixture, has_players, offered_build, tables, wait_for};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use stvtf::capture;
+
+use common::{A2S_INFO, LIMIT, OOB, fixture, has_players, offered_build, tables, wait_for};
 use stvtf::output::Status;
 use stvtf::relay::{Relay, RelayConfig};
 use stvtf::watch::{self, Watch, WatchError};
-use stvtf::{Fatal, Line, Options};
+use stvtf::{Fatal, Line, Options, capture};
 
 /// Everything but the connection statuses, which differ (connecting, the reason for leaving).
 fn data(lines: &[Line]) -> Vec<&Line> {

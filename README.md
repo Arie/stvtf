@@ -467,7 +467,7 @@ Install Rust with [rustup](https://rustup.rs); `rust-toolchain.toml` picks stabl
 `rustfmt` and `clippy`; older Rust versions aren't supported. CI (`.github/workflows/ci.yml`) runs:
 
 ```
-cargo fmt --all --check                           # format (settings in rustfmt.toml)
+cargo +nightly fmt --all --check                  # format (settings in rustfmt.toml; nightly for import grouping)
 cargo clippy --all-targets -- -D warnings         # lint (lint set in Cargo.toml [lints])
 cargo test                                        # tests
 RUSTDOCFLAGS='-D warnings' cargo doc --no-deps    # the library's docs build

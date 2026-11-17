@@ -15,8 +15,6 @@
 
 mod common;
 
-use common::{A2S_INFO, has_players, offered_build, stvtf};
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -25,6 +23,9 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use common::{A2S_INFO, has_players, offered_build, stvtf};
+use serde_json::Value;
 use stvtf::Line;
 use stvtf::output::{Stamped, Status};
 

@@ -3,8 +3,9 @@
 
 mod common;
 
-use common::{dist, of, players_seen};
 use std::sync::LazyLock;
+
+use common::{dist, of, players_seen};
 use stvtf::Line;
 use stvtf::output::{Objective, PlayerId, Position, Snapshot, Team};
 

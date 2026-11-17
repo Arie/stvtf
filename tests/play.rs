@@ -3,12 +3,13 @@
 
 mod common;
 
-use common::{LIMIT, SECOND, TICK, fixture, wait_for};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use common::{LIMIT, SECOND, TICK, fixture, wait_for};
 use stvtf::Line;
 use stvtf::output::{Snapshot, Status};
 use stvtf::relay::{Playback, Relay, RelayConfig, Want};

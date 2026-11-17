@@ -3,9 +3,10 @@
 
 mod common;
 
-use common::{of, players_seen};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
+
+use common::{of, players_seen};
 use stvtf::Line;
 use stvtf::output::{
     BuildingKind, Class, HealSource, ImpactKind, JumpKind, JumpPhase, Objective, PickupItem, PlayerId, Round, Team,

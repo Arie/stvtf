@@ -6,8 +6,9 @@
 
 mod common;
 
-use common::{SECOND, TICK, dist, of};
 use std::sync::LazyLock;
+
+use common::{SECOND, TICK, dist, of};
 use stvtf::Line;
 use stvtf::output::{Objective, Position, Round, Snapshot, StopwatchState, Team};
 

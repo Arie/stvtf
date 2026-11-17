@@ -3,11 +3,12 @@
 
 mod common;
 
-use common::{AUTH_HASHEDCDKEY, OOB, challenge};
 use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+use common::{AUTH_HASHEDCDKEY, OOB, challenge};
 use stvtf::watch::{self, Watch};
 
 /// A bound on a watch that never connects as often as the test waits for.

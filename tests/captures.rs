@@ -6,9 +6,10 @@
 
 mod common;
 
-use common::{dist, fixture, of, players_seen, tables};
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
+
+use common::{dist, fixture, of, players_seen, tables};
 use stvtf::decode::Tables;
 use stvtf::output::{BuildingKind, Class, Condition, Objective, PlayerId, Position, Round, Score, Status, Team, Timer};
 use stvtf::{Line, Options};

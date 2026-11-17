@@ -6,9 +6,8 @@ mod common;
 
 use common::{fixture, gunzipped, tables};
 use serde_json::Value;
-use stvtf::capture;
 use stvtf::output::Stamped;
-use stvtf::{Line, Options};
+use stvtf::{Line, Options, capture};
 
 #[test]
 fn replay_matches_the_recorded_output() {
