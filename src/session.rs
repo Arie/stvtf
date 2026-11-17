@@ -272,6 +272,8 @@ impl<'o> Session<'o> {
     fn advance(&mut self, state: Signon, emit: &mut dyn FnMut(Line)) {
         if state == Signon::ChangeLevel {
             emit(Line::Status(Status::Changelevel));
+            // Answer the next reconnect, even at the same spawncount.
+            self.echoed.clear();
             return;
         }
         if self.state >= Signon::Full && state <= Signon::New {
@@ -736,6 +738,23 @@ mod tests {
         s.advance(Signon::ChangeLevel, &mut |l| lines.push(l));
         assert_eq!(lines, [Line::Status(Status::Changelevel)]);
         assert_eq!(s.state, Signon::Connected);
+    }
+
+    /// A second changelevel keeps the spawncount; its reconnect still needs an answer.
+    #[test]
+    fn a_reconnect_after_another_changelevel_is_answered_again() {
+        let opt = Options::default();
+        let mut s = Session::new(None, 0, &opt);
+        let mut emit = |_| {};
+        s.lifecycle(Lifecycle { server_info: Some((79, "cp_x".into())), ..Lifecycle::default() }, &mut emit);
+        s.state = Signon::Full;
+        for _ in 0..2 {
+            s.advance(Signon::ChangeLevel, &mut emit);
+            s.advance(Signon::Connected, &mut emit);
+            assert!(s.pending.take().is_some(), "answered");
+            s.advance(Signon::Connected, &mut emit);
+            assert!(s.pending.is_none(), "a copy of it is not");
+        }
     }
 
     #[test]
