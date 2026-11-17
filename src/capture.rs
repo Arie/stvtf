@@ -161,24 +161,23 @@ mod tests {
 
     #[test]
     fn recorder_never_overwrites() {
-        let path = std::env::temp_dir().join(format!("stvtf-test-{}.cap", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("precious.cap");
         std::fs::write(&path, b"precious").unwrap();
         assert!(Recorder::create(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"precious");
-        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
     fn what_is_recorded_reads_back() {
-        let path = std::env::temp_dir().join(format!("stvtf_recorder_{}.cap", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("recorded.cap");
         let mut r = Recorder::create(&path).unwrap();
         r.session(0x0102_0304).unwrap();
         r.datagram(b"one").unwrap();
         r.datagram(b"").unwrap();
         drop(r);
         let bytes = std::fs::read(&path).unwrap();
-        std::fs::remove_file(&path).unwrap();
         let recs = read(&bytes).unwrap();
         let got: Vec<(u8, &[u8])> = recs.iter().map(|r| (r.kind, r.data)).collect();
         assert_eq!(

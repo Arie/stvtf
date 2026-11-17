@@ -442,8 +442,8 @@ fn a_players_own_demo_plays_to_a_client_that_has_only_its_signon() {
 fn a_client_coming_in_at_the_end_of_a_recording_cut_short_gets_a_full_update() {
     let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
     let whole = std::fs::read(crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1).unwrap();
-    let dir = std::env::temp_dir().join(format!("stvtf-cut-short-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     let cut = dir.join("cut.dem");
     // Without the end: the stop and its tick.
     std::fs::write(&cut, &whole[..whole.len() - 5]).unwrap();
@@ -767,8 +767,8 @@ fn a_demo_that_will_never_open_is_not_tried_again() {
     let mut b = bench_with_one_in();
     let (relay, c, mut want) = relay_playing(&mut b, upward_until(|c| c.started), 0);
     drop(c);
-    let dir = std::env::temp_dir().join(format!("stvtf-never-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     let playback = Playback::new(want.clone());
     let mut p = Player::new(&relay);
     want.demo = dir.join("later.dem");
@@ -784,7 +784,6 @@ fn a_demo_that_will_never_open_is_not_tried_again() {
     std::fs::remove_file(&want.demo).unwrap();
     assert!(p.open_wanted(&want, &playback).is_break());
     assert_eq!(p.given_up.as_ref(), Some(&want.demo), "not opened again: gone, it would be one not there yet");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A relay playing `pl_upward.dem` some way in, its one client in the game with all it was sent
@@ -863,14 +862,13 @@ fn clients_handed_over_go_on_where_they_were_with_a_full_update() {
 fn clients_handed_over_sign_on_again_when_the_room_is_on_another_demo() {
     let mut b = bench_with_one_in();
     let (next, mut want, _) = upward_played_to_a_client(&mut b);
-    let dir = std::env::temp_dir().join(format!("stvtf-other-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     want.demo = dir.join("other.dem");
     std::fs::copy(crate::testing::fixture("pl_upward.dem"), &want.demo).unwrap();
     let playback = Playback::new(want.clone());
     let mut p = Player::new(&next);
     assert!(p.open_wanted(&want, &playback).is_continue());
-    std::fs::remove_dir_all(&dir).unwrap();
     let hub = next.hub();
     let c = hub.clients.values().next().unwrap();
     assert_eq!((c.phase, c.reconnecting), (Phase::Signon, true));
@@ -913,8 +911,8 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
         acks(&relay);
     }
     assert_eq!(relay.hub().clients.values().next().unwrap().phase, Phase::Active);
-    let dir = std::env::temp_dir().join(format!("stvtf-goes-on-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     let playback = Playback::new(want.clone());
     // The same server and load, begun before where playback is.
     want.demo = dir.join("next.dem");
@@ -950,7 +948,6 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
     want.demo = crate::testing::fixture("pass_stadium.dem");
     assert!(p.open_wanted(&want, &playback).is_continue());
     assert!(relay.hub().clients.values().next().unwrap().reconnecting);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Going into a demo played before (back into an earlier part of the match), playback starts
@@ -958,8 +955,8 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
 /// and one coming in later is given the same.
 #[test]
 fn going_into_a_demo_played_before_starts_from_its_checkpoints() {
-    let dir = std::env::temp_dir().join(format!("stvtf-goes-back-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     let next = dir.join("next.dem");
     std::fs::copy(crate::testing::fixture("pl_upward.dem"), &next).unwrap();
     let went = |with_checkpoints: bool| {
@@ -996,7 +993,6 @@ fn going_into_a_demo_played_before_starts_from_its_checkpoints() {
     };
     let (plain, checkpointed) = (went(false), went(true));
     assert!(plain.1 > 0 && plain == checkpointed);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A game client that loses datagrams, as one over the internet does: it keeps the frames it got

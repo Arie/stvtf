@@ -4,7 +4,6 @@
 mod common;
 
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -180,9 +179,8 @@ fn send_signal(to: &Running, signal: &str) {
 #[cfg(unix)]
 #[test]
 fn relay_connect_record_terminate_and_replay() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let cap = dir.join(format!("cli_record_{}.cap", std::process::id()));
-    let _ = std::fs::remove_file(&cap);
+    let tmp = tempfile::tempdir().unwrap();
+    let cap = tmp.path().join("cli_record.cap");
 
     let mut relay = Running(
         stvtf()
@@ -237,7 +235,6 @@ fn relay_connect_record_terminate_and_replay() {
     let replayed = lines(&replayed.stdout);
     assert!(replayed.iter().any(|l| l["type"] == "status" && l["state"] == "full"), "the recording signs on");
     assert!(replayed.iter().any(|l| l["type"] == "snapshot"), "and holds entities");
-    std::fs::remove_file(&cap).unwrap();
 }
 
 /// A `SourceTV` that takes a connect and then says nothing, or nothing at all if `answers` is

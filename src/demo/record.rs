@@ -208,15 +208,13 @@ pub(crate) mod tests {
     /// The first session of capture fixture `name`, recorded as a demo: what it decoded to, and the
     /// demo's file.
     pub(crate) fn record_capture(name: &str, opt: &Options) -> (Vec<Line>, PathBuf) {
-        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let bytes = std::fs::read(crate::testing::fixture(name)).unwrap();
         let records = capture::read(&bytes).unwrap();
         let tables = crate::builds::tables(crate::builds::CURRENT, None).unwrap();
         let mut want = Vec::new();
         capture::replay(&records, &tables, opt, &mut |l| want.push(l)).unwrap();
-        let n = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("stvtf-record-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        // Kept: the caller reads the demo, then removes its folder.
+        let dir = tempfile::tempdir().unwrap().keep();
         let recorder = Recorder::new(Arc::new(Folder(dir.clone())));
         recorder.tables(&tables);
         let mut sessions = records.iter().skip_while(|r| r.kind != capture::Kind::Session as u8);

@@ -23,6 +23,7 @@ thiserror = "2"
 
 [dev-dependencies]
 flate2 = "1"
+tempfile = "3"
 
 [profile.release]
 debug = 1
