@@ -1,7 +1,7 @@
 //! The messages a client sends: the few the relay acts on, the rest read past.
 
-use anyhow::{Result, bail};
-
+use crate::Result;
+use crate::error::bail;
 use crate::net::bits::{BitBuf, BitReader};
 use crate::net::messages::{
     CLC_BASELINEACK, CLC_CLIENTINFO, CLC_CMDKEYVALUES, CLC_LISTENEVENTS, CLC_MOVE, CLC_RESPONDCVARVALUE, CLC_VOICEDATA,
@@ -94,7 +94,7 @@ fn read_client_messages(r: &mut BitReader<'_>, nbits: usize, out: &mut Vec<Clien
                 let len = r.read_bits(32)? as usize;
                 r.skip(len.saturating_mul(8))?;
             }
-            id => bail!("client message {id} not understood"),
+            id => bail!("cannot understand client message {id}"),
         }
     }
     Ok(())

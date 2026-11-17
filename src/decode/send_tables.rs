@@ -1,11 +1,13 @@
 //! A build's send tables, from a demo of it.
 
-use anyhow::{Context, Result, bail};
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::packet::Packet;
 use tf_demo_parser::demo::packet::datatable::DataTablePacket;
 use tf_demo_parser::demo::parser::{DemoHandler, RawPacketStream};
+
+use crate::Result;
+use crate::error::{Context, bail, invalid};
 
 /// The entity class tables of one server build, taken from a demo of that build.
 pub struct Tables {
@@ -18,13 +20,13 @@ pub struct Tables {
 
 impl Tables {
     /// Reads the tables from a demo file (any STV or POV demo of the build).
-    pub fn from_demo(path: &std::path::Path) -> crate::Result<Tables> {
-        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    pub fn from_demo(path: &std::path::Path) -> Result<Tables> {
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
         Self::from_demo_bytes(&bytes)
     }
 
     /// Reads the tables from demo bytes; everything after the data tables is ignored.
-    pub fn from_demo_bytes(bytes: &[u8]) -> crate::Result<Tables> {
+    pub fn from_demo_bytes(bytes: &[u8]) -> Result<Tables> {
         let mut stream = BitReadStream::new(BitReadBuffer::new(bytes, LittleEndian));
         let header = Header::read(&mut stream)?;
         let handler = DemoHandler::with_analyser(tf_demo_parser::demo::parser::NullHandler);
@@ -35,7 +37,7 @@ impl Tables {
                 return Ok(Tables { header, datatables: dt, crc, raw: raw_datatables(bytes)? });
             }
         }
-        Err(anyhow::anyhow!("no data tables in demo").into())
+        Err(invalid!("cannot find data tables in the demo"))
     }
 
     /// The server class names (`CTFPlayer`, …), in class id order.
@@ -66,7 +68,7 @@ pub(super) fn raw_datatables(bytes: &[u8]) -> Result<Vec<u8>> {
         match r.next_packet()? {
             crate::demo::Next::Packet(crate::demo::Packet::DataTables { data, .. }) => return Ok(data),
             crate::demo::Next::Packet(_) => {}
-            _ => bail!("no data tables in demo"),
+            _ => bail!("cannot find data tables in the demo"),
         }
     }
 }

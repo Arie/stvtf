@@ -1,9 +1,9 @@
 //! `-3 SNAP` datagrams are raw Snappy; compressed reliable transfers are
 //! Snappy or Valve LZSS depending on their magic.
 
-use anyhow::{Result, bail};
-
 use super::netchan::{MARKER_COMPRESSED, SEQUENCE_LEN};
+use crate::Result;
+use crate::error::bail;
 
 const MAX_OUTPUT: usize = 1 << 22;
 /// A compressed block starts with its kind; LZSS's then has the uncompressed size (u32).
@@ -16,18 +16,18 @@ const ITEMS_PER_COMMAND: u8 = 8;
 pub fn snappy(block: &[u8]) -> Result<Vec<u8>> {
     let len = snap::raw::decompress_len(block)?;
     if len > MAX_OUTPUT {
-        bail!("snappy declared size {len} over cap");
+        bail!("cannot inflate {len} bytes of Snappy: over the cap");
     }
     Ok(snap::raw::Decoder::new().decompress_vec(block)?)
 }
 
 pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < LZSS_HEADER || &data[..LZSS_MAGIC.len()] != LZSS_MAGIC {
-        bail!("not an LZSS block");
+        bail!("cannot inflate a block that is not LZSS");
     }
     let actual = u32::from_le_bytes(data[LZSS_MAGIC.len()..LZSS_HEADER].try_into()?) as usize;
     if actual > MAX_OUTPUT {
-        bail!("LZSS declared size {actual} over cap");
+        bail!("cannot inflate {actual} bytes of LZSS: over the cap");
     }
     let mut out = Vec::with_capacity(actual);
     let mut src = LZSS_HEADER;
@@ -49,10 +49,10 @@ pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
                 break;
             }
             let Some(mut r) = out.len().checked_sub(pos + 1) else {
-                bail!("LZSS back-reference before start");
+                bail!("cannot follow an LZSS back-reference before the start");
             };
             if out.len() + count > actual {
-                bail!("LZSS back-reference past declared size {actual}");
+                bail!("cannot follow an LZSS back-reference past {actual} bytes");
             }
             for _ in 0..count {
                 out.push(out[r]);
@@ -68,7 +68,7 @@ pub fn lzss(data: &[u8]) -> Result<Vec<u8>> {
     }
     // Like the engine, reject a stream that ends early.
     if out.len() != actual {
-        bail!("LZSS produced {} of {actual} bytes", out.len());
+        bail!("cannot inflate LZSS to {actual} bytes: got {}", out.len());
     }
     Ok(out)
 }
@@ -84,7 +84,7 @@ pub fn compress_datagram(datagram: &[u8]) -> Vec<u8> {
 pub fn inflate_datagram(datagram: &[u8]) -> Result<Vec<u8>> {
     let block = SEQUENCE_LEN + SNAPPY_MAGIC.len();
     if datagram.get(SEQUENCE_LEN..block) != Some(SNAPPY_MAGIC) {
-        bail!("compressed datagram without Snappy's magic");
+        bail!("cannot inflate a datagram without Snappy's magic");
     }
     snappy(&datagram[block..])
 }
@@ -101,7 +101,7 @@ pub fn inflate_transfer(payload: &[u8]) -> Result<Vec<u8>> {
     match payload.get(..SNAPPY_MAGIC.len()) {
         Some(m) if m == SNAPPY_MAGIC => snappy(&payload[SNAPPY_MAGIC.len()..]),
         Some(m) if m == LZSS_MAGIC => lzss(payload),
-        _ => bail!("unknown compressed transfer magic"),
+        _ => bail!("cannot inflate a transfer of unknown magic"),
     }
 }
 

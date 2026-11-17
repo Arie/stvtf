@@ -2,10 +2,9 @@
 
 use std::io::{Seek, SeekFrom, Write};
 
-use anyhow::Result;
-
 use super::command::{DATA_TABLES, MESSAGE, META_LEN, SIGNON, STOP, SYNC_TICK, USER_CMD};
 use super::{HEADER_LEN, Header};
+use crate::Result;
 
 /// Writes a demo as a session goes. The header's counts are written again by [`Writer::finish`]
 /// and every [`Writer::flush`], so a demo cut short still plays to where it got.
@@ -20,23 +19,23 @@ pub struct Writer<W> {
 impl<W: Write + Seek> Writer<W> {
     /// Starts a demo with `header` (its counts are kept up to date), on a server ticking every
     /// `tick_interval` seconds.
-    pub fn new(mut w: W, header: Header, tick_interval: f32) -> crate::Result<Self> {
+    pub fn new(mut w: W, header: Header, tick_interval: f32) -> Result<Self> {
         w.write_all(&header.bytes())?;
         Ok(Writer { w, header, tick_interval, first_tick: None, in_signon: true })
     }
 
     /// The data tables packet of the build, as a tables demo has it.
-    pub fn data_tables(&mut self, data: &[u8]) -> crate::Result<()> {
-        Ok(self.packet(DATA_TABLES, 0, data)?)
+    pub fn data_tables(&mut self, data: &[u8]) -> Result<()> {
+        self.packet(DATA_TABLES, 0, data)
     }
 
     /// Signon messages, byte padded.
-    pub fn signon(&mut self, data: &[u8]) -> crate::Result<()> {
-        Ok(self.packet(SIGNON, 0, data)?)
+    pub fn signon(&mut self, data: &[u8]) -> Result<()> {
+        self.packet(SIGNON, 0, data)
     }
 
     /// One datagram's messages at server tick `server_tick`, byte padded.
-    pub fn message(&mut self, server_tick: i32, data: &[u8]) -> crate::Result<()> {
+    pub fn message(&mut self, server_tick: i32, data: &[u8]) -> Result<()> {
         if self.in_signon {
             // Everything up to the first frame is the signon, as the header counts it.
             self.in_signon = false;
@@ -66,7 +65,7 @@ impl<W: Write + Seek> Writer<W> {
     }
 
     /// Writes the header's counts as they are now and flushes.
-    pub fn flush(&mut self) -> crate::Result<()> {
+    pub fn flush(&mut self) -> Result<()> {
         let end = self.w.stream_position()?;
         self.w.seek(SeekFrom::Start(0))?;
         self.w.write_all(&self.header.bytes())?;
@@ -77,12 +76,12 @@ impl<W: Write + Seek> Writer<W> {
 
     /// Writes out what is buffered, so a reader sees every packet so far; the header's counts
     /// wait for [`Writer::flush`].
-    pub fn flush_packets(&mut self) -> crate::Result<()> {
+    pub fn flush_packets(&mut self) -> Result<()> {
         Ok(self.w.flush()?)
     }
 
     /// The stop packet and the final header.
-    pub fn finish(mut self) -> crate::Result<W> {
+    pub fn finish(mut self) -> Result<W> {
         let tick = self.header.ticks as i32;
         self.w.write_all(&[STOP])?;
         self.w.write_all(&tick.to_le_bytes())?;

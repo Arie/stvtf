@@ -2,10 +2,8 @@
 
 use std::path::Path;
 
-use anyhow::anyhow;
-
+use crate::Error;
 use crate::decode::Tables;
-use crate::{Error, ErrorKind};
 
 /// The newest TF2 server build compiled in. A build with no data compiled in gets its tables.
 pub const CURRENT: &str = BUILDS[0].0;
@@ -37,10 +35,7 @@ pub fn tables(build: &str, demo: Option<&Path>) -> crate::Result<Tables> {
     match (demo, builtin(build)) {
         (Some(p), _) => Tables::from_demo(p),
         (None, Some(b)) => Tables::from_demo_bytes(b.tables),
-        (None, None) => Err(Error::new(
-            ErrorKind::UnknownBuild,
-            anyhow!("no built-in tables for build {build}; pass --tables SAME_BUILD.dem"),
-        )),
+        (None, None) => Err(Error::UnknownBuild { build: build.to_string() }),
     }
 }
 
@@ -51,7 +46,7 @@ mod tests {
     #[test]
     fn a_build_without_data_needs_a_demo() {
         assert!(tables(CURRENT, None).is_ok());
-        assert!(tables("1", None).err().unwrap().to_string().contains("--tables"));
+        assert!(matches!(tables("1", None), Err(Error::UnknownBuild { build }) if build == "1"));
         assert!(tables(CURRENT, Some(Path::new("/nonexistent.dem"))).is_err(), "a given demo counts");
     }
 }

@@ -2,11 +2,10 @@
 
 use std::io::{Read, Seek, Write};
 
-use anyhow::Result;
-
 use super::command::{CONSOLE_CMD, DATA_TABLES, MESSAGE, SIGNON, STRING_TABLES, SYNC_TICK, USER_CMD};
 use super::writer::{end_demo, put};
 use super::{HEADER_LEN, Header, HeldTables, Next, Packet, Reader};
+use crate::Result;
 
 /// Voice to write into a demo: Opus frames (20 ms each) as the voice of the player in `slot`
 /// (their entity less one), whose Steam account is `account`, heard at demo tick `tick`.
@@ -34,7 +33,7 @@ pub(super) fn heard_at(due: i32, before: i32, tick: i32) -> i32 {
 /// the demo's at or after its tick, as the game's own voice messages (so the demo plays them as
 /// the players talking). The header's counts are made anew, and a demo still being written (no
 /// stop packet yet) gets one.
-pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mut out: W) -> crate::Result<W> {
+pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mut out: W) -> Result<W> {
     let mut r = Reader::new(src)?;
     let mut header = r.header.clone();
     let interval = if header.ticks > 0 && header.seconds > 0.0 { header.seconds / header.ticks as f32 } else { 0.015 };
@@ -87,7 +86,7 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
     for v in order {
         voice.say(&mut out, &mut header, v, last)?;
     }
-    Ok(end_demo(out, &mut header, interval)?)
+    end_demo(out, &mut header, interval)
 }
 
 /// Voice written into a demo: a speaker's frames are numbered on from one message to the next.

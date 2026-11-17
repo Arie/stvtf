@@ -120,7 +120,7 @@ impl Recorder {
         }
         let tick = frame_tick.or(st.tick).unwrap_or(0);
         if st.writer.is_none() {
-            let started = self.files.create(&st.map, tick).map_err(anyhow::Error::from).and_then(|file| {
+            let started = self.files.create(&st.map, tick).map_err(crate::Error::from).and_then(|file| {
                 let header = Header {
                     protocol: crate::net::handshake::PROTOCOL_VERSION as u32,
                     server: "stvtf".into(),

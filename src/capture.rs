@@ -9,9 +9,9 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
-
+use crate::Result;
 use crate::decode::Tables;
+use crate::error::{Context, bail};
 use crate::output::Line;
 use crate::session::{self, Options};
 
@@ -37,8 +37,8 @@ pub(crate) struct Recorder {
 
 impl Recorder {
     /// Creates a new capture file; an existing file is never overwritten.
-    pub fn create(path: &Path) -> crate::Result<Self> {
-        let file = File::create_new(path).with_context(|| format!("creating capture {}", path.display()))?;
+    pub fn create(path: &Path) -> Result<Self> {
+        let file = File::create_new(path).with_context(|| format!("create capture {}", path.display()))?;
         let mut out = BufWriter::new(file);
         out.write_all(MAGIC)?;
         Ok(Recorder { out, start: Instant::now() })
@@ -53,14 +53,14 @@ impl Recorder {
         Ok(())
     }
 
-    pub fn session(&mut self, challenge: u32) -> crate::Result<()> {
+    pub fn session(&mut self, challenge: u32) -> Result<()> {
         self.record(Kind::Session, &challenge.to_le_bytes())?;
         self.out.flush()?;
         Ok(())
     }
 
-    pub fn datagram(&mut self, data: &[u8]) -> crate::Result<()> {
-        Ok(self.record(Kind::Datagram, data)?)
+    pub fn datagram(&mut self, data: &[u8]) -> Result<()> {
+        self.record(Kind::Datagram, data)
     }
 }
 
@@ -83,8 +83,8 @@ impl Record<'_> {
 }
 
 /// Splits a capture into its records.
-pub fn read(bytes: &[u8]) -> crate::Result<Vec<Record<'_>>> {
-    let Some(mut r) = bytes.strip_prefix(MAGIC) else { return Err(anyhow::anyhow!("not an stvtf capture").into()) };
+pub fn read(bytes: &[u8]) -> Result<Vec<Record<'_>>> {
+    let Some(mut r) = bytes.strip_prefix(MAGIC) else { bail!("cannot read a file that is not an stvtf capture") };
     let mut out = Vec::new();
     while let Some(header) = r.get(..RECORD_HEADER) {
         let t_us = u64::from_le_bytes(header[..KIND_AT].try_into()?);
@@ -100,11 +100,11 @@ pub fn read(bytes: &[u8]) -> crate::Result<Vec<Record<'_>>> {
 }
 
 /// Decodes a capture without a network, one session per recorded connection.
-pub fn replay(records: &[Record<'_>], tables: &Tables, opt: &Options, emit: &mut dyn FnMut(Line)) -> crate::Result<()> {
+pub fn replay(records: &[Record<'_>], tables: &Tables, opt: &Options, emit: &mut dyn FnMut(Line)) -> Result<()> {
     let mut sessions: Vec<(u32, Vec<&[u8]>)> = Vec::new();
     for rec in records {
         if rec.kind == Kind::Session as u8 {
-            let challenge = rec.challenge().context("session record is not a 4-byte challenge")?;
+            let challenge = rec.challenge().context("read the session's 4-byte challenge")?;
             sessions.push((challenge, Vec::new()));
         } else if rec.kind == Kind::Datagram as u8
             && let Some(last) = sessions.last_mut()

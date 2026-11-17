@@ -15,10 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
-use anyhow::Result;
-
 use super::cursor::Cursor;
 use super::tuning::{NOT_A_FRAME, RECENT};
+use crate::Result;
 use crate::decode::{Baselines, Placed};
 use crate::net::bits::BitBuf;
 use crate::sync::lock;

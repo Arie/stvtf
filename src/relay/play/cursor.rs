@@ -6,11 +6,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use anyhow::{Context, Result, bail};
-
 use super::tuning::{NOT_A_FRAME, RECENT};
+use crate::Result;
 use crate::decode::{Decoder, Lifecycle, Span, Tables};
 use crate::demo::{self, Next, Packet};
+use crate::error::{Context, bail};
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::messages::{self, NET_SIGNONSTATE, TYPE_BITS};
 use crate::relay::hub::{Hub, Part};
@@ -53,25 +53,10 @@ pub(super) struct Cursor {
     pub(super) view: [f32; 3],
 }
 
-/// The demo's signon is not all written yet.
-#[derive(Debug)]
-struct NotYet(PathBuf);
-
-impl std::fmt::Display for NotYet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} has no signon yet", self.0.display())
-    }
-}
-
-impl std::error::Error for NotYet {}
-
 /// Whether a demo that did not open for `e` may yet: it is not there, or not written far enough.
-pub(super) fn may_open_yet(e: &anyhow::Error) -> bool {
+pub(super) fn may_open_yet(e: &crate::Error) -> bool {
     use std::io::ErrorKind::{NotFound, UnexpectedEof};
-    e.chain().any(|c| {
-        c.is::<NotYet>()
-            || c.downcast_ref::<std::io::Error>().is_some_and(|e| matches!(e.kind(), NotFound | UnexpectedEof))
-    })
+    e.is_not_yet() || matches!(e.io_kind(), Some(NotFound | UnexpectedEof))
 }
 
 impl Cursor {
@@ -87,11 +72,11 @@ impl Cursor {
     }
 
     fn open_with(path: &Path, hub: Option<&Mutex<Hub>>) -> Result<Cursor> {
-        let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
         let mut reader = demo::Reader::new(file)?;
         let (signon, snapshot, tables, next) = read_signon(path, &mut reader)?;
         if Some(tables.sendtable_crc()) != *OUR_CRC {
-            bail!("the demo is of a TF2 build with other class tables, which a game client cannot play");
+            bail!("cannot play a demo of a TF2 build with other class tables to a game client");
         }
         let mut dec = Decoder::new(&tables, 0.0)?;
         dec.keep_world();
@@ -216,11 +201,11 @@ fn read_signon(path: &Path, reader: &mut demo::Reader<File>) -> Result<Signon> {
             // A live demo can be read before its first frame is written; its signon is all
             // there once the sync tick that ends it is.
             Next::More if tables.is_some() && synced => break None,
-            Next::More => return Err(NotYet(path.to_owned()).into()),
-            Next::Stop => bail!("{} has no frames", path.display()),
+            Next::More => return Err(crate::Error::not_yet(path)),
+            Next::Stop => bail!("cannot find frames in {}", path.display()),
         }
     };
-    let tables = tables.context("the demo has no data tables")?;
+    let tables = tables.context("cannot find the demo's data tables")?;
     Ok((signon, snapshot, tables, next))
 }
 
@@ -365,5 +350,5 @@ pub(super) fn owned(tables: &[Arc<BitBuf>]) -> Vec<BitBuf> {
 fn tables_of(path: &Path, reader: &demo::Reader<File>) -> Result<Tables> {
     let mut prefix = vec![0u8; reader.position() as usize];
     File::open(path)?.read_exact(&mut prefix)?;
-    Ok(Tables::from_demo_bytes(&prefix)?)
+    Tables::from_demo_bytes(&prefix)
 }

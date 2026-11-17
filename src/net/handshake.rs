@@ -9,9 +9,9 @@ use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
-
 use super::{MAX_DATAGRAM, messages, netchan};
+use crate::Result;
+use crate::error::{Context, bail, invalid};
 
 pub const PROTOCOL_VERSION: i32 = 24;
 const AUTH_HASHEDCDKEY: u32 = 2;
@@ -152,20 +152,20 @@ pub struct Challenge {
 /// reply that does not is someone else's or forged, and gives `None`.
 pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
     if data.len() <= OOB_KIND || data[..OOB_KIND] != OOB_PREFIX {
-        bail!("not a connectionless reply");
+        bail!("cannot read a reply that is not connectionless");
     }
     match data[OOB_KIND] {
         S2C_CONNREJECT if le_u32(data, REJECT_NONCE) == Some(nonce) => return Err(Rejected(reject_reason(data)).into()),
         S2C_CONNREJECT => return Ok(None),
         S2C_CHALLENGE => {}
-        c => bail!("unexpected reply {:?}", char::from(c)),
+        c => bail!("cannot take reply {:?}", char::from(c)),
     }
     if data.len() < CHALLENGE_LEN {
-        bail!("truncated challenge");
+        bail!("cannot read the challenge: reply cut short");
     }
     let word = |o: usize| le_u32(data, o).unwrap_or_default();
     if word(CHALLENGE_MAGIC) != MAGIC_VERSION {
-        bail!("bad challenge magic {:#x}", word(CHALLENGE_MAGIC));
+        bail!("cannot take challenge magic {:#x}", word(CHALLENGE_MAGIC));
     }
     if word(CHALLENGE_NONCE) != nonce {
         return Ok(None);
@@ -223,7 +223,7 @@ pub fn connect(
     // Replies are taken from any address (see `recv_from_port`), so only the nonce tells
     // the server's from a forgery: skip the ones without it, and those that do not parse, rather
     // than fail on them. The last that did not parse is named if no reply comes.
-    let mut junk: Option<anyhow::Error> = None;
+    let mut junk: Option<crate::Error> = None;
     let (ch, from) = loop {
         let got = recv_from_port(&sock, server.port(), &mut buf, deadline, wait);
         if wait.over() {
@@ -236,7 +236,7 @@ pub fn connect(
         match parse_challenge(&buf[..n], nonce) {
             Ok(Some(ch)) => break (ch, from),
             Ok(None) => {}
-            Err(e) if e.is::<Rejected>() => return Err(e),
+            Err(e) if e.rejected().is_some() => return Err(e),
             Err(e) => junk = Some(e),
         }
     };
@@ -245,7 +245,7 @@ pub fn connect(
         return Err(GamePort(server).into());
     }
     if ch.auth_proto != AUTH_HASHEDCDKEY {
-        bail!("server wants auth protocol {} (SourceTV accepts {})", ch.auth_proto, AUTH_HASHEDCDKEY);
+        bail!("cannot use auth protocol {} (SourceTV takes {})", ch.auth_proto, AUTH_HASHEDCDKEY);
     }
     sock.send(&build_connect(nonce, ch.challenge, name, password, build))?;
     let deadline = Instant::now() + timeout;
@@ -282,7 +282,7 @@ pub fn connect(
     if wait.over() {
         return Err(Stopped.into());
     }
-    bail!("no accept within {timeout:?}")
+    bail!("cannot connect: no accept within {timeout:?}")
 }
 
 /// The next datagram from the server's port, on whichever address it answers from: a game
@@ -332,7 +332,8 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration, wait: Wait<'_>) -> Res
         msg.extend_from_slice(&extra);
         sock.send_to(&msg, server)?;
         let n;
-        (n, server) = recv_from_port(&sock, server.port(), &mut buf, deadline, wait).context("no A2S_INFO reply")?;
+        (n, server) =
+            recv_from_port(&sock, server.port(), &mut buf, deadline, wait).context("get an A2S_INFO reply")?;
         let data = &buf[..n];
         if n >= A2S_CHALLENGE.end && data[..OOB_KIND] == OOB_PREFIX && data[OOB_KIND] == S2C_CHALLENGE {
             extra = data[A2S_CHALLENGE].to_vec();
@@ -340,19 +341,19 @@ pub fn a2s_version(server: SocketAddr, timeout: Duration, wait: Wait<'_>) -> Res
         }
         return parse_a2s_version(data);
     }
-    Err(anyhow!("A2S_INFO challenge loop"))
+    Err(invalid!("cannot get past A2S_INFO's challenges"))
 }
 
 pub(crate) fn parse_a2s_version(data: &[u8]) -> Result<String> {
     if data.len() < A2S_STRINGS || data[..OOB_KIND] != OOB_PREFIX || data[OOB_KIND] != S2A_INFO {
-        bail!("not an A2S_INFO reply");
+        bail!("cannot read a reply that is not A2S_INFO");
     }
     let mut pos = A2S_STRINGS;
     // Skip name, map, folder and game.
     for _ in 0..4 {
-        read_cstr(data, &mut pos).ok_or_else(|| anyhow!("truncated A2S_INFO"))?;
+        read_cstr(data, &mut pos).ok_or_else(|| invalid!("cannot read A2S_INFO: reply cut short"))?;
     }
-    let Some(tail) = data.get(pos + A2S_FIXED..) else { bail!("truncated A2S_INFO") };
+    let Some(tail) = data.get(pos + A2S_FIXED..) else { bail!("cannot read A2S_INFO: reply cut short") };
     Ok(until_nul(tail))
 }
 
@@ -497,7 +498,7 @@ mod tests {
             }
         );
         let err = parse_challenge(&build_reject(nonce, "Bad password"), nonce).unwrap_err();
-        assert!(err.is::<Rejected>());
+        assert!(err.rejected().is_some());
         let info = Info { name: "relay", map: "cp_badlands", players: 1, max_players: 8, build: "11138802" };
         assert_eq!(parse_a2s_version(&build_info(&info)).unwrap(), "11138802");
         let mut query = oob(A2S_INFO);
@@ -536,7 +537,7 @@ mod tests {
         rej.extend_from_slice(&5u32.to_le_bytes());
         rej.extend_from_slice(b"Bad password\0");
         let err = parse_challenge(&rej, 5).unwrap_err();
-        assert_eq!(err.downcast_ref::<Rejected>().map(|r| r.0.as_str()), Some("Bad password"));
+        assert_eq!(err.rejected().map(|r| r.0.as_str()), Some("Bad password"));
     }
 
     #[test]
@@ -593,7 +594,7 @@ mod tests {
         });
         // A game server's challenge ends the attempt as soon as it is parsed.
         let err = connect(addr, "stv.tf", "", "1", Duration::from_secs(2), no_end()).err().unwrap();
-        assert!(err.is::<GamePort>(), "{err:#}");
+        assert!(err.game_port().is_some(), "{err:#}");
         fake.join().unwrap();
     }
 
@@ -627,7 +628,7 @@ mod tests {
         assert!(parse_challenge(b"\x01\x02\x03\x04\x05", nonce).is_err());
         assert!(parse_challenge(b"\xff\xff\xff\xffZ", nonce).is_err());
         let good = build_challenge(9, nonce);
-        assert!(parse_challenge(&good[..CHALLENGE_LEN - 1], nonce).unwrap_err().to_string().contains("truncated"));
+        assert!(parse_challenge(&good[..CHALLENGE_LEN - 1], nonce).unwrap_err().to_string().contains("cut short"));
         let mut bad_magic = good.clone();
         bad_magic[CHALLENGE_MAGIC] ^= 1;
         assert!(parse_challenge(&bad_magic, nonce).unwrap_err().to_string().contains("magic"));
@@ -741,7 +742,7 @@ mod tests {
             });
             connect(addr, "me", "", "1", Duration::from_secs(20), Wait { stop: &stop, until: None }).err().unwrap()
         });
-        assert!(err.is::<Stopped>(), "{err}");
+        assert!(err.is_stopped(), "{err}");
         assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
         server.join().unwrap();
     }
@@ -754,7 +755,7 @@ mod tests {
         let until = Some(Instant::now() + Duration::from_millis(50));
         let wait = Wait { stop: &stop, until };
         let err = connect(addr, "me", "", "1", Duration::from_secs(20), wait).err().unwrap();
-        assert!(err.is::<Stopped>(), "{err}");
+        assert!(err.is_stopped(), "{err}");
         assert!(a2s_version(addr, Duration::from_secs(20), wait).is_err(), "no wait for an answer either");
     }
 }

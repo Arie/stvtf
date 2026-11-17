@@ -7,14 +7,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
-
 use super::client::Phase;
 pub use super::handover::Handover;
 use super::hub::Hub;
 use super::tuning::{FULL_UPDATE_GAP, READ_POLL};
+use crate::Result;
 use crate::capture::{self, Record};
 use crate::decode::{Lifecycle, Tables};
+use crate::error::{Context, bail};
 use crate::net::MAX_DATAGRAM;
 use crate::net::bits::BitBuf;
 use crate::output::{Line, Status};
@@ -80,8 +80,8 @@ pub struct Relay {
 
 impl Relay {
     /// Listens for clients as `config` says.
-    pub fn bind(config: &RelayConfig) -> crate::Result<Relay> {
-        let sock = UdpSocket::bind(&config.listen).with_context(|| format!("binding {}", config.listen))?;
+    pub fn bind(config: &RelayConfig) -> Result<Relay> {
+        let sock = UdpSocket::bind(&config.listen).with_context(|| format!("bind {}", config.listen))?;
         let port = sock.local_addr().map_or(0, |a| a.port());
         let hub = Mutex::new(Hub::new(sock.try_clone()?, config));
         Ok(Relay { sock, port, hub, taken_over: Mutex::new(None) })
@@ -117,7 +117,7 @@ impl Relay {
     }
 
     /// Relays a `SourceTV` server, reconnecting as [`crate::watch::watch`] does, until `stop`.
-    pub fn watch(&self, w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> crate::Result<(), WatchError> {
+    pub fn watch(&self, w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
         self.watch_also(w, stop, None, emit)
     }
 
@@ -147,10 +147,10 @@ impl Relay {
         speed: f64,
         stop: &AtomicBool,
         emit: &mut dyn FnMut(Line),
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let mut sessions = records.iter().skip_while(|r| r.kind != capture::Kind::Session as u8);
-        let Some(first) = sessions.next() else { return Err(anyhow::anyhow!("no session in the capture").into()) };
-        let challenge = u32::from_le_bytes(first.data.try_into().context("session record is not a 4-byte challenge")?);
+        let Some(first) = sessions.next() else { bail!("cannot find a session in the capture") };
+        let challenge = u32::from_le_bytes(first.data.try_into().context("read the session's 4-byte challenge")?);
         let datagrams: Vec<(u64, &[u8])> = sessions
             .take_while(|r| r.kind != capture::Kind::Session as u8)
             .filter(|r| r.kind == capture::Kind::Datagram as u8)
@@ -159,9 +159,9 @@ impl Relay {
         let opt = Options { snapshot_hz: 0.0, ..Options::default() };
         self.announce(emit)?;
         let wait = || self.hub().replay_waits();
-        Ok(self.serving(stop, || {
+        self.serving(stop, || {
             session::replay_paced(challenge, &datagrams, tables, &opt, speed, self, &wait, stop, emit)
-        })?)
+        })
     }
 
     pub(super) fn announce(&self, emit: &mut dyn FnMut(Line)) -> Result<()> {

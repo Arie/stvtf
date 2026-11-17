@@ -2,7 +2,8 @@
 
 use std::ops::Range;
 
-use anyhow::{Result, bail};
+use crate::Result;
+use crate::error::bail;
 
 /// A bit stream packed from bit 0: `bytes` holds exactly `nbits` bits, the last byte
 /// possibly partial. Only `BitWriter`, `from_bytes` and `read_remaining` build one,
@@ -55,7 +56,7 @@ impl<'a> BitReader<'a> {
 
     pub fn read_bits(&mut self, n: usize) -> Result<u32> {
         if n > 32 || n > self.bits_left() {
-            bail!("read_bits({n}) past end");
+            bail!("cannot read {n} bits: past the end");
         }
         let mut val: u64 = 0;
         let mut got = 0;
@@ -85,7 +86,7 @@ impl<'a> BitReader<'a> {
 
     pub fn skip(&mut self, n: usize) -> Result<()> {
         if n > self.bits_left() {
-            bail!("skip({n}) past end");
+            bail!("cannot skip {n} bits: past the end");
         }
         self.pos += n;
         Ok(())
@@ -107,7 +108,7 @@ impl<'a> BitReader<'a> {
                 return Ok(result);
             }
         }
-        bail!("varint32 too long")
+        bail!("cannot read a varint32: too long")
     }
 
     pub fn read_string(&mut self, max: usize) -> Result<String> {
@@ -124,7 +125,7 @@ impl<'a> BitReader<'a> {
 
     pub fn read_bytes(&mut self, n: usize) -> Result<Vec<u8>> {
         if n.checked_mul(8).is_none_or(|bits| bits > self.bits_left()) {
-            bail!("read_bytes({n}) past end");
+            bail!("cannot read {n} bytes: past the end");
         }
         if self.pos.is_multiple_of(8) {
             let start = self.pos >> 3;

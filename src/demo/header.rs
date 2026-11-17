@@ -1,5 +1,6 @@
 //! A demo's header: what it is of, and its counts.
 
+use crate::error::bail;
 /// Bytes before the first packet.
 pub const HEADER_LEN: usize = 1072;
 
@@ -45,7 +46,7 @@ impl Header {
     /// Reads a header from the start of a demo.
     pub fn parse(b: &[u8]) -> crate::Result<Header> {
         if b.len() < HEADER_LEN || &b[..MAGIC.len()] != MAGIC {
-            return Err(anyhow::anyhow!("not a demo").into());
+            bail!("cannot read a file that is not a demo");
         }
         let u = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap_or_default());
         let s = |i: usize| {

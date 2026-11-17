@@ -10,10 +10,10 @@
 //! ubit(26) nbytes
 //!     `num_fragments` * 256 bytes (the last fragment trimmed)
 
-use anyhow::{Result, bail};
-
 use super::bits::BitReader;
 use super::compress;
+use crate::Result;
+use crate::error::bail;
 
 /// The netchannel's reliable subchannels, numbered in 3 bits.
 pub const SUBCHANNEL_BITS: usize = 3;
@@ -121,17 +121,17 @@ fn read_block(br: &mut BitReader<'_>, st: &mut Transfer) -> Result<Option<Vec<u8
         let nbytes = st.nbytes;
         if nbytes > MAX_TRANSFER {
             *st = Transfer::default();
-            bail!("declared transfer {nbytes} over cap");
+            bail!("cannot take a transfer of {nbytes} bytes: over the cap");
         }
         st.total_frags = nbytes.div_ceil(FRAGMENT_SIZE);
         st.have = vec![false; st.total_frags];
     }
     if !st.active() {
-        bail!("continuation of an unseen transfer");
+        bail!("cannot continue a transfer never begun");
     }
     if start_frag + num_frags > st.total_frags {
         *st = Transfer::default();
-        bail!("fragments {start_frag}+{num_frags} past transfer end");
+        bail!("cannot place fragments {start_frag}+{num_frags} past the transfer's end");
     }
     let mut length = num_frags * FRAGMENT_SIZE;
     if num_frags > 0 && start_frag + num_frags == st.total_frags {
@@ -163,7 +163,7 @@ fn read_block(br: &mut BitReader<'_>, st: &mut Transfer) -> Result<Option<Vec<u8
         Some(size) => {
             let inflated = compress::inflate_transfer(&out)?;
             if inflated.len() != size {
-                bail!("transfer inflated to {} bytes, declared {size}", inflated.len());
+                bail!("cannot inflate a transfer to {size} bytes: got {}", inflated.len());
             }
             Ok(Some(inflated))
         }
@@ -295,7 +295,7 @@ mod tests {
     fn a_transfer_declared_over_the_cap_is_refused() {
         let w = opening(None, None, MAX_TRANSFER + 1);
         let err = Reassembler::default().feed(&w.into_bytes(), 0).unwrap_err();
-        assert!(err.to_string().contains("over cap"), "{err}");
+        assert!(err.to_string().contains("over the cap"), "{err}");
     }
 
     #[test]

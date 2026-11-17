@@ -1,6 +1,5 @@
 //! The decoder: a connection's messages, as the game state and the lines of it.
 
-use anyhow::Result;
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
 use tf_demo_parser::ParserState;
 use tf_demo_parser::demo::data::DemoTick;
@@ -15,6 +14,7 @@ use super::extract::Extractor;
 #[cfg(test)]
 use super::props_index_for_tests;
 pub(crate) use super::tables::Placed;
+use crate::Result;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::messages::{SVC_GAMEEVENT, Signon, TYPE_BITS};
 use crate::output::Line;

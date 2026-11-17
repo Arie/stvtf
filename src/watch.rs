@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
-
+use crate::Result;
 use crate::capture::Recorder;
 use crate::decode::Tables;
-use crate::net::handshake::{self, GamePort, Rejected, Stopped, Wait};
+use crate::error::{Context, invalid};
+use crate::net::handshake::{self, Wait};
 use crate::output::{Line, Status};
 use crate::relay::{Relay, RelayConfig};
 use crate::session::{self, DEFAULT_SNAPSHOT_HZ, End, Fatal, Options};
@@ -99,9 +99,11 @@ impl fmt::Debug for Watch {
 }
 
 /// Why [`watch`] gave up.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum WatchError {
     /// The server refused us for a reason reconnecting cannot fix.
+    // Server text: escaped so it cannot drive the terminal.
+    #[error("{}", reason.escape_debug())]
     Rejected {
         /// What kind of rejection.
         kind: Fatal,
@@ -109,44 +111,14 @@ pub enum WatchError {
         reason: String,
     },
     /// Setup failed (address, build, tables, capture file) or local I/O failed.
-    Other(crate::Error),
-}
-
-impl fmt::Display for WatchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            // Server text: escape control characters so it cannot drive the terminal.
-            WatchError::Rejected { reason, .. } => write!(f, "{}", reason.escape_debug()),
-            WatchError::Other(e) => write!(f, "{e:#}"),
-        }
-    }
-}
-
-impl std::error::Error for WatchError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            WatchError::Rejected { .. } => None,
-            WatchError::Other(e) => Some(e),
-        }
-    }
-}
-
-impl From<crate::Error> for WatchError {
-    fn from(e: crate::Error) -> Self {
-        WatchError::Other(e)
-    }
-}
-
-impl From<anyhow::Error> for WatchError {
-    fn from(e: anyhow::Error) -> Self {
-        WatchError::Other(e.into())
-    }
+    #[error(transparent)]
+    Other(#[from] crate::Error),
 }
 
 /// The IPv4 address of a `HOST:PORT` (`SourceTV` is IPv4 only).
-pub fn resolve(target: &str) -> crate::Result<SocketAddr> {
-    let mut all = target.to_socket_addrs().with_context(|| format!("resolving {target}"))?;
-    Ok(all.find(SocketAddr::is_ipv4).ok_or_else(|| anyhow!("no IPv4 address for {target}"))?)
+pub fn resolve(target: &str) -> Result<SocketAddr> {
+    let mut all = target.to_socket_addrs().with_context(|| format!("resolve {target}"))?;
+    all.find(SocketAddr::is_ipv4).ok_or_else(|| invalid!("cannot find an IPv4 address for {target}"))
 }
 
 /// Sets `stop` on the first Ctrl-C so the session can say goodbye (otherwise STV
@@ -155,7 +127,7 @@ pub fn resolve(target: &str) -> crate::Result<SocketAddr> {
 /// SIGTERM (`docker stop`, a deploy) counts as Ctrl-C too.
 ///
 /// The process can have only one Ctrl-C handler, so this fails if one is already set.
-pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> crate::Result<()> {
+pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> Result<()> {
     ctrlc::set_handler(move || {
         if stop.swap(true, Ordering::Relaxed) {
             std::process::exit(EXIT_INTERRUPTED);
@@ -167,7 +139,7 @@ pub fn stop_on_ctrl_c(stop: &'static AtomicBool) -> crate::Result<()> {
 /// Runs until `stop`, the duration, or a rejection that reconnecting cannot fix,
 /// passing every event and snapshot to `emit`. Blocks the calling thread.
 /// With [`Watch::relay`] set, the relay serves clients for as long as this runs.
-pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> crate::Result<(), WatchError> {
+pub fn watch(w: &Watch, stop: &AtomicBool, emit: &mut dyn FnMut(Line)) -> Result<(), WatchError> {
     let recorder = w.demos.clone().map(crate::demo::Recorder::new);
     let recording = recorder.as_ref().map(|r| r as &dyn session::Tap);
     match &w.relay {
@@ -232,7 +204,7 @@ pub(crate) fn watch_with(
                     b.streamed
                 }
             },
-            Err(e) if e.is::<Stopped>() => {
+            Err(e) if e.is_stopped() => {
                 emit(Line::Status(Status::Disconnected {
                     reason: "stopped".to_string(),
                     decode_errors: 0,
@@ -244,7 +216,7 @@ pub(crate) fn watch_with(
             Err(e) => {
                 emit(Line::Status(Status::ConnectFailed { reason: e.to_string() }));
                 // Given the game port, try SourceTV's default place next to it: game port + 5.
-                if e.downcast_ref::<GamePort>().is_some()
+                if e.game_port().is_some()
                     && !tried_tv_port
                     && let Some(port) = server.port().checked_add(TV_PORT_OFFSET)
                 {
@@ -252,7 +224,7 @@ pub(crate) fn watch_with(
                     server.set_port(port);
                     continue;
                 }
-                if let Some(r) = e.downcast_ref::<Rejected>()
+                if let Some(r) = e.rejected()
                     && let Some(kind) = Fatal::from_reason(&r.0)
                 {
                     return Err(WatchError::Rejected { kind, reason: e.to_string() });
@@ -331,15 +303,15 @@ mod tests {
 
     #[test]
     fn other_errors_keep_their_chain() {
-        let e = WatchError::from(anyhow!("the cause").context("the effect"));
-        assert_eq!(e.to_string(), "the effect: the cause");
-        assert!(std::error::Error::source(&e).is_some());
+        let e = WatchError::from(Err::<(), _>(invalid!("the cause")).context("have the effect").unwrap_err());
+        assert_eq!(e.to_string(), "cannot have the effect");
+        assert_eq!(std::error::Error::source(&e).map(ToString::to_string).as_deref(), Some("the cause"));
     }
 
     #[test]
     fn only_ipv4_addresses_resolve() {
         assert_eq!(resolve("127.0.0.1:27020").unwrap().port(), 27020);
-        assert!(resolve("127.0.0.1").unwrap_err().to_string().contains("resolving"));
-        assert!(resolve("[::1]:27020").unwrap_err().to_string().contains("no IPv4 address"));
+        assert!(resolve("127.0.0.1").unwrap_err().to_string().contains("cannot resolve 127.0.0.1"));
+        assert!(resolve("[::1]:27020").unwrap_err().to_string().contains("cannot find an IPv4 address"));
     }
 }

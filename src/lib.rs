@@ -20,7 +20,7 @@ mod net;
 mod session;
 mod sync;
 
-pub use self::error::{Error, ErrorKind, Result};
+pub use self::error::InternalError;
 pub use self::output::Line;
 pub use self::session::{DEFAULT_SNAPSHOT_HZ, DEFAULT_TICK_INTERVAL, Fatal, Options, parse_snapshot_hz};
 
@@ -33,3 +33,44 @@ mod hostile;
 mod recovery;
 #[cfg(test)]
 mod testing;
+
+/// What went wrong in a call of this library.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum Error {
+    /// A file or socket could not be opened, read or written, or an address resolved.
+    #[error("cannot {doing}")]
+    Io {
+        /// What was being done.
+        doing: String,
+        /// The I/O error.
+        source: std::io::Error,
+    },
+    /// Data that is not what it should be: a demo, capture, tables or message cut short or
+    /// broken, or an argument out of range.
+    #[error("{reason}")]
+    Invalid {
+        /// What is wrong.
+        reason: String,
+    },
+    /// A build with no tables compiled in, and no demo of it given.
+    #[error("cannot find built-in tables for build {build}")]
+    UnknownBuild {
+        /// The build (`A2S_INFO` `version`).
+        build: String,
+    },
+    /// What could not be done, and why.
+    #[error("cannot {doing}")]
+    Failed {
+        /// What was being done.
+        doing: String,
+        /// Why it failed.
+        source: Box<Error>,
+    },
+    /// A failure in a library this one builds on.
+    #[error(transparent)]
+    Internal(#[from] InternalError),
+}
+
+/// A result of this library's calls.
+pub type Result<T, E = Error> = std::result::Result<T, E>;

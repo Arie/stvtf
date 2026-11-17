@@ -64,30 +64,33 @@ fn bad_arguments_say_what_is_wrong() {
     refuses(&["demo", "a.dem", "--hz"], "a value is required for '--hz");
     refuses(&["demo", "a.dem", "b.dem"], "unexpected argument 'b.dem'");
     refuses(&["demo", "a.dem", "--record", "x"], "unexpected argument '--record'");
-    refuses(&["connect", "127.0.0.1:1", "--hz", "fast"], "invalid value 'fast' for '--hz <HZ>': not a number");
-    refuses(&["connect", "127.0.0.1:1", "--crc", "xyz"], "invalid value 'xyz' for '--crc <HEX>': not hex");
-    refuses(&["connect", "127.0.0.1:1", "--seconds", "soon"], "not a number");
-    refuses(&["connect", "127.0.0.1:1", "--seconds", "-1"], "must be 0 or more");
+    refuses(&["connect", "127.0.0.1:1", "--hz", "fast"], "invalid value 'fast' for '--hz <HZ>': cannot read a number");
+    refuses(&["connect", "127.0.0.1:1", "--crc", "xyz"], "invalid value 'xyz' for '--crc <HEX>': cannot read hex");
+    refuses(&["connect", "127.0.0.1:1", "--seconds", "soon"], "cannot read a number");
+    refuses(&["connect", "127.0.0.1:1", "--seconds", "-1"], "cannot be below 0");
     let cap = fixture("bots_cp_badlands.cap");
     for slots in ["0", "256"] {
-        refuses(&["relay", &cap, "--relay-password", "x", "--relay-slots", slots], "must be 1 to 255");
+        refuses(&["relay", &cap, "--relay-password", "x", "--relay-slots", slots], "cannot be outside 1 to 255");
     }
-    refuses(&["relay", &cap, "--relay-password", "x", "--relay-slots", "many"], "not a number");
+    refuses(&["relay", &cap, "--relay-password", "x", "--relay-slots", "many"], "cannot read a number");
     for speed in ["0", "-1", "inf"] {
         refuses(
             &["relay", &cap, "--relay-password", "x", "--listen", "127.0.0.1:0", "--speed", speed],
-            "must be over 0",
+            "cannot be 0, below or infinite",
         );
     }
-    fails_with(&["relay", &cap, "--relay-password", "x", "--listen", "not an address"], "binding not an address");
+    fails_with(&["relay", &cap, "--relay-password", "x", "--listen", "not an address"], "cannot bind not an address");
 }
 
 #[test]
 fn files_that_are_missing_or_of_another_kind_are_errors() {
-    fails_with(&["demo", "/nonexistent.dem"], "reading /nonexistent.dem");
-    fails_with(&["replay", "/nonexistent.cap"], "reading /nonexistent.cap");
-    fails_with(&["replay", &fixture("tc_hydro.dem")], "not an stvtf capture");
-    fails_with(&["replay", &fixture("bots_cp_badlands.cap"), "--build", "1"], "no built-in tables");
+    fails_with(&["demo", "/nonexistent.dem"], "cannot read /nonexistent.dem");
+    fails_with(&["replay", "/nonexistent.cap"], "cannot read /nonexistent.cap");
+    fails_with(&["replay", &fixture("tc_hydro.dem")], "cannot read a file that is not an stvtf capture");
+    fails_with(
+        &["replay", &fixture("bots_cp_badlands.cap"), "--build", "1"],
+        "cannot find built-in tables for build 1: pass --tables",
+    );
 }
 
 #[test]
@@ -227,7 +230,7 @@ fn relay_connect_record_terminate_and_replay() {
     assert!(exit.success(), "the relay stops as cleanly: {exit:?}");
 
     // A recording is never overwritten.
-    fails_with(&["connect", "127.0.0.1:1", "--record", cap.to_str().unwrap()], "creating capture");
+    fails_with(&["connect", "127.0.0.1:1", "--record", cap.to_str().unwrap()], "cannot create capture");
 
     let replayed = run(&["replay", cap.to_str().unwrap(), "--hz", "10"]);
     assert!(replayed.status.success(), "{}", String::from_utf8_lossy(&replayed.stderr));

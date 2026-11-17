@@ -10,9 +10,11 @@
 //! side only, never sent, and set on just `m_flSimulationTime` and `m_flAnimTime`, so it is put
 //! back on those.
 
-use anyhow::{Context, Result};
 use tf_demo_parser::demo::packet::datatable::DataTablePacket;
 use tf_demo_parser::demo::sendprop::{RawSendPropDefinition, SendPropFlag, SendPropFlags, SendPropType};
+
+use crate::Result;
+use crate::error::Context;
 
 const ENCODED_AGAINST_TICKCOUNT: u32 = 1 << 16;
 const ENCODED_AGAINST_TICKCOUNT_PROPS: [&str; 2] = ["m_flSimulationTime", "m_flAnimTime"];
@@ -45,7 +47,7 @@ pub(super) fn sendtable_crc(dt: &DataTablePacket) -> Result<u32> {
     let mut h = crc32fast::Hasher::new();
     for class in &dt.server_classes {
         let table = dt.tables.iter().find(|t| t.name == class.data_table).with_context(|| {
-            format!("no send table {} for class {}", class.data_table.as_str(), class.name.as_str())
+            format!("cannot find send table {} for class {}", class.data_table.as_str(), class.name.as_str())
         })?;
         h.update(table.name.as_bytes());
         // The parser keeps an array's element prop inside the array; the engine lists it just
@@ -69,7 +71,7 @@ fn prop(h: &mut crc32fast::Hasher, p: &RawSendPropDefinition) -> Result<()> {
     h.update(&(p.prop_type as u32).to_le_bytes());
     h.update(name.as_bytes());
     h.update(&flags.to_le_bytes());
-    let missing = || format!("send prop {name} lacks a field its type has");
+    let missing = || format!("cannot find a field of send prop {name} that its type has");
     if p.prop_type == SendPropType::DataTable || p.is_exclude() {
         h.update(p.table_name.as_ref().with_context(missing)?.as_bytes());
     } else if p.prop_type == SendPropType::Array {

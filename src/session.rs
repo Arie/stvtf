@@ -17,10 +17,10 @@ use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
-
+use crate::Result;
 use crate::capture::Recorder;
 use crate::decode::{Decoder, Lifecycle, Tables};
+use crate::error::{bail, invalid};
 use crate::net::bits::BitBuf;
 use crate::net::handshake::{Connection, Wait};
 use crate::net::messages::{self, Signon};
@@ -60,10 +60,10 @@ pub const DEFAULT_SNAPSHOT_HZ: f32 = 20.0;
 pub const DEFAULT_TICK_INTERVAL: f32 = 0.015;
 
 /// A snapshot rate as written: a number, 0 or more (0 disables snapshots).
-pub fn parse_snapshot_hz(hz: &str) -> crate::Result<f32> {
-    let parsed: f32 = hz.parse().map_err(|_| anyhow::anyhow!("not a number"))?;
+pub fn parse_snapshot_hz(hz: &str) -> Result<f32> {
+    let parsed: f32 = hz.parse().map_err(|_| invalid!("cannot read a number"))?;
     if !parsed.is_finite() || parsed < 0.0 {
-        return Err(anyhow::anyhow!("must be 0 or more").into());
+        bail!("cannot be below 0 or infinite");
     }
     Ok(parsed)
 }
@@ -546,7 +546,7 @@ pub fn run(
     wait: Wait<'_>,
     tap: Option<&dyn Tap>,
     emit: &mut dyn FnMut(Line),
-) -> crate::Result<End> {
+) -> Result<End> {
     let mut s = Session::new(Some(&conn.sock), conn.challenge, opt);
     s.tap = tap;
     if let Some(r) = recorder.as_deref_mut() {
@@ -594,7 +594,7 @@ pub fn replay(
     tables: &Tables,
     opt: &Options,
     emit: &mut dyn FnMut(Line),
-) -> crate::Result<()> {
+) -> Result<()> {
     let mut s = Session::new(None, challenge, opt);
     let mut it = datagrams.iter();
     let mut next = |buf: &mut [u8]| -> Result<Next> { Ok(it.next().map_or(Next::Stop, |d| Next::recorded(d, buf))) };

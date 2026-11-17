@@ -5,8 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::Result;
-
 use super::beams::Kept;
 use super::cursor::{Cursor, owned};
 use super::index::Index;
@@ -14,7 +12,9 @@ use super::tuning::{
     CUE_EVERY, FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, PAST_INDEXES, RETRY,
 };
 use super::{Camera, Playback, Want, light, notes, voice};
+use crate::Result;
 use crate::decode::{BeamModel, ModelsSent};
+use crate::error::bail;
 use crate::relay::handover::{Played, TakenOver};
 use crate::relay::hub::Hub;
 use crate::relay::{Handover, Relay};
@@ -349,7 +349,7 @@ impl Player<'_> {
         };
         skim(&mut c, None, played.tick);
         if c.tick() != played.tick || !c.started {
-            anyhow::bail!("{} has no frame at {}", played.demo.display(), played.tick);
+            bail!("cannot find a frame of {} at {}", played.demo.display(), played.tick);
         }
         tracing::info!(
             "relay: :{} goes on at {} after {} ms, {} clients",

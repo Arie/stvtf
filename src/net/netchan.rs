@@ -4,9 +4,9 @@
 //! | [u8 choked if CHOKED] | [u32 challenge if CHALLENGE]. The checksum covers
 //! everything after itself.
 
-use anyhow::{Result, bail};
-
 use super::bits::{BitBuf, BitWriter};
+use crate::Result;
+use crate::error::{bail, invalid};
 
 pub const FLAG_RELIABLE: u8 = 0x01;
 pub const FLAG_CHOKED: u8 = 0x10;
@@ -80,7 +80,7 @@ pub fn verify_checksum(data: &[u8]) -> bool {
 
 pub fn decode_header(data: &[u8]) -> Result<Header> {
     if data.len() < HEADER_MIN {
-        bail!("short packet ({} bytes)", data.len());
+        bail!("cannot read a packet of {} bytes: too short", data.len());
     }
     let sequence = i32::from_le_bytes(data[..SEQUENCE_LEN].try_into()?);
     let ack = i32::from_le_bytes(data[SEQUENCE_LEN..FLAGS_AT].try_into()?);
@@ -90,12 +90,14 @@ pub fn decode_header(data: &[u8]) -> Result<Header> {
     off += 1;
     let mut choked = None;
     if flags & FLAG_CHOKED != 0 {
-        choked = Some(*data.get(off).ok_or_else(|| anyhow::anyhow!("truncated choked"))?);
+        choked = Some(*data.get(off).ok_or_else(|| invalid!("cannot read the choked count: packet cut short"))?);
         off += 1;
     }
     let mut challenge = None;
     if flags & FLAG_CHALLENGE != 0 {
-        let b = data.get(off..off + CHALLENGE_LEN).ok_or_else(|| anyhow::anyhow!("truncated challenge"))?;
+        let b = data
+            .get(off..off + CHALLENGE_LEN)
+            .ok_or_else(|| invalid!("cannot read the challenge: packet cut short"))?;
         challenge = Some(u32::from_le_bytes(b.try_into()?));
         off += CHALLENGE_LEN;
     }

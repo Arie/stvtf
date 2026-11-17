@@ -135,35 +135,39 @@ struct RelayTo {
 static STOP: AtomicBool = AtomicBool::new(false);
 
 fn seconds(s: &str) -> Result<Duration> {
-    let secs: f64 = s.parse().context("not a number")?;
-    Duration::try_from_secs_f64(secs).context("must be 0 or more")
+    let secs: f64 = s.parse().context("cannot read a number")?;
+    Duration::try_from_secs_f64(secs).context("cannot be below 0")
 }
 
 fn speed(s: &str) -> Result<f64> {
-    let speed: f64 = s.parse().context("not a number")?;
-    anyhow::ensure!(speed.is_finite() && speed > 0.0, "must be over 0");
+    let speed: f64 = s.parse().context("cannot read a number")?;
+    anyhow::ensure!(speed.is_finite() && speed > 0.0, "cannot be 0, below or infinite");
     Ok(speed)
 }
 
 fn hex(s: &str) -> Result<u32> {
-    u32::from_str_radix(s.trim_start_matches("0x"), 16).context("not hex")
+    u32::from_str_radix(s.trim_start_matches("0x"), 16).context("cannot read hex")
 }
 
 fn slots(s: &str) -> Result<usize> {
-    let n: usize = s.parse().context("not a number")?;
-    anyhow::ensure!((1..=MAX_SLOTS).contains(&n), "must be 1 to {MAX_SLOTS}");
+    let n: usize = s.parse().context("cannot read a number")?;
+    anyhow::ensure!((1..=MAX_SLOTS).contains(&n), "cannot be outside 1 to {MAX_SLOTS}");
     Ok(n)
 }
 
 impl Build {
     /// The tables of `--build`, or of the current build.
     fn tables(&self) -> Result<Tables> {
-        Ok(stvtf::builds::tables(self.build.as_deref().unwrap_or(stvtf::builds::CURRENT), self.tables.as_deref())?)
+        let build = self.build.as_deref().unwrap_or(stvtf::builds::CURRENT);
+        match stvtf::builds::tables(build, self.tables.as_deref()) {
+            Err(e @ stvtf::Error::UnknownBuild { .. }) => Err(anyhow::anyhow!("{e}: pass --tables SAME_BUILD.dem")),
+            tables => Ok(tables?),
+        }
     }
 }
 
 fn read(file: &Path) -> Result<Vec<u8>> {
-    std::fs::read(file).with_context(|| format!("reading {}", file.display()))
+    std::fs::read(file).with_context(|| format!("cannot read {}", file.display()))
 }
 
 fn main() -> Result<()> {

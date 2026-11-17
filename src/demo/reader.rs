@@ -2,13 +2,13 @@
 
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 
-use anyhow::{Context, Result, bail};
-
 use super::command::{
     CONSOLE_CMD, DATA_TABLES, MAX_PACKET, MESSAGE, META_LEN, SIGNON, STOP, STRING_TABLES, SYNC_TICK, USER_CMD,
     VIEW_ANGLES,
 };
 use super::{HEADER_LEN, Header};
+use crate::Result;
+use crate::error::{Context, bail};
 
 /// One packet of a demo. Signon and message packets hold a message stream, byte padded.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,15 +56,15 @@ pub struct Reader<R> {
 
 impl<R: Read + Seek> Reader<R> {
     /// Opens a demo, reading its header.
-    pub fn new(mut r: R) -> crate::Result<Self> {
+    pub fn new(mut r: R) -> Result<Self> {
         r.seek(SeekFrom::Start(0))?;
         let mut b = vec![0u8; HEADER_LEN];
-        r.read_exact(&mut b).context("reading the demo header")?;
+        r.read_exact(&mut b).context("read the demo header")?;
         Ok(Reader { r, pos: HEADER_LEN as u64, header: Header::parse(&b)?, view: [0.0; 3] })
     }
 
     /// Reads on from `pos`, where a packet starts (one [`Reader::position`] gave).
-    pub fn seek_to(&mut self, pos: u64) -> crate::Result<()> {
+    pub fn seek_to(&mut self, pos: u64) -> Result<()> {
         self.r.seek(SeekFrom::Start(pos))?;
         self.pos = pos;
         Ok(())
@@ -77,7 +77,7 @@ impl<R: Read + Seek> Reader<R> {
 
     /// The next packet. At the end of what was written so far it stays where it was, so a
     /// later call reads the packet once it is all there.
-    pub fn next_packet(&mut self) -> crate::Result<Next> {
+    pub fn next_packet(&mut self) -> Result<Next> {
         match self.read_packet() {
             Ok(p) => {
                 self.pos = self.r.stream_position()?;
@@ -86,11 +86,11 @@ impl<R: Read + Seek> Reader<R> {
                     p => Next::Packet(p),
                 })
             }
-            Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == ErrorKind::UnexpectedEof) => {
+            Err(e) if e.io_kind() == Some(ErrorKind::UnexpectedEof) => {
                 self.r.seek(SeekFrom::Start(self.pos))?;
                 Ok(Next::More)
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(e),
         }
     }
 
@@ -114,7 +114,7 @@ impl<R: Read + Seek> Reader<R> {
             }
             DATA_TABLES => Packet::DataTables { tick, data: self.data()? },
             STRING_TABLES => Packet::StringTables { tick, data: self.data()? },
-            other => bail!("demo packet of unknown kind {other}"),
+            other => bail!("cannot read a demo packet of unknown kind {other}"),
         })
     }
 
@@ -144,7 +144,7 @@ impl<R: Read + Seek> Reader<R> {
     pub(super) fn data(&mut self) -> Result<Vec<u8>> {
         let len = self.u32()? as usize;
         if len > MAX_PACKET {
-            bail!("demo packet of {len} bytes");
+            bail!("cannot read a demo packet of {len} bytes");
         }
         let mut data = vec![0u8; len];
         self.r.read_exact(&mut data)?;
