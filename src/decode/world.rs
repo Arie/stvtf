@@ -236,6 +236,11 @@ impl World {
         self.player = Some(player);
     }
 
+    #[cfg(test)]
+    pub(crate) fn player(&self) -> Option<u32> {
+        self.player
+    }
+
     /// Whether frame `tick` is kept.
     pub(crate) fn has(&self, tick: u32) -> bool {
         self.kept(tick).is_some()

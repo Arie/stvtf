@@ -245,7 +245,9 @@ mod tests {
         let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
         let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
         let demo = crate::fixture("pl_upward.dem");
-        for path in [demo, live] {
+        // A player's own: its entities enter on baselines of its own, which a checkpoint keeps.
+        let pov = crate::fixture("pov_koth_viaduct.dem");
+        for path in [demo, live, pov] {
             let index =
                 Arc::new(Index { path: path.clone(), marks: Mutex::new(Vec::new()), stop: AtomicBool::new(false) });
             index_demo(&path, &Arc::downgrade(&index), 300).unwrap();

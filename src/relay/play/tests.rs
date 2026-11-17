@@ -380,6 +380,57 @@ fn a_live_recording_plays_on_after_a_full_update() {
     }
 }
 
+/// A demo a player recorded: its string tables as recording started reach the client, and its
+/// entities, which enter on baselines only that player's game had, are written anew. A decoder
+/// with no more than a client has ends with the same entities, looking where the player did.
+#[test]
+fn a_players_own_demo_plays_to_a_client_that_has_only_its_signon() {
+    let path = crate::fixture("pov_koth_viaduct.dem");
+    let mut c = Cursor::open_detached(&path).unwrap();
+    while c.recent.len() < 120 {
+        match c.next_tick() {
+            Some(NOT_A_FRAME) => c.skip_next(),
+            Some(_) => drop(c.decode()),
+            None => panic!("the demo ended"),
+        }
+    }
+    assert!(c.dec.players_own() && c.dec.own_baselines());
+    let mut b = bench_with_one_in();
+    b.client_state().set_phase(Phase::WaitingFull, Instant::now());
+    let tick = c.dec.server_tick() + 60;
+    let (relay, c, want) = relay_playing(&mut b, c, tick);
+    let mut p = Player::new(&relay);
+    p.cur = Some(c);
+    for _ in 0..90 {
+        p.step(&want).unwrap();
+        clients_ack(&relay);
+    }
+    // As a client: the signon, then what it is sent.
+    let mut client = Cursor::open_detached(&path).unwrap();
+    b.client.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+    let mut rx = Receiver::new(Some(b.challenge));
+    let mut buf = vec![0u8; crate::net::MAX_DATAGRAM];
+    let (mut fulls, mut deltas, mut looks) = (0, 0, 0);
+    while let Ok(len) = b.client.recv(&mut buf) {
+        let Some(pkt) = rx.feed(&buf[..len], Instant::now()) else { continue };
+        for s in &pkt.streams {
+            let life = client.dec.feed(s.bits.bytes(), s.bits.nbits());
+            assert!(!life.lost_frame, "a frame the client cannot take");
+            looks += life.spans.iter().filter(|s| u32::from(s.id) == messages::SVC_FIXANGLE).count();
+            match client.dec.entities(s.bits.bytes()) {
+                Some(Entities::Full) => fulls += 1,
+                Some(Entities::Delta(_)) => deltas += 1,
+                None => {}
+            }
+        }
+    }
+    let played = &p.cur.as_ref().unwrap().dec;
+    assert_eq!((fulls, client.dec.server_tick()), (1, played.server_tick()));
+    assert!(deltas >= 30 && looks >= deltas, "{deltas} deltas, told where to look {looks} times");
+    assert!(played.player_for_tests().is_some());
+    assert!(client.dec.world_compared() == played.world_compared(), "the client's entities are the demo's");
+}
+
 /// A recording that stopped with no end written (its server gone for good): a client coming in
 /// at its last frame gets a full update of that one, once no frame came after it for a while.
 #[test]

@@ -279,6 +279,11 @@ impl Decoder {
         self.players_own
     }
 
+    #[cfg(test)]
+    pub(crate) fn player_for_tests(&self) -> Option<u32> {
+        self.world.as_ref()?.player()
+    }
+
     /// Whether the stream's entity messages are for no client as they are (see `world`).
     pub(crate) fn own_baselines(&self) -> bool {
         self.world.as_ref().is_some_and(world::World::own_baselines)
@@ -418,7 +423,8 @@ impl Decoder {
     }
 
     /// [`Decoder::world_dump`] to compare two decoders, one started from a full update: without
-    /// the weapons' `m_bResetParity`, which a full update gives as a client starts with it.
+    /// the weapons' `m_bResetParity`, which a full update gives as a client starts with it, nor a
+    /// player's own demo's player's origin for the other players, which it gives as their own.
     #[cfg(test)]
     pub(crate) fn world_compared(&self) -> std::collections::BTreeMap<u32, world::Dumped> {
         let state = self.handler.get_parser_state();
@@ -427,6 +433,14 @@ impl Decoder {
         for (class, _, props) in dump.values_mut() {
             if let Some(at) = props_index_for_tests(state, *class, parity) {
                 props.retain(|(i, _)| *i != at);
+            }
+        }
+        if let Some((class, _, props)) = self.player_for_tests().and_then(|p| dump.get_mut(&p)) {
+            for name in ["m_vecOrigin", "m_vecOrigin[2]"] {
+                let id = tf_demo_parser::demo::sendprop::SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", name);
+                if let Some(at) = props_index_for_tests(state, *class, id) {
+                    props.retain(|(i, _)| *i != at);
+                }
             }
         }
         dump
