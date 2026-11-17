@@ -20,7 +20,7 @@ pub(super) const COUNTS_AT: usize = NAMES_AT + 4 * NAME_LEN;
 const _: () = assert!(COUNTS_AT + 16 == HEADER_LEN, "seconds, ticks, frames and signon bytes end the header");
 
 /// What a demo's header says.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Header {
     /// The network protocol (24 for TF2).
     pub protocol: u32,

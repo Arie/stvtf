@@ -20,7 +20,7 @@ use crate::net::messages::{self, Signon};
 const RESTARTING: &str = "stv.tf: restarting, retry";
 
 /// A relay's clients and what they have, for [`Relay::take_over`](super::Relay::take_over).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Handover {
     clients: Vec<HandedClient>,
     backlog: Vec<HandedEntry>,
@@ -39,7 +39,7 @@ impl Handover {
 }
 
 /// A client's connection: who it is and where its packets and ours are.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct HandedClient {
     addr: SocketAddr,
     name: String,
@@ -52,7 +52,7 @@ struct HandedClient {
 }
 
 /// A backlog entry: its bits in base64, how many, and the signon state it waits for.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct HandedEntry {
     bits: String,
     nbits: usize,
@@ -61,7 +61,7 @@ struct HandedEntry {
 
 /// Where the player was: the demo the clients are signed on to, the tick of its last frame, and
 /// the models they have.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub(super) struct Played {
     pub(super) demo: PathBuf,
     pub(super) tick: i64,

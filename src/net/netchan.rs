@@ -26,7 +26,7 @@ const CHALLENGE_LEN: usize = 4;
 /// The shortest header: up to and including `reliable_state`.
 pub const HEADER_MIN: usize = CHECKSUM_START + 1;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Header {
     pub sequence: i32,
     /// The last of our sequences the other side had received.
@@ -44,7 +44,7 @@ impl Header {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Kind {
     Oob,
     Split,
@@ -105,7 +105,7 @@ pub fn decode_header(data: &[u8]) -> Result<Header> {
 }
 
 /// The header fields of an outbound packet.
-#[derive(Debug, Clone, Copy)]
+#[derive(Copy, Clone, Debug)]
 pub struct OutHeader {
     /// Our outgoing sequence number.
     pub sequence: i32,

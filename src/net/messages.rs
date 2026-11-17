@@ -37,7 +37,7 @@ const MAX_CUSTOM_FILES: usize = 4;
 const GOODBYE: &str = "Disconnect by user.";
 
 /// Signon states (`SIGNONSTATE_*` in the engine). Ordered, so `>=` compares progress.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum Signon {
     None = 0,

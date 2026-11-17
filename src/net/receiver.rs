@@ -29,7 +29,7 @@ pub struct Received {
     pub streams: Vec<MsgStream>,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Counters {
     pub datagrams: u64,
     pub packets: u64,

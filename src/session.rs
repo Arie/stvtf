@@ -30,7 +30,7 @@ use crate::net::reliable;
 use crate::output::{Line, Status};
 
 /// How a session behaves.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Options {
     /// Spectator name shown on the server.
     pub name: String,
@@ -79,7 +79,7 @@ struct Pending {
 }
 
 /// Rejections that reconnecting cannot fix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Fatal {
     /// The `tv_password` is wrong.
     BadPassword,

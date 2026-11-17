@@ -9,7 +9,7 @@ use crate::Result;
 
 /// Voice to write into a demo: Opus frames (20 ms each) as the voice of the player in `slot`
 /// (their entity less one), whose Steam account is `account`, heard at demo tick `tick`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Voiced {
     /// The demo's tick it is heard at: the server's, less that of the demo's first frame.
     pub tick: i32,

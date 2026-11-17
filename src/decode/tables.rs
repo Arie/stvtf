@@ -70,7 +70,7 @@ const BEAM_SPRITES: [&str; 3] = ["sprites/laserbeam.vmt", "sprites/physbeam.vmt"
 
 /// What the clients' `modelprecache` has had since their signon, which a jump back does not take
 /// from them: how many entries, and where the match's own laser is.
-#[derive(Default, Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ModelsSent {
     next: u16,
     laser: Option<u16>,
@@ -91,7 +91,7 @@ impl ModelsSent {
 
 /// The model index to draw beams with, and the message that loads it, to send first, if the
 /// clients do not have it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BeamModel {
     pub(crate) index: u16,
     pub(crate) load: Option<BitBuf>,
@@ -99,7 +99,7 @@ pub(crate) struct BeamModel {
 
 /// Where a game client puts each `instancebaseline` entry, by server index: past its end goes
 /// at its end. Baselines are found by name, so moving them is safe.
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Placed {
     table: Option<u8>,
     at: HashMap<u16, u16>,

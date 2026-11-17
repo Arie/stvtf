@@ -14,7 +14,7 @@ const MAX_SPEAKERS: usize = 256;
 /// Opus frames (20 ms each, in order) to send as the voice of the player with user id `user`, or
 /// with none (a caster, a coach) in a slot nobody is in; on a full server as `SourceTV`'s own,
 /// one such voice at a time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VoiceIn {
     /// The player's user id; none for a speaker who is no player.
     pub user: Option<u16>,
@@ -27,7 +27,7 @@ pub struct VoiceIn {
 }
 
 /// Whose voice a packet is, to number its frames: a client orders a speaker's frames by them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 enum Slot {
     /// A player, by user id.
     Player(u16),

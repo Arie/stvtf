@@ -177,7 +177,7 @@ pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
 const WAIT_POLL: Duration = Duration::from_millis(50);
 
 /// What ends a wait for a server early: asked to stop, or out of time as a whole.
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone)]
 pub struct Wait<'a> {
     pub stop: &'a AtomicBool,
     pub until: Option<Instant>,

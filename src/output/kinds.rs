@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 /// A player's user id: what events call `player`, `attacker`, `victim` and so on. Not an entity
 /// index; a user id is not reused while the server runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct PlayerId(pub u16);
 
@@ -18,7 +18,7 @@ impl fmt::Display for PlayerId {
 }
 
 /// A team.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Team {
     /// RED.
@@ -33,7 +33,7 @@ pub enum Team {
 }
 
 /// A player class.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "the nine classes")]
 pub enum Class {
@@ -51,7 +51,7 @@ pub enum Class {
 }
 
 /// An engineer's building, or a spy's sapper (in events only).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "named after the buildings")]
 pub enum BuildingKind {
@@ -63,7 +63,7 @@ pub enum BuildingKind {
 }
 
 /// What a projectile is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[expect(missing_docs, reason = "named after the projectiles")]
 pub enum ProjectileKind {
     Rocket,
@@ -90,7 +90,7 @@ pub enum ProjectileKind {
 }
 
 /// Which medigun a medic carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "named after the mediguns")]
 pub enum MedigunKind {
@@ -102,7 +102,7 @@ pub enum MedigunKind {
 }
 
 /// The damage type a vaccinator resists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "named after the damage types")]
 pub enum Resist {
@@ -112,7 +112,7 @@ pub enum Resist {
 }
 
 /// The medigun charge a player is under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[expect(missing_docs, reason = "named after the charges")]
 pub enum Ubered {
@@ -125,7 +125,7 @@ pub enum Ubered {
 }
 
 /// The round state (`gamerules_roundstate_t`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[expect(missing_docs, reason = "TF2's round states")]
 pub enum Round {
@@ -144,7 +144,7 @@ pub enum Round {
 }
 
 /// Where a flag is.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub enum FlagStatus {
@@ -155,7 +155,7 @@ pub enum FlagStatus {
 }
 
 /// What happened to a flag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub enum FlagAction {
@@ -167,7 +167,7 @@ pub enum FlagAction {
 }
 
 /// A soldier's banner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[expect(missing_docs, reason = "named after the banners")]
 pub enum BannerKind {
@@ -178,7 +178,7 @@ pub enum BannerKind {
 }
 
 /// What healed a player, as far as the event tells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HealSource {
     /// A medic's medigun.
@@ -194,7 +194,7 @@ pub enum HealSource {
 }
 
 /// What a player blast jumped with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub enum JumpKind {
@@ -205,7 +205,7 @@ pub enum JumpKind {
 }
 
 /// Whether a blast jump started or landed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub enum JumpPhase {
@@ -214,7 +214,7 @@ pub enum JumpPhase {
 }
 
 /// What a player picked up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub enum PickupItem {
@@ -223,7 +223,7 @@ pub enum PickupItem {
 }
 
 /// The size of a pickup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub enum PickupSize {
@@ -233,7 +233,7 @@ pub enum PickupSize {
 }
 
 /// What a bullet hit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImpactKind {
     /// A player.
@@ -245,7 +245,7 @@ pub enum ImpactKind {
 }
 
 /// Where a chat line went.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[expect(missing_docs, reason = "TF2's chat kinds")]
 pub enum ChatKind {
     ChatAll,
@@ -260,7 +260,7 @@ pub enum ChatKind {
 }
 
 /// A TF2 player condition (`ETFCond`), written by name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Condition(u8);
 
 impl Condition {

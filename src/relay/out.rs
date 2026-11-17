@@ -11,7 +11,7 @@ use crate::net::{compress, split};
 
 /// Whether a client gets a packet that would carry nothing: a keepalive, or an ack of its
 /// reliable data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Empty {
     Send,
     Skip,

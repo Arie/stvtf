@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::Position;
 
 /// The connection's state (`type: status`, tagged by `state`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Status {
     /// Connecting to `server`, as a client of `build`.
@@ -67,7 +67,7 @@ pub enum Status {
 }
 
 /// The server, at every signon.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[expect(missing_docs, reason = "the server's own values")]
 pub struct Server {
     pub tick: u32,
@@ -80,7 +80,7 @@ pub struct Server {
 }
 
 /// The world's bounds, once per map. They include the 3D skybox.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[expect(missing_docs, reason = "self-explanatory")]
 pub struct World {
     pub tick: u32,

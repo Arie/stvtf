@@ -12,7 +12,7 @@ use crate::decode::Decoder;
 use crate::net::bits::BitBuf;
 
 /// A note the clients in the game keep seeing, until replaced.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Note {
     /// Its own, while it is kept: what hides it.
     pub id: u32,

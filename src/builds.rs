@@ -19,7 +19,7 @@ const BUILDS: &[(&str, &[u8])] = &[
 const TABLES_11138802: &[u8] = include_bytes!("../assets/tables_11138802.dem");
 
 /// Compiled-in data for one TF2 server build.
-#[derive(Debug, Clone, Copy)]
+#[derive(Copy, Clone, Debug)]
 pub struct Build {
     /// A demo of that build cut off after its data tables, which give its `SendTable` CRC too.
     pub tables: &'static [u8],

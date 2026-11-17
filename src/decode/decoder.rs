@@ -20,7 +20,7 @@ use crate::net::messages::{SVC_GAMEEVENT, Signon, TYPE_BITS};
 use crate::output::Line;
 
 /// What the session needs to know from the streams it just fed.
-#[derive(Default, Debug, Clone)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Lifecycle {
     pub signon: Vec<Signon>,
     pub server_info: Option<(i32, String)>,
@@ -53,7 +53,7 @@ impl Lifecycle {
 }
 
 /// One message in a stream: its type id and its bits.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Span {
     pub id: u8,
     pub bits: std::ops::Range<usize>,
@@ -71,7 +71,7 @@ pub(super) const EVENT_ID_BITS: usize = 9;
 pub(super) const ENTRY_COUNT_BITS: usize = 11;
 
 /// A frame's entities: in full, or as a delta from the frame at a server tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Entities {
     Full,
     Delta(u32),

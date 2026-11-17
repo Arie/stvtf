@@ -13,7 +13,7 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Optio
     T::deserialize(d).map(Some)
 }
 /// The full state of the match (not a delta).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Snapshot {
     /// Server tick.
     pub tick: u32,
@@ -54,7 +54,7 @@ pub struct Snapshot {
 }
 
 /// A player in a snapshot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Player {
     /// User id.
     pub id: PlayerId,
@@ -107,7 +107,7 @@ pub struct Player {
 
 /// A player's scoreboard line. Points, kills and deaths are the server's; assists, damage and
 /// healing are counted from events, as logs.tf does.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[expect(missing_docs, reason = "the scoreboard's columns")]
 pub struct PlayerScore {
     pub points: i64,
@@ -122,7 +122,7 @@ pub struct PlayerScore {
 }
 
 /// A weapon in hand.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Weapon {
     /// Item definition index.
     pub item: i64,
@@ -131,7 +131,7 @@ pub struct Weapon {
 }
 
 /// A firing flamethrower.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Flames {
     /// Crit flames.
     pub crit: bool,
@@ -140,7 +140,7 @@ pub struct Flames {
 }
 
 /// A medic's medigun.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Medigun {
     /// Which one.
     pub kind: MedigunKind,
@@ -153,7 +153,7 @@ pub struct Medigun {
 }
 
 /// A projectile in flight.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Projectile {
     /// Entity index.
     pub id: u32,
@@ -172,7 +172,7 @@ pub struct Projectile {
 }
 
 /// A building.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Building {
     /// Entity index.
     pub id: u32,
@@ -215,7 +215,7 @@ pub struct Building {
 }
 
 /// An objective, tagged by `kind`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Objective {
     /// A control point.
@@ -343,7 +343,7 @@ pub enum Objective {
 }
 
 /// Robot and player destruction points, or what a map that reuses their logic counts with it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Points {
     /// Red's points.
     pub red: i64,
@@ -358,7 +358,7 @@ pub struct Points {
 }
 
 /// Mann vs. Machine's wave.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Mvm {
     /// The current wave, from 1.
     pub wave: u16,
@@ -375,7 +375,7 @@ pub struct Mvm {
 }
 
 /// One kind of robot in a Mann vs. Machine wave.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[expect(clippy::struct_excessive_bools, reason = "TF2's class flags")]
 pub struct MvmClass {
     /// Its icon's name (`scout`, `soldier_barrage`, `sentry_buster`, …).
@@ -395,7 +395,7 @@ pub struct MvmClass {
 }
 
 /// Players on a control point, per team.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[expect(missing_docs, reason = "per team")]
 pub struct OnPoint {
     pub red: u8,
@@ -403,7 +403,7 @@ pub struct OnPoint {
 }
 
 /// A count per team.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[expect(missing_docs, reason = "per team")]
 pub struct Score {
     pub red: i64,
@@ -411,7 +411,7 @@ pub struct Score {
 }
 
 /// A round timer on the HUD.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Timer {
     /// Whose timer (on King of the Hill each team has one).
     pub team: Team,
@@ -424,7 +424,7 @@ pub struct Timer {
 }
 
 /// Stopwatch: the first half's attackers set a time (and points), the second half's must beat it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Stopwatch {
     /// The team attacking this half.
     pub attackers: Team,
@@ -446,7 +446,7 @@ pub struct Stopwatch {
 }
 
 /// The stopwatch's state (TF2's `m_nStopWatchState`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StopwatchState {
     /// No time set yet: no point captured.

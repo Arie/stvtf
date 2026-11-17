@@ -16,7 +16,7 @@ const FULL_TURN: f32 = 360.0;
 
 /// A player's line on the scoreboard. Points, kills and deaths are the server's match totals;
 /// damage, healing and assists are counted from events, as logs.tf does.
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub(super) struct Stats {
     pub(super) points: i64,
     pub(super) kills: i64,
@@ -46,7 +46,7 @@ impl Stats {
 }
 
 /// A team entity's team number and score.
-#[derive(Default, Clone, Copy)]
+#[derive(Copy, Clone, Default)]
 pub(super) struct TeamScore {
     pub(super) team: u8,
     pub(super) score: i64,
@@ -57,7 +57,7 @@ pub(super) struct TeamScore {
 }
 
 /// Where a player was and where they looked.
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone)]
 pub(super) struct Pose {
     pub(super) pos: Vector,
     pub(super) yaw: f32,
@@ -71,13 +71,13 @@ impl Pose {
 }
 
 /// A medic's charge and whether it was being released.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Copy, Clone, PartialEq)]
 pub(super) struct Charge {
     pub(super) charge: u8,
     pub(super) releasing: bool,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub(super) struct Sentry {
     /// Turret pose parameters (0..1 over the model's range): [pitch, yaw].
     pub(super) pose: [f32; 2],
@@ -97,7 +97,7 @@ impl Sentry {
 }
 
 /// An intelligence briefcase, or a neutral flag such as the bball ball.
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub(super) struct Flag {
     pub(super) at: Placed,
     pub(super) status: out::FlagStatus,
@@ -112,7 +112,7 @@ pub(super) struct Flag {
     pub(super) hidden: bool,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub(super) struct TrainWatcher {
     pub(super) team: u8,
     /// The cart model (`m_hGlowEnt`), which is attached to the cart's `func_tracktrain`.
@@ -132,7 +132,7 @@ pub(super) struct StopwatchRules {
 }
 
 // Mirrors the timer entity's netprops.
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 #[expect(clippy::struct_excessive_bools)]
 pub(super) struct RoundTimer {
     pub(super) team: u8,
@@ -171,14 +171,14 @@ pub(super) struct Flamethrower {
     pub(super) hit: bool,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub(super) struct Weapon {
     pub(super) item: i64,
     /// -1 and below is TF2's "no clip".
     pub(super) clip: i64,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub(super) struct Medigun {
     pub(super) owner: Option<u32>,
     pub(super) item: i64,
@@ -187,7 +187,7 @@ pub(super) struct Medigun {
     pub(super) target: Option<u32>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub(super) struct ControlPoint {
     pub(super) pos: Option<Vector>,
     pub(super) owner: u8,

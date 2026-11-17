@@ -100,14 +100,14 @@ impl Played {
 }
 
 /// Which part of a datagram a stream is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Part {
     Reliable,
     Unreliable,
 }
 
 /// What feeds a hub.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Mode {
     /// A server, which sends reliable data again until acked.
     Live,

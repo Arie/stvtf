@@ -34,33 +34,33 @@ const PROP_MVM_CLASS_NAMES_2: SendPropIdentifier =
 const PROP_REVIVE_OWNER: SendPropIdentifier = prop_id("DT_TFReviveMarker", "m_hOwner");
 
 /// A positioned entity of one team.
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct Placed {
     pub(crate) team: u8,
     pub(crate) pos: Vector,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 struct Ball {
     at: Placed,
     carrier: Option<u32>,
     hidden: bool,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 struct Robot {
     at: Placed,
     hp: i64,
     max_hp: i64,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 struct Tank {
     at: Placed,
     health: f32,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 struct Revive {
     at: Placed,
     /// The dead player's entity.
@@ -173,7 +173,7 @@ impl Followed {
 }
 
 /// The robot or player destruction logic.
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 struct Logic {
     red: i64,
     blue: i64,
@@ -181,7 +181,7 @@ struct Logic {
     leaders: [Option<u32>; 2],
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 struct MvmState {
     wave: i64,
     waves: i64,
@@ -192,7 +192,7 @@ struct MvmState {
     classes: [WaveClass; 2 * WAVE_CLASSES],
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 struct WaveClass {
     name: String,
     count: i64,

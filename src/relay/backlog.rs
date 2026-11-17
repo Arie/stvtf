@@ -26,7 +26,7 @@ pub(super) struct Backlog {
 }
 
 /// How a string table change added to the backlog reaches the clients past their signon.
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone)]
 pub(super) enum Delivery {
     /// It came in a datagram's unreliable part, which the clients in the game get as it is; with
     /// `queue`, reliably as well (a demo has it once: a lost datagram would lose it for good).

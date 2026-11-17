@@ -20,7 +20,7 @@ use super::{Server, Status, World};
 macro_rules! lines {
     ($($variant:ident($payload:ty),)*) => {
         /// One line of output.
-        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         #[expect(missing_docs, reason = "each variant is documented on the type it holds")]
         pub enum Line {
@@ -218,7 +218,7 @@ impl Line {
 
 /// A line as the CLI writes it: live output also has `time`, the receive time in Unix
 /// milliseconds (about `tv_delay` after the moment in the game).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Stamped {
     /// The line itself.
     #[serde(flatten)]

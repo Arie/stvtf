@@ -16,7 +16,7 @@ use crate::net::receiver::{Received, Receiver};
 /// Frames remembered as sent to a client, at most: as many as a game client keeps.
 const MAX_FRAMES_SENT: usize = 128;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Phase {
     /// Still taking the backlog's signon.
     Signon,

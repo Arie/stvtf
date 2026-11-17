@@ -11,7 +11,7 @@ use crate::Result;
 use crate::error::{Context, bail};
 
 /// One packet of a demo. Signon and message packets hold a message stream, byte padded.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[expect(missing_docs, reason = "the fields are a packet's tick and data")]
 pub enum Packet {
     /// Messages of the signon.

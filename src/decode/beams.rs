@@ -19,7 +19,7 @@ const LIFE_STEP: f32 = 25.6 / 255.0;
 const MAX_WIDTH: f32 = 127.0;
 
 /// A straight line in the world, shown for `life` seconds.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Beam {
     /// Where it starts.
     pub from: [f32; 3],

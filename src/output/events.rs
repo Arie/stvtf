@@ -11,7 +11,7 @@ use super::{
 };
 
 /// A kill.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[expect(clippy::struct_excessive_bools, reason = "the kill feed's flags, each its own field")]
 pub struct Kill {
     /// Server tick.
@@ -47,7 +47,7 @@ pub struct Kill {
 }
 
 /// Damage done.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Damage {
     /// Server tick.
     pub tick: u32,
@@ -68,7 +68,7 @@ pub struct Damage {
 }
 
 /// A player spawned.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Spawn {
     pub tick: u32,
     pub player: PlayerId,
@@ -78,7 +78,7 @@ pub struct Spawn {
 }
 
 /// A medic deployed their charge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Uber {
     /// Server tick.
     pub tick: u32,
@@ -91,7 +91,7 @@ pub struct Uber {
 }
 
 /// A medic's charge filled up (`uber_ready`) or ran out (`uber_ended`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct MedicCharge {
     /// Server tick.
     pub tick: u32,
@@ -102,7 +102,7 @@ pub struct MedicCharge {
 }
 
 /// A player changed team.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TeamChange {
     pub tick: u32,
     pub player: PlayerId,
@@ -113,7 +113,7 @@ pub struct TeamChange {
 }
 
 /// A player changed class.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ClassChange {
     pub tick: u32,
     pub player: PlayerId,
@@ -121,7 +121,7 @@ pub struct ClassChange {
 }
 
 /// A player left the server.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PlayerLeave {
     pub tick: u32,
     pub player: PlayerId,
@@ -131,7 +131,7 @@ pub struct PlayerLeave {
 
 /// An engineer's building built (`build`), upgraded (`building_upgrade`), removed
 /// (`building_removed`) or detonated (`building_detonated`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ObjectChange {
     pub tick: u32,
     pub player: PlayerId,
@@ -141,7 +141,7 @@ pub struct ObjectChange {
 }
 
 /// A building was repaired.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BuildingRepair {
     pub tick: u32,
     /// The building's entity index.
@@ -150,7 +150,7 @@ pub struct BuildingRepair {
 }
 
 /// A building was destroyed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BuildingDestroyed {
     pub tick: u32,
     /// Its engineer.
@@ -165,7 +165,7 @@ pub struct BuildingDestroyed {
 }
 
 /// Time was added to a round timer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TimeAdded {
     pub tick: u32,
     pub team: Team,
@@ -173,21 +173,21 @@ pub struct TimeAdded {
 }
 
 /// A round started.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RoundStart {
     pub tick: u32,
     pub full_reset: bool,
 }
 
 /// An event with nothing but its tick: `round_active`, `setup_finished`, `stalemate`, `overtime`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Moment {
     /// Server tick.
     pub tick: u32,
 }
 
 /// A round was won.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct RoundWin {
     pub tick: u32,
     pub team: Team,
@@ -198,7 +198,7 @@ pub struct RoundWin {
 }
 
 /// The scores on the win panel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Scores {
     pub tick: u32,
     pub red: u16,
@@ -207,14 +207,14 @@ pub struct Scores {
 }
 
 /// The match is over.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct GameOver {
     pub tick: u32,
     pub reason: String,
 }
 
 /// A control point was captured.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PointCaptured {
     pub tick: u32,
     pub point: u8,
@@ -225,7 +225,7 @@ pub struct PointCaptured {
 }
 
 /// A capture was blocked.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct CaptureBlocked {
     pub tick: u32,
     pub point: u8,
@@ -235,7 +235,7 @@ pub struct CaptureBlocked {
 }
 
 /// A capture in progress was abandoned.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct CaptureBroken {
     pub tick: u32,
     pub point: u8,
@@ -243,7 +243,7 @@ pub struct CaptureBroken {
 }
 
 /// A player capping a point was killed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct KilledCapper {
     pub tick: u32,
     pub point: u8,
@@ -253,7 +253,7 @@ pub struct KilledCapper {
 }
 
 /// Something happened to a flag.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Flag {
     pub tick: u32,
     pub event: FlagAction,
@@ -263,7 +263,7 @@ pub struct Flag {
 }
 
 /// A medic died.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct MedicDeath {
     pub tick: u32,
     pub medic: PlayerId,
@@ -275,7 +275,7 @@ pub struct MedicDeath {
 }
 
 /// A player defended their medic.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct MedicDefended {
     pub tick: u32,
     pub player: PlayerId,
@@ -283,7 +283,7 @@ pub struct MedicDefended {
 }
 
 /// A projectile was reflected.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Reflect {
     pub tick: u32,
     pub player: PlayerId,
@@ -293,7 +293,7 @@ pub struct Reflect {
 }
 
 /// A soldier's banner went up.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Banner {
     pub tick: u32,
     pub player: PlayerId,
@@ -301,7 +301,7 @@ pub struct Banner {
 }
 
 /// Bullets were fired.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Shot {
     pub tick: u32,
     pub player: Option<PlayerId>,
@@ -315,7 +315,7 @@ pub struct Shot {
 }
 
 /// Something exploded.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Explosion {
     pub tick: u32,
     pub origin: Position,
@@ -323,7 +323,7 @@ pub struct Explosion {
 }
 
 /// A sentry fired.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SentryShot {
     pub tick: u32,
     /// The sentry's entity index.
@@ -335,14 +335,14 @@ pub struct SentryShot {
 }
 
 /// A pyro airblasted.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Airblast {
     pub tick: u32,
     pub player: PlayerId,
 }
 
 /// A chat line: names and text come from players, any Unicode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Chat {
     /// Server tick.
     pub tick: u32,
@@ -359,7 +359,7 @@ pub struct Chat {
 }
 
 /// A coloured span of a chat line, written as `{"c": colour, "t": text}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ChatPart {
     /// The colour; none for the default.
     #[serde(rename = "c")]
@@ -370,7 +370,7 @@ pub struct ChatPart {
 }
 
 /// A chat colour, written as `RRGGBB` (upper case) or `team`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ChatColor {
     /// The sender's team colour.
     Team,
@@ -411,7 +411,7 @@ impl<'de> Deserialize<'de> for ChatColor {
 }
 
 /// A player was healed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Heal {
     pub tick: u32,
     pub patient: PlayerId,
@@ -421,7 +421,7 @@ pub struct Heal {
 }
 
 /// A blast jump started or landed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BlastJump {
     pub tick: u32,
     pub player: PlayerId,
@@ -430,7 +430,7 @@ pub struct BlastJump {
 }
 
 /// A health or ammo pickup.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Pickup {
     pub tick: u32,
     pub player: PlayerId,
@@ -439,7 +439,7 @@ pub struct Pickup {
 }
 
 /// Where a bullet hit.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Impact {
     pub tick: u32,
     pub kind: ImpactKind,
@@ -447,21 +447,21 @@ pub struct Impact {
 }
 
 /// A decal (a bullet hole or a scorch mark).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Mark {
     pub tick: u32,
     pub pos: Position,
 }
 
 /// A vote's options.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct VoteOptions {
     pub tick: u32,
     pub options: Vec<String>,
 }
 
 /// A vote was cast.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct VoteCast {
     pub tick: u32,
     pub player: Option<PlayerId>,
@@ -471,7 +471,7 @@ pub struct VoteCast {
 }
 
 /// A tournament ready-up change.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Tournament {
     pub tick: u32,
     pub player: Option<PlayerId>,
@@ -480,7 +480,7 @@ pub struct Tournament {
 }
 
 /// An announcer line.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Announcer {
     pub tick: u32,
     pub sound: String,
@@ -488,14 +488,14 @@ pub struct Announcer {
 }
 
 /// The map time left was announced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TimeRemaining {
     pub tick: u32,
     pub seconds: u32,
 }
 
 /// A voice command.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct VoiceCommand {
     pub tick: u32,
     pub player: PlayerId,
@@ -504,21 +504,21 @@ pub struct VoiceCommand {
 }
 
 /// Text the server shows in the middle of the screen.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ServerText {
     pub tick: u32,
     pub text: String,
 }
 
 /// Pass time: a player got the ball.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PassGet {
     pub tick: u32,
     pub player: PlayerId,
 }
 
 /// Pass time: the ball came loose from its carrier.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PassFree {
     pub tick: u32,
     /// Who had it.
@@ -528,7 +528,7 @@ pub struct PassFree {
 }
 
 /// Pass time: a pass was caught.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct PassCaught {
     pub tick: u32,
     pub passer: PlayerId,
@@ -540,7 +540,7 @@ pub struct PassCaught {
 }
 
 /// Pass time: a goal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PassScore {
     pub tick: u32,
     pub scorer: PlayerId,
@@ -551,7 +551,7 @@ pub struct PassScore {
 }
 
 /// Pass time: the ball was taken off its carrier by melee.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PassStolen {
     pub tick: u32,
     pub victim: PlayerId,
@@ -559,7 +559,7 @@ pub struct PassStolen {
 }
 
 /// Pass time: a pass was blocked.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PassBlocked {
     pub tick: u32,
     /// Who threw it.
@@ -568,7 +568,7 @@ pub struct PassBlocked {
 }
 
 /// Pass time: the ball carrier was killed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BallCarrierKilled {
     pub tick: u32,
     pub attacker: Option<PlayerId>,
@@ -577,7 +577,7 @@ pub struct BallCarrierKilled {
 }
 
 /// Robot destruction: a robot was destroyed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RobotKilled {
     pub tick: u32,
     pub attacker: Option<PlayerId>,
@@ -586,7 +586,7 @@ pub struct RobotKilled {
 }
 
 /// How robot destruction points were scored (TF2's `RDScoreMethod_t`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScoreMethod {
     /// Cores brought to the team's reactor.
@@ -602,7 +602,7 @@ pub enum ScoreMethod {
 }
 
 /// Robot destruction: a player scored points for their team.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PointsScored {
     pub tick: u32,
     pub player: PlayerId,
@@ -612,14 +612,14 @@ pub struct PointsScored {
 
 /// Something one player did: delivered player destruction pickups (`special_score`), detonated
 /// their stickies (`det_stickies`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PlayerMoment {
     pub tick: u32,
     pub player: PlayerId,
 }
 
 /// Player destruction: a team leader was killed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TeamLeaderKilled {
     pub tick: u32,
     pub killer: Option<PlayerId>,
@@ -627,14 +627,14 @@ pub struct TeamLeaderKilled {
 }
 
 /// Special delivery: the rocket opened for the team with the Australium.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RocketOpen {
     pub tick: u32,
     pub team: Team,
 }
 
 /// Territorial control: the round chose its control points.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RoundSelected {
     pub tick: u32,
     /// The map's name for the round (`round_a`).
@@ -642,7 +642,7 @@ pub struct RoundSelected {
 }
 
 /// A player went through a teleporter.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Teleported {
     pub tick: u32,
     pub player: PlayerId,
@@ -653,7 +653,7 @@ pub struct Teleported {
 }
 
 /// A player was stunned (the Sandman's ball, …).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Stun {
     pub tick: u32,
     pub stunner: Option<PlayerId>,
@@ -665,7 +665,7 @@ pub struct Stun {
 }
 
 /// A spy sapped a building.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Sapped {
     pub tick: u32,
     /// The spy.
@@ -678,7 +678,7 @@ pub struct Sapped {
 }
 
 /// A capture started.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct CaptureStarted {
     pub tick: u32,
     pub point: u8,
@@ -692,7 +692,7 @@ pub struct CaptureStarted {
 }
 
 /// A control point was locked or unlocked.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PointLocked {
     pub tick: u32,
     pub point: u8,
@@ -701,7 +701,7 @@ pub struct PointLocked {
 }
 
 /// Damage to something that is not a player: a building, a tank, a robot destruction robot, a boss.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct NpcDamage {
     pub tick: u32,
     /// Its entity index.
@@ -718,7 +718,7 @@ pub struct NpcDamage {
 }
 
 /// A map's or plugin's text on the HUD (`game_text`): scores, timers, instructions.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct HudText {
     pub tick: u32,
     /// The HUD channel; a new text replaces the one on its channel.
@@ -732,14 +732,14 @@ pub struct HudText {
 }
 
 /// A hint shown on the HUD.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Hint {
     pub tick: u32,
     pub text: String,
 }
 
 /// A vote was called.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct VoteStarted {
     pub tick: u32,
     /// The team voting; none for everyone.
@@ -756,7 +756,7 @@ pub struct VoteStarted {
 }
 
 /// A vote passed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct VotePassed {
     pub tick: u32,
     pub team: Team,
@@ -765,7 +765,7 @@ pub struct VotePassed {
 }
 
 /// Mann vs. Machine: a player bought an upgrade.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Upgrade {
     pub tick: u32,
     pub player: PlayerId,
@@ -778,7 +778,7 @@ pub struct Upgrade {
 }
 
 /// A vote failed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct VoteFailed {
     pub tick: u32,
     pub team: Team,
@@ -787,7 +787,7 @@ pub struct VoteFailed {
 }
 
 /// A player's voice: Opus frames as their client sent them, for a browser to decode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Voice {
     /// Server tick.
     pub tick: u32,
@@ -814,7 +814,7 @@ pub struct Voice {
 }
 
 /// The game was paused, or went on.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Pause {
     /// Server tick: where the game stands still.
     pub tick: u32,

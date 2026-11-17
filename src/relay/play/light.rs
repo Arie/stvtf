@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::player::Player;
 
 /// A light the clients in the game keep seeing, until replaced.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Light {
     /// Where it is.
     pub at: [f32; 3],

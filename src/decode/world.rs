@@ -109,7 +109,7 @@ impl Frame {
 pub(crate) type Dumped = (u16, u32, Vec<(u32, String)>);
 
 /// Whose baselines a stream's entities enter on.
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Default, Eq, PartialEq)]
 enum Baselines {
     /// Their class's.
     #[default]

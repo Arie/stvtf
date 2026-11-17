@@ -74,3 +74,50 @@ pub enum Error {
 
 /// A result of this library's calls.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl Error {
+    /// A demo at `path` with no signon yet.
+    pub(crate) fn not_yet(path: &std::path::Path) -> Self {
+        Error::Internal(InternalError(error::Inner::NotYet(path.to_owned())))
+    }
+
+    /// This error and the ones it was caused by.
+    fn chain(&self) -> impl Iterator<Item = &Error> {
+        std::iter::successors(Some(self), |e| match e {
+            Error::Failed { source, .. } => Some(source),
+            _ => None,
+        })
+    }
+
+    fn inner(&self) -> impl Iterator<Item = &error::Inner> {
+        self.chain().filter_map(|e| match e {
+            Error::Internal(InternalError(inner)) => Some(inner),
+            _ => None,
+        })
+    }
+
+    /// The server's refusal, if that is what this is.
+    pub(crate) fn rejected(&self) -> Option<&net::handshake::Rejected> {
+        self.inner().find_map(|i| if let error::Inner::Rejected(r) = i { Some(r) } else { None })
+    }
+
+    /// The game port given for `SourceTV`'s, if that is what this is.
+    pub(crate) fn game_port(&self) -> Option<&net::handshake::GamePort> {
+        self.inner().find_map(|i| if let error::Inner::GamePort(g) = i { Some(g) } else { None })
+    }
+
+    /// Whether this is a stop asked for.
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.inner().any(|i| matches!(i, error::Inner::Stopped(_)))
+    }
+
+    /// Whether this is a demo with no signon yet.
+    pub(crate) fn is_not_yet(&self) -> bool {
+        self.inner().any(|i| matches!(i, error::Inner::NotYet(_)))
+    }
+
+    /// The kind of the I/O error that caused this, if one did.
+    pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
+        self.chain().find_map(|e| if let Error::Io { source, .. } = e { Some(source.kind()) } else { None })
+    }
+}

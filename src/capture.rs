@@ -21,7 +21,7 @@ const KIND_AT: usize = 8;
 const LEN_AT: usize = 9;
 const RECORD_HEADER: usize = 13;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub(crate) enum Kind {
     Datagram = 1,

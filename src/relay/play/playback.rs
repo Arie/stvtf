@@ -11,7 +11,7 @@ use crate::sync::lock;
 
 /// Where playback should be: at `tick` (a server tick of `demo`) at the instant `at`, going on
 /// from there at `speed` unless paused.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Want {
     /// The demo to play.
     pub demo: PathBuf,
@@ -30,7 +30,7 @@ pub struct Want {
 }
 
 /// A camera the clients' director is told to take.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Camera {
     /// In the eyes of a player.
     Follow {
@@ -52,7 +52,7 @@ impl Want {
 
 /// What the clients keep seeing, and how many times it was replaced: a change is told by its
 /// version.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct Versioned<T> {
     pub(super) version: u64,
     pub(super) items: Arc<Vec<T>>,
