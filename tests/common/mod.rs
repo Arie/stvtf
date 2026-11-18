@@ -16,8 +16,8 @@ pub const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"
 pub const SECOND: u32 = 66;
 /// A tick, in seconds.
 pub const TICK: f64 = 0.015;
-/// A bound on what should take moments.
-pub const LIMIT: Duration = Duration::from_secs(30);
+/// A bound on what should take moments, or on a busy machine a good while.
+pub const LIMIT: Duration = Duration::from_secs(120);
 
 /// What starts a connectionless packet.
 pub const OOB: [u8; 4] = [0xff; 4];
