@@ -414,8 +414,10 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   in the demo they are told (`svc_SetPause`).
 - A `Playback` also holds what a room shows the clients in the game besides the demo: beams
   (`keep_beams`, drawn with a laser model the relay loads for them), notes (`keep_notes`, the
-  game's text bubbles), a light (`keep_light`), voice as a player's own (`push_voice`) and a
-  camera (`Want::camera`, in place of the demo's director cues).
+  game's text bubbles), a light (`keep_light`), voice as a player's own (`push_voice`), a
+  camera (`Want::camera`, in place of the demo's director cues) and names (`keep_names`: the
+  players' in `userinfo`, the teams' as `mp_tournament_blueteamname` and `redteamname`, given
+  again after every full update).
 - With nobody in, nothing is played, and after a minute what was decoded is dropped.
 - A demo that cannot be played gives the clients nothing: `Playback::problem` says why, and the
   log once. One that is not there, or not written up to the end of its signon, is tried again

@@ -11,7 +11,7 @@ use super::index::Index;
 use super::tuning::{
     CUE_EVERY, FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, PAST_INDEXES, RETRY,
 };
-use super::{Camera, Playback, Want, light, notes, voice};
+use super::{Camera, Playback, Want, light, names, notes, voice};
 use crate::Result;
 use crate::decode::{BeamModel, ModelsSent};
 use crate::error::bail;
@@ -52,6 +52,7 @@ pub(super) struct Player<'r> {
     pub(super) kept: Kept,
     /// The notes the clients were given.
     pub(super) shown_notes: notes::Shown,
+    pub(super) shown_names: names::Shown,
     /// Where each speaker's voice sent is.
     pub(super) voice_seq: voice::Sequences,
     /// The light the clients were given.
@@ -99,6 +100,7 @@ impl<'r> Player<'r> {
             cued: None,
             kept: Kept::new(Instant::now()),
             shown_notes: notes::Shown::default(),
+            shown_names: names::Shown::default(),
             voice_seq: voice::Sequences::default(),
             shown_light: light::Shown::default(),
             laser: None,
@@ -373,6 +375,8 @@ impl Player<'_> {
         self.show_notes(&playback.notes());
         self.send_voice(&playback.take_voice());
         self.show_light(playback.light());
+        let (version, names) = playback.names();
+        self.show_names(version, &names);
     }
 
     /// Plays `c`, just opened: the clients sign on to its tables, the laser not among them.
@@ -386,6 +390,7 @@ impl Player<'_> {
         self.models = ModelsSent::default();
         self.floor = None;
         self.shown_notes = notes::Shown::default();
+        self.shown_names = names::Shown::default();
         self.shown_light = light::Shown::default();
         self.clock = None;
         self.beams_until = 0.0;

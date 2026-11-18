@@ -60,6 +60,12 @@ fn fresh<'a>(was: &'a [(u32, BitBuf)], now: &'a [(u32, BitBuf)]) -> impl Iterato
     now.iter().filter(|b| !was.contains(b)).map(|(_, m)| m)
 }
 
+impl Shown {
+    pub(super) fn bubbles(&self) -> impl Iterator<Item = &BitBuf> {
+        self.bubbles.iter().map(|(_, m)| m)
+    }
+}
+
 impl Player<'_> {
     /// Gives the clients the room's notes when they changed, and those on players as their player
     /// comes and goes, dies and respawns: new and changed ones shown (an id is used again after a
@@ -85,7 +91,7 @@ impl Player<'_> {
         for m in fresh(&s.bubbles, &bubbles) {
             hub.queue_to_active(m);
         }
-        hub.set_notes(bubbles.iter().map(|(_, m)| m.clone()).collect());
+        hub.set_notes(bubbles.iter().map(|(_, m)| m).chain(&self.shown_names.msgs).cloned().collect());
         *s = Shown { version: Some(version), bubbles, follows, tried: Some(Instant::now()) };
     }
 }

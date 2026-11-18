@@ -584,6 +584,11 @@ impl Decoder {
         self.tables.rewritten()
     }
 
+    /// A message naming the players in the match as `names` has them (see [`Tables::named`]).
+    pub(crate) fn named(&self, names: &std::collections::BTreeMap<String, Option<String>>) -> Option<BitBuf> {
+        self.tables.named(names, self.handler.get_parser_state())
+    }
+
     /// Messages that set a client with the string tables of `later` (a decoder further on in the
     /// same demo) back to this one's, as far as they matter; None if they cannot be written.
     pub(crate) fn set_tables_back(&self, later: &Decoder) -> Option<Vec<BitBuf>> {

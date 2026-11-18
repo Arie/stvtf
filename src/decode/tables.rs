@@ -331,6 +331,54 @@ impl Tables {
     }
 }
 
+/// A `userinfo` entry's data is the engine's `player_info_t`: the name, the user id, then the
+/// `SteamID` as text.
+const NAME_BYTES: usize = 32;
+const GUID_AT: usize = NAME_BYTES + 4;
+const GUID_BYTES: usize = 33;
+
+/// The text up to its NUL.
+fn c_str(bytes: &[u8]) -> &[u8] {
+    &bytes[..bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len())]
+}
+
+impl Tables {
+    /// An `svc_UpdateStringTable` of `userinfo` giving the players in it a name of `names` (by
+    /// `SteamID`; the game's own for those with `None`), cut to what the game takes. None when
+    /// none of them is in it.
+    pub(crate) fn named(&self, names: &BTreeMap<String, Option<String>>, state: &ParserState) -> Option<BitBuf> {
+        let (id, table) = self.by_id.iter().enumerate().find(|(_, t)| t.name == "userinfo")?;
+        let mut entries = Vec::new();
+        for (i, v) in table.values.as_ref()? {
+            let Some((own, bytes)) = &v.data else { continue };
+            let Some(guid) = bytes.get(GUID_AT..GUID_AT + GUID_BYTES).map(c_str) else { continue };
+            let Some(name) = std::str::from_utf8(guid).ok().and_then(|g| names.get(g)) else { continue };
+            let data = match name {
+                None => own.clone(),
+                Some(name) => {
+                    let mut bytes = bytes.clone();
+                    let mut end = name.len().min(NAME_BYTES - 1);
+                    while !name.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    bytes[..NAME_BYTES].fill(0);
+                    bytes[..end].copy_from_slice(&name.as_bytes()[..end]);
+                    ExtraData::new(bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new_owned(
+                        bytes,
+                        bitbuffer::LittleEndian,
+                    )))
+                }
+            };
+            entries.push((*i, StringTableEntry { text: v.text.clone().map(Cow::Owned), extra_data: Some(data) }));
+        }
+        if entries.is_empty() {
+            return None;
+        }
+        let msg = UpdateStringTableMessage { entries, table_id: u8::try_from(id).ok()? };
+        super::decoder::encode_message(SVC_UPDATESTRINGTABLE, &msg, state)
+    }
+}
+
 fn value(e: &StringTableEntry<'_>) -> Value {
     Value {
         text: e.text.as_ref().map(ToString::to_string),
@@ -503,5 +551,45 @@ mod tests {
         let msg = Message::from_type(t, &mut s, &state).unwrap();
         later.note(&[msg]);
         assert_eq!(value_of(&later, 0), value_of(&earlier, 0), "alice again");
+    }
+
+    /// A `player_info_t` of `name` and `steamid`.
+    fn player_info(name: &str, steamid: &str) -> Vec<u8> {
+        let mut info = vec![0u8; 140];
+        info[..name.len()].copy_from_slice(name.as_bytes());
+        info[GUID_AT..GUID_AT + steamid.len()].copy_from_slice(steamid.as_bytes());
+        info[100] = 7;
+        info
+    }
+
+    #[test]
+    fn players_are_named_in_userinfo_by_steamid_and_given_their_own_name_back() {
+        let mut state = ParserState::new(24, |_| true, false);
+        state.string_tables.push(StringTableMeta { max_entries: 256, fixed_userdata_size: None });
+        let created = userinfo(vec![
+            (0, entry("0", &player_info("alice", "[U:1:5]"))),
+            (1, entry("1", &player_info("bob", "[U:1:6]"))),
+            (2, entry("2", &player_info("tv", "BOT"))),
+        ]);
+        let mut tables = Tables::default();
+        tables.note(std::slice::from_ref(&created));
+        let read = |msg: &BitBuf| {
+            let mut s = BitReadStream::new(BitReadBuffer::new(msg.bytes(), LittleEndian));
+            let t = MessageType::read(&mut s).unwrap();
+            let Message::UpdateStringTable(u) = Message::from_type(t, &mut s, &state).unwrap() else { panic!() };
+            u.entries.into_iter().map(|(i, e)| (i, data_bits(&e.extra_data.unwrap()))).collect::<Vec<_>>()
+        };
+        // Longer than the game takes: cut at a whole character.
+        let long = format!("{}é", "x".repeat(30));
+        let names =
+            BTreeMap::from([("[U:1:6]".to_string(), Some(long)), ("[U:1:9]".to_string(), Some("nobody".into()))]);
+        let told = read(&tables.named(&names, &state).unwrap());
+        assert_eq!(told.len(), 1, "only who is in the match");
+        let (slot, info) = &told[0];
+        assert_eq!((*slot, c_str(&info[..NAME_BYTES])), (1, "x".repeat(30).as_bytes()));
+        assert_eq!(info[NAME_BYTES..], player_info("bob", "[U:1:6]")[NAME_BYTES..], "the rest as it was");
+        let own = read(&tables.named(&BTreeMap::from([("[U:1:6]".to_string(), None)]), &state).unwrap());
+        assert_eq!(own, [(1, player_info("bob", "[U:1:6]"))]);
+        assert!(tables.named(&BTreeMap::new(), &state).is_none());
     }
 }

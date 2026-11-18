@@ -40,7 +40,7 @@ mod tuning;
 pub(crate) use self::addr::masked_addr;
 pub(crate) use self::client_msg::{ClientMsg, client_messages};
 pub use self::handover::Handover;
-pub use self::play::{Beam, Camera, Light, Note, Playback, VoiceIn, Want};
+pub use self::play::{Beam, Camera, Light, Names, Note, Playback, VoiceIn, Want};
 pub use self::serve::{DEFAULT_SLOTS, MAX_SLOTS, Relay, RelayConfig, random_password};
 
 #[cfg(fuzzing)]

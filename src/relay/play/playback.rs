@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use super::{Beam, Light, Note, VoiceIn, voice};
+use super::{Beam, Light, Names, Note, VoiceIn, voice};
 use crate::relay::Handover;
 use crate::sync::lock;
 
@@ -84,6 +84,8 @@ pub struct Playback {
     voice: Mutex<VecDeque<VoiceIn>>,
     /// The light they keep seeing, if any.
     light: Mutex<Option<Light>>,
+    /// The names they see in place of the game's, and how many times they were replaced.
+    names: Mutex<(u64, Arc<Names>)>,
     /// The clients asked for, to hand to the next process, and given.
     hand: Mutex<Hand>,
     handed: Condvar,
@@ -107,6 +109,7 @@ impl Playback {
             notes: Mutex::default(),
             voice: Mutex::new(VecDeque::new()),
             light: Mutex::new(None),
+            names: Mutex::default(),
             hand: Mutex::default(),
             handed: Condvar::new(),
         }
@@ -146,6 +149,19 @@ impl Playback {
 
     pub(super) fn light(&self) -> Option<Light> {
         *lock(&self.light)
+    }
+
+    /// The names the clients in the game see for players and teams (a room's), in place of those
+    /// before: the game's own again for whoever is named no more.
+    pub fn keep_names(&self, names: Names) {
+        let mut kept = lock(&self.names);
+        if *kept.1 != names {
+            *kept = (kept.0 + 1, Arc::new(names));
+        }
+    }
+
+    pub(super) fn names(&self) -> (u64, Arc<Names>) {
+        lock(&self.names).clone()
     }
 
     /// Sends `v` to the clients in the game as that player's voice, those in it now; when more

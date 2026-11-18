@@ -21,6 +21,7 @@ mod cursor;
 mod follow;
 mod index;
 mod light;
+mod names;
 mod notes;
 mod playback;
 mod player;
@@ -29,6 +30,7 @@ mod tuning;
 mod voice;
 
 pub use self::light::Light;
+pub use self::names::Names;
 pub use self::notes::Note;
 pub use self::playback::{Camera, Playback, Want};
 pub use self::voice::VoiceIn;
