@@ -33,7 +33,7 @@ pub(super) const FULL_UPDATE_GRACE: Duration = Duration::from_secs(1);
 
 /// How long a client has to ack a full update before it is sent another: no delta goes to it
 /// until it has, as it would crash on one from a frame it lacks.
-pub(super) const KEY_WAIT: Duration = Duration::from_millis(if cfg!(test) { 30 } else { 600 });
+pub(super) const KEY_WAIT: Duration = Duration::from_millis(600);
 
 /// Datagrams kept since the last full update, for clients that join after it.
 pub(super) const MAX_SINCE_FULL: usize = 64;

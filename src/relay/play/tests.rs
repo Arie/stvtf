@@ -320,7 +320,8 @@ fn follow_as_a_game_client(b: &Bench, reader: &Cursor) -> (usize, usize) {
     (fulls, deltas)
 }
 
-/// A relay with the bench's hub, its client in the game, and a player of `c` toward `tick`.
+/// A relay with the bench's hub, its client in the game, and a player of `c` toward `tick`: that
+/// tick however long the test takes, as speed 0 has it.
 fn relay_playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
     let config = crate::relay::RelayConfig::new("127.0.0.1:0");
     let spare = crate::relay::hub::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
@@ -336,7 +337,7 @@ fn relay_playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
         tick,
         at: Instant::now(),
         paused: false,
-        speed: 1.0,
+        speed: 0.0,
         from_start: false,
         camera: None,
     };
