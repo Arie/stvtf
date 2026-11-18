@@ -377,6 +377,10 @@ impl Player<'_> {
         self.show_light(playback.light());
         let (version, names) = playback.names();
         self.show_names(version, &names);
+        // A score counted otherwise: the clients have the one from before until a full update.
+        if self.cur.as_mut().is_some_and(|c| c.dec.set_score_add(playback.score())) {
+            self.rekey();
+        }
     }
 
     /// Plays `c`, just opened: the clients sign on to its tables, the laser not among them.

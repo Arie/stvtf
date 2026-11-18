@@ -417,7 +417,9 @@ moment wanted (a server tick at an instant), paused or not, and the speed, set a
   game's text bubbles), a light (`keep_light`), voice as a player's own (`push_voice`), a
   camera (`Want::camera`, in place of the demo's director cues) and names (`keep_names`: the
   players' in `userinfo`, the teams' as `mp_tournament_blueteamname` and `redteamname`, given
-  again after every full update).
+  again after every full update) and a score counted otherwise (`keep_score`: added to the
+  teams' `m_iScore` in every full update, and in the frame of a round won, which is then written
+  for each client from the frame it acked; a full update when what is added changes).
 - With nobody in, nothing is played, and after a minute what was decoded is dropped.
 - A demo that cannot be played gives the clients nothing: `Playback::problem` says why, and the
   log once. One that is not there, or not written up to the end of its signon, is tried again

@@ -46,7 +46,8 @@ impl Player<'_> {
                 Entities::Delta(base) => Some(base),
             };
             // From each frame a client acked: it has that one for sure.
-            let rewritten = c.dec.own_baselines();
+            // So is a team's score that the room counts otherwise: the game's own is for nobody.
+            let rewritten = c.dec.own_baselines() || c.dec.score_touched();
             let from = hub.acked().into_iter().filter(|a| rewritten || base.is_some_and(|b| b != *a));
             let from = from.filter_map(|a| Some((a, with_entities(&bits, &life, &c.dec.entities_from(a)?)))).collect();
             let stripped = without_entities(&bits, &life);

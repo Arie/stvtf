@@ -133,9 +133,66 @@ pub(crate) struct World {
     seen_full: bool,
     /// Whose baselines the stream's entities enter on.
     baselines: Baselines,
+    /// What what is written for a client adds to the teams' scores, BLU's then RED's (a room's
+    /// own count of them).
+    score_add: [i64; 2],
+    /// The last frame applied set the score of a team that has something added.
+    score_touched: bool,
 }
 
+/// The teams' entity, its score, and which team it is (2 RED, 3 BLU).
+const TEAM_CLASS: &str = "CTFTeam";
+const TEAM_SCORE: SendPropIdentifier = SendPropIdentifier::new("DT_Team", "m_iScore");
+const TEAM_NUM: SendPropIdentifier = SendPropIdentifier::new("DT_Team", "m_iTeamNum");
+
 impl World {
+    /// Adds `add` (BLU's, RED's) to the teams' scores in what is written for a client from now
+    /// on; whether that changed. A client keeps what it was sent: it needs a full update then.
+    pub(crate) fn set_score_add(&mut self, add: [i64; 2]) -> bool {
+        std::mem::replace(&mut self.score_add, add) != add
+    }
+
+    /// Whether the last frame applied set the score of a team that has something added: its own
+    /// entities are for no client then.
+    pub(crate) fn score_touched(&self) -> bool {
+        self.score_touched
+    }
+
+    /// For a team's entity with something added to its score: where its score is among its
+    /// props, and the score a client is to see.
+    fn score_shown(&self, state: &ParserState, e: &Entity) -> Option<(u32, i64)> {
+        if self.score_add == [0, 0] || state.server_classes.get(usize::from(e.class))?.name.as_str() != TEAM_CLASS {
+            return None;
+        }
+        let table = state.send_tables.get(usize::from(e.class))?;
+        let int = |id| match e.props.get(super::props::prop_index(table, id)?).map(|p| &p.value) {
+            Some(SendPropValue::Integer(v)) => Some(*v),
+            _ => None,
+        };
+        let add = match int(TEAM_NUM)? {
+            3 => self.score_add[0],
+            2 => self.score_add[1],
+            _ => 0,
+        };
+        (add != 0)
+            .then_some((super::props::prop_index(table, TEAM_SCORE)?, (int(TEAM_SCORE).unwrap_or(0) + add).max(0)))
+    }
+
+    /// Puts the score a client is to see in `props` of team entity `e`, as written for it: in
+    /// place of the game's, and when `entering` also where the game's is its baseline's.
+    fn show_score(&self, state: &ParserState, e: &Entity, props: &mut Vec<SendProp>, entering: bool) {
+        let Some((index, score)) = self.score_shown(state, e) else { return };
+        let value = SendPropValue::Integer(score);
+        match props.iter_mut().find(|p| p.index == index) {
+            Some(p) => p.value = value,
+            None if entering => {
+                props.push(SendProp { index, identifier: TEAM_SCORE, value });
+                props.sort_by_key(|p| p.index);
+            }
+            None => {}
+        }
+    }
+
     /// Applies the entities of the frame at server tick `tick`; `state` is the parser's once it
     /// took the frame.
     pub(crate) fn apply(&mut self, pe: &PacketEntitiesMessage, state: &ParserState, tick: u32) {
@@ -210,6 +267,10 @@ impl World {
         for r in &pe.removed_entities {
             frame.remove(u32::from(*r));
         }
+        self.score_touched = pe.entities.iter().any(|e| {
+            e.props.iter().any(|p| p.identifier == TEAM_SCORE)
+                && frame.get(u32::from(e.entity_index)).is_some_and(|w| self.score_shown(state, w).is_some())
+        });
         // A later delta of the stream never builds on a frame older than this one's base, but one
         // written for a client does, on the frame it acked: those of the last [`KEEP_TICKS`] stay.
         // A full update keeps them: a stream that asked for one can have deltas from before it.
@@ -412,7 +473,7 @@ impl World {
                     // Every prop that changed on the way, as a server lists them: one back at
                     // its value in `from` is not at it for a client that took a frame between.
                     let on_the_way = changed.get(&index).and_then(Option::as_ref);
-                    let props: Vec<SendProp> = e
+                    let mut props: Vec<SendProp> = e
                         .props
                         .values()
                         .filter(|p| {
@@ -421,6 +482,7 @@ impl World {
                         })
                         .cloned()
                         .collect();
+                    self.show_score(state, e, &mut props, false);
                     if !props.is_empty() {
                         entities.insert(index, packet_entity(index, e, UpdateType::Delta, props, Some(from)));
                     }
@@ -486,6 +548,7 @@ impl World {
     /// own game is only sent the first.
     fn enter(&self, state: &ParserState, index: u32, e: &Entity) -> Option<PacketEntity> {
         let mut entering = enter(state, index, e)?;
+        self.show_score(state, e, &mut entering.props, true);
         if self.player != Some(index) {
             return Some(entering);
         }

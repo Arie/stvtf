@@ -143,3 +143,65 @@ fn follows_from_a_keyframe(demo: &str, at: usize, of: usize) {
         }
     }
 }
+
+/// The teams' scores in the snapshots of `lines`, BLU's then RED's.
+fn scores(lines: Vec<Line>) -> Vec<[i64; 2]> {
+    lines
+        .into_iter()
+        .filter_map(|l| match l {
+            Line::Snapshot(s) => Some([s.score.blue, s.score.red]),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A room counts the score otherwise: a client started from a keyframe has the room's, and keeps
+/// it through a round won, whose frame is written for it.
+#[test]
+fn a_score_counted_otherwise_reaches_a_client_in_full_updates_and_as_the_game_changes_it() {
+    let demo = crate::testing::fixture("pl_upward.dem").display().to_string();
+    let (tables, signon, frames) = packets(&demo);
+    let mut whole = Decoder::new(&tables, 1000.0).unwrap();
+    whole.keep_world();
+    let mut late = Decoder::new(&tables, 1000.0).unwrap();
+    late.keep_world();
+    for s in &signon {
+        whole.feed(s, s.len() * 8);
+        late.feed(s, s.len() * 8);
+    }
+    let half = frames.len() / 2;
+    for f in &frames[..half] {
+        let life = whole.feed(f, f.len() * 8);
+        for span in
+            life.spans.iter().filter(|s| matches!(u32::from(s.id), SVC_CREATESTRINGTABLE | SVC_UPDATESTRINGTABLE))
+        {
+            let t = BitReader::slice(f, span.bits.clone());
+            late.feed(t.bytes(), t.nbits());
+        }
+    }
+    assert!(!whole.score_touched(), "nothing added yet");
+    assert!(whole.set_score_add([2, 1]));
+    assert!(!whole.set_score_add([2, 1]), "the same again changes nothing");
+    let (_, key) = whole.keyframe(Some(&frames[half])).expect("a keyframe");
+    assert!(late.feed(key.bytes(), key.nbits()).full_update);
+    whole.take_output();
+    late.take_output();
+    let mut written = 0;
+    for f in &frames[half..] {
+        let before = whole.server_tick();
+        whole.feed(f, f.len() * 8);
+        // The frame of a round won: written for the client, from the frame before.
+        let life = if whole.score_touched() {
+            written += 1;
+            let delta = whole.delta_for_tests(before, whole.server_tick()).expect("the frame written anew");
+            late.feed(delta.bytes(), delta.nbits())
+        } else {
+            late.feed(f, f.len() * 8)
+        };
+        assert!(!life.lost_frame);
+    }
+    assert!(written >= 1, "BLU wins a round in the second half");
+    let (own, seen) = (scores(whole.take_output()), scores(late.take_output()));
+    assert_eq!((own[0], own.last().copied()), ([0, 0], Some([1, 0])));
+    assert_eq!((seen[0], seen.last().copied()), ([2, 1], Some([3, 1])));
+}

@@ -584,6 +584,17 @@ impl Decoder {
         self.tables.rewritten()
     }
 
+    /// Adds `add` (BLU's, RED's) to the teams' scores in what is written for a client (see
+    /// `World::set_score_add`); whether that changed.
+    pub(crate) fn set_score_add(&mut self, add: [i64; 2]) -> bool {
+        self.world.as_mut().is_some_and(|w| w.set_score_add(add))
+    }
+
+    /// Whether the last frame set the score of a team that has something added.
+    pub(crate) fn score_touched(&self) -> bool {
+        self.world.as_ref().is_some_and(super::world::World::score_touched)
+    }
+
     /// A message naming the players in the match as `names` has them (see [`Tables::named`]).
     pub(crate) fn named(&self, names: &std::collections::BTreeMap<String, Option<String>>) -> Option<BitBuf> {
         self.tables.named(names, self.handler.get_parser_state())

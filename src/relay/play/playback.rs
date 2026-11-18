@@ -86,6 +86,8 @@ pub struct Playback {
     light: Mutex<Option<Light>>,
     /// The names they see in place of the game's, and how many times they were replaced.
     names: Mutex<(u64, Arc<Names>)>,
+    /// What they see added to the teams' scores, BLU's then RED's.
+    score: Mutex<[i64; 2]>,
     /// The clients asked for, to hand to the next process, and given.
     hand: Mutex<Hand>,
     handed: Condvar,
@@ -110,6 +112,7 @@ impl Playback {
             voice: Mutex::new(VecDeque::new()),
             light: Mutex::new(None),
             names: Mutex::default(),
+            score: Mutex::default(),
             hand: Mutex::default(),
             handed: Condvar::new(),
         }
@@ -158,6 +161,16 @@ impl Playback {
         if *kept.1 != names {
             *kept = (kept.0 + 1, Arc::new(names));
         }
+    }
+
+    /// What the clients in the game see added to the teams' scores (a room's own count), BLU's
+    /// then RED's, where playback is now; they get a full update when it changes.
+    pub fn keep_score(&self, add: [i64; 2]) {
+        *lock(&self.score) = add;
+    }
+
+    pub(super) fn score(&self) -> [i64; 2] {
+        *lock(&self.score)
     }
 
     pub(super) fn names(&self) -> (u64, Arc<Names>) {
