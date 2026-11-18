@@ -77,7 +77,7 @@ fn client<'s>(s: &'s std::thread::Scope<'s, '_>, addr: &str, stop: &'s AtomicBoo
     let mut w = Watch::new(addr, "pw");
     w.build = Some(stvtf::builds::CURRENT.to_string());
     w.snapshot_hz = 1000.0;
-    // Longer than any one wait of its test: there are a few.
+    // A test waits a few times.
     w.duration = Some(LIMIT * 4);
     let into = seen.clone();
     s.spawn(move || {
