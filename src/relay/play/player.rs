@@ -659,7 +659,14 @@ impl Player<'_> {
     /// Tells the clients in the game to take `camera`, when it changed and every [`CUE_EVERY`].
     fn cue(&mut self, camera: Option<Camera>) {
         let Some(camera) = camera else {
-            self.cued = None;
+            // Off a spot: nothing but a cue takes the clients from it, and the demo's next may be
+            // long in coming. A player's eyes, until then.
+            if let Some((Camera::Fixed { .. }, _)) = self.cued.take()
+                && let Some(c) = self.cur.as_ref().filter(|c| c.started)
+                && let Some(msg) = c.dec.living_players().first().and_then(|(player, _)| c.dec.hltv_chase(*player))
+            {
+                self.relay.hub().queue_to_active(&msg);
+            }
             return;
         };
         if self.cued.is_some_and(|(was, at)| was == camera && at.elapsed() < CUE_EVERY) {
