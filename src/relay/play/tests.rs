@@ -206,6 +206,15 @@ fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
     let GameEvent::HLTVChase(chase) = e.event else { panic!("{:?}", e.event) };
     assert_eq!(u32::from(chase.target_1), player.ent);
     assert_eq!(chase.in_eye, 1);
+    // A spot's coordinates and angles go as signed.
+    let msg = c.dec.hltv_fixed([-1200, 300, 1500], 60, -90).unwrap();
+    let span = Span { id: u8::try_from(SVC_GAMEEVENT).unwrap(), bits: 0..msg.nbits() };
+    assert!(c.dec.is_director_cue(msg.bytes(), &span));
+    let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
+    let t: tf_demo_parser::demo::message::MessageType = bitbuffer::BitRead::read(&mut s).unwrap();
+    let Message::GameEvent(e) = Message::from_type(t, &mut s, state).unwrap() else { panic!() };
+    let GameEvent::HLTVFixed(fixed) = e.event else { panic!("{:?}", e.event) };
+    assert_eq!((fixed.pos_x.cast_signed(), fixed.pos_z, fixed.theta, fixed.phi.cast_signed()), (-1200, 1500, 60, -90));
 }
 
 /// `pl_upward.dem` a few frames in, with the next one read as the server's changelevel would

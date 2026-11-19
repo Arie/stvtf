@@ -37,6 +37,15 @@ pub enum Camera {
         /// Their user id.
         player: u16,
     },
+    /// At a spot of the map, looking one way.
+    Fixed {
+        /// Where it is.
+        pos: [i32; 3],
+        /// Degrees, down positive.
+        pitch: i16,
+        /// Degrees, as the game's yaw.
+        yaw: i16,
+    },
 }
 
 impl Want {

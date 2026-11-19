@@ -666,9 +666,12 @@ impl Player<'_> {
             return;
         }
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
-        let Camera::Follow { player } = camera;
-        if let Some(msg) = c.dec.hltv_chase(player) {
-            tracing::debug!("relay: camera on player {player}");
+        let msg = match camera {
+            Camera::Follow { player } => c.dec.hltv_chase(player),
+            Camera::Fixed { pos, pitch, yaw } => c.dec.hltv_fixed(pos, pitch, yaw),
+        };
+        if let Some(msg) = msg {
+            tracing::debug!("relay: camera {camera:?}");
             self.relay.hub().queue_to_active(&msg);
         }
         self.cued = Some((camera, Instant::now()));
