@@ -20,6 +20,8 @@ pub(super) struct Shot {
     moving: Option<Moving>,
     /// Where the room has it in the frame to come.
     pub(super) pose: Option<Pose>,
+    /// How many paths it was set off on.
+    cuts: u8,
 }
 
 /// The path the camera is on: how far along it is (seconds), and the frame it was that far at.
@@ -40,7 +42,7 @@ pub(super) enum Cue {
 
 impl Path {
     /// Where the camera is `secs` in: at its end after it.
-    fn at(&self, secs: f64) -> Option<Pose> {
+    fn at(&self, secs: f64, cut: u8) -> Option<Pose> {
         let i = self.steps.partition_point(|s| f64::from(s.secs) <= secs).clamp(1, self.steps.len().max(1)) - 1;
         let (a, b) = (self.steps.get(i)?, self.steps.get(i + 1).or(self.steps.get(i))?);
         let share = if b.secs > a.secs {
@@ -57,6 +59,7 @@ impl Path {
             pos: pos.map(|v| v as f32),
             pitch: (-d[2]).atan2(d[0].hypot(d[1])).to_degrees() as f32,
             yaw: d[1].atan2(d[0]).to_degrees() as f32,
+            cut,
         })
     }
 }
@@ -71,14 +74,17 @@ impl Player<'_> {
             let m = match &mut self.shot.moving {
                 Some(m) if m.path.id == path.id => m,
                 // Set off a while ago (a relay just started): where it is by now.
-                gone => gone.insert(Moving { path: path.clone(), secs: path.began.elapsed().as_secs_f64(), tick }),
+                gone => {
+                    self.shot.cuts = self.shot.cuts.wrapping_add(1);
+                    gone.insert(Moving { path: path.clone(), secs: path.began.elapsed().as_secs_f64(), tick })
+                }
             };
             let ahead = (tick - m.tick) as f64 * f64::from(c.dec.tick_interval());
             if ahead > 0.0 && ahead <= MOVE_GAP {
                 m.secs += ahead;
             }
             m.tick = tick;
-            m.path.at(m.secs)
+            m.path.at(m.secs, self.shot.cuts)
         } else {
             self.shot.moving = None;
             None

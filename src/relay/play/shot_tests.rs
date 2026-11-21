@@ -200,7 +200,7 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
         want.camera = Some(Camera::Along(Arc::new(Path { id: 2, began: Instant::now(), steps: vec![still] })));
         steps(&want, &mut client);
         assert_eq!(client.fulls, fulls + 1);
-        assert_eq!(p.shot.pose, Some(Pose { pos: [100.0, 200.0, 800.0], pitch: 0.0, yaw: -90.0 }));
+        assert_eq!(p.shot.pose, Some(Pose { pos: [100.0, 200.0, 800.0], pitch: 0.0, yaw: -90.0, cut: 2 }));
         assert_eq!(client.ours(&p.cur.as_ref().unwrap().dec), [true, true]);
         // Going on from there (a full update of a live recording is of a frame a few back).
         want.paused = false;

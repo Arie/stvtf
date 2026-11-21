@@ -24,6 +24,9 @@ pub(crate) struct Pose {
     pub(crate) pos: [f32; 3],
     pub(crate) pitch: f32,
     pub(crate) yaw: f32,
+    /// Counts the cuts, round and round: a pose of another count is not moved to from the last,
+    /// it is there at once.
+    pub(crate) cut: u8,
 }
 
 /// The clients' camera as the relay has it.
@@ -67,6 +70,10 @@ const LIFE_DEAD: i64 = 2;
 const OBS_FIXED: i64 = 3;
 
 const PROP_TURN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
+/// Changed, the game takes the entity as put elsewhere: it does not move it there between frames.
+const PROP_CUT: SendPropIdentifier = prop_id("DT_BaseEntity", "m_ubInterpolationFrame");
+/// The values it has.
+const CUTS: u8 = 4;
 const PROP_MODEL: SendPropIdentifier = prop_id("DT_BaseEntity", "m_nModelIndex");
 const PROP_RENDER_MODE: SendPropIdentifier = prop_id("DT_BaseEntity", "m_nRenderMode");
 const PROP_COLOUR: SendPropIdentifier = prop_id("DT_BaseEntity", "m_clrRender");
@@ -189,6 +196,7 @@ impl World {
                 (PROP_COLOUR, int(CLEAR)),
                 (PROP_ORIGIN, vector(pose.pos[0], pose.pos[1], pose.pos[2])),
                 (PROP_TURN, vector(pose.pitch.rem_euclid(360.0), pose.yaw.rem_euclid(360.0), 0.0)),
+                (PROP_CUT, int(i64::from(pose.cut % CUTS))),
             ],
         );
         touched |= put(
