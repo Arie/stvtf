@@ -82,6 +82,7 @@ const PROP_COLOUR: SendPropIdentifier = prop_id("DT_BaseEntity", "m_clrRender");
 const PROP_LIFE: SendPropIdentifier = prop_id("DT_BasePlayer", "m_lifeState");
 const PROP_OBS_MODE: SendPropIdentifier = prop_id("DT_BasePlayer", "m_iObserverMode");
 const PROP_OBS_TARGET: SendPropIdentifier = prop_id("DT_BasePlayer", "m_hObserverTarget");
+const PROP_SIM_TIME: SendPropIdentifier = prop_id("DT_BaseEntity", "m_flSimulationTime");
 const PROP_FOV: SendPropIdentifier = prop_id("DT_BasePlayer", "m_iFOV");
 /// The field of view the clients see through the cameraman: `hltv_fixed`'s, which a path ends on.
 const FOV: i64 = 90;
@@ -102,8 +103,8 @@ impl World {
     pub(crate) fn reshoot(&mut self, state: &ParserState) -> bool {
         let mut frames = std::mem::take(&mut self.frames);
         let mut touched = false;
-        for (_, frame) in &mut frames {
-            touched |= self.place(frame, state);
+        for (tick, frame) in &mut frames {
+            touched |= self.place(frame, state, *tick);
         }
         self.frames = frames;
         touched
@@ -129,14 +130,20 @@ impl World {
 
     /// Puts what is ours in `frame`, which the stream's `pe` was just applied to. Whether that
     /// changed any of it from the frame it builds on.
-    pub(super) fn shoot(&mut self, pe: &PacketEntitiesMessage, frame: &mut Frame, state: &ParserState) -> bool {
-        let Some(rig) = self.shot.rig else { return self.place(frame, state) };
+    pub(super) fn shoot(
+        &mut self,
+        pe: &PacketEntitiesMessage,
+        frame: &mut Frame,
+        state: &ParserState,
+        tick: u32,
+    ) -> bool {
+        let Some(rig) = self.shot.rig else { return self.place(frame, state, tick) };
         // The stream's own entered where one of ours is: both elsewhere.
         let entered =
             |i: u32| pe.entities.iter().any(|e| e.update_type == UpdateType::Enter && u32::from(e.entity_index) == i);
         let taken = [rig.prop, rig.man].map(entered);
         if taken == [false, false] {
-            return self.place(frame, state);
+            return self.place(frame, state, tick);
         }
         for (i, taken) in [rig.prop, rig.man].into_iter().zip(taken) {
             if !taken {
@@ -144,12 +151,12 @@ impl World {
             }
         }
         self.shot.rig = None;
-        self.place(frame, state);
+        self.place(frame, state, tick);
         true
     }
 
     /// Ours in `frame`, as wanted: there at the pose, or gone.
-    fn place(&mut self, frame: &mut Frame, state: &ParserState) -> bool {
+    fn place(&mut self, frame: &mut Frame, state: &ParserState, tick: u32) -> bool {
         let Some(pose) = self.shot.pose else {
             let Some(rig) = self.shot.rig else { return false };
             let there = [rig.prop, rig.man].map(|i| frame.get(i).is_some());
@@ -190,7 +197,7 @@ impl World {
         }
         let int = SendPropValue::Integer;
         let vector = |x, y, z| SendPropValue::Vector(Vector { x, y, z });
-        touched |= put(
+        let moved = put(
             frame,
             state,
             rig.prop,
@@ -204,6 +211,12 @@ impl World {
                 (PROP_CUT, int(i64::from(pose.cut % CUTS))),
             ],
         );
+        // When it was last elsewhere, as a server says it of what moves: the game moves it
+        // between the moments it was told of, each at its time.
+        if moved {
+            put(frame, state, rig.prop, &[(PROP_SIM_TIME, int(sim_time(tick, rig.prop)))]);
+        }
+        touched |= moved;
         touched |= put(
             frame,
             state,
@@ -220,6 +233,13 @@ impl World {
         );
         touched
     }
+}
+
+/// `m_flSimulationTime` of an entity that moved at `tick`, as a server sends it: the ticks since
+/// the last hundredth one, which each entity counts from a tick of its own.
+fn sim_time(tick: u32, entity: u32) -> i64 {
+    let base = 100 * (tick.saturating_sub(entity % 32) / 100);
+    i64::from((tick - base) & 0xFF)
 }
 
 /// The class named `name`.

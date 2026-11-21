@@ -272,7 +272,7 @@ impl World {
         for r in &pe.removed_entities {
             frame.remove(u32::from(*r));
         }
-        self.shot.touched = self.shoot(pe, &mut frame, state);
+        self.shot.touched = self.shoot(pe, &mut frame, state, tick);
         self.score_touched = pe.entities.iter().any(|e| {
             e.props.iter().any(|p| p.identifier == TEAM_SCORE)
                 && frame.get(u32::from(e.entity_index)).is_some_and(|w| self.score_shown(state, w).is_some())
