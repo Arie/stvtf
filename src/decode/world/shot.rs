@@ -1,8 +1,11 @@
-//! The relay's own camera: a see-through prop where it is, and a hidden player watching from it
-//! whom the clients take as cameraman (`hltv_cameraman`). The game moves it between frames.
+//! A moving camera for the relay's clients. The relay adds two entities to the frames: an
+//! invisible prop at the camera's position, and a hidden player who watches from that prop. It
+//! tells the clients this player is the cameraman (`hltv_cameraman`), so they see what it sees,
+//! and the game moves the view smoothly between frames.
 //!
-//! `hltv_fixed` turns in whole degrees and `hltv_chase` shakes, so neither does for a move. A
-//! client cannot leave a cameraman, so a camera that stays is `hltv_fixed`'s.
+//! The director's own events cannot do this: `hltv_fixed` only turns in whole degrees, and
+//! `hltv_chase` shakes. But a client cannot leave a cameraman, so the relay uses the cameraman
+//! only while the camera moves, and `hltv_fixed` once it stands still.
 
 use std::sync::Arc;
 
@@ -21,7 +24,7 @@ pub(crate) struct Pose {
     pub(crate) pos: [f32; 3],
     pub(crate) pitch: f32,
     pub(crate) yaw: f32,
-    /// Changed, the camera is there at once, not moved there.
+    /// A counter. When it changes, the camera jumps to the new pose instead of gliding there.
     pub(crate) cut: u8,
 }
 
@@ -38,7 +41,7 @@ pub(super) struct Shot {
     model: Option<u16>,
     /// How many players the server has room for.
     slots: u32,
-    /// Player entities the cameraman keeps off (a voice's slot).
+    /// Player entities the cameraman must not use (a caster's voice has that slot).
     taken: Vec<u32>,
 }
 
@@ -59,7 +62,8 @@ const MAN_CLASS: &str = "CTFPlayer";
 const EF_NO_SHADOWS: i64 = 0x10 | 0x40;
 /// `m_nRenderMode`: drawn through its colour's alpha.
 const RENDER_TRANS: i64 = 2;
-/// `m_clrRender`: see-through. Drawn all the same: the game only moves what it draws.
+/// `m_clrRender`: fully transparent. It still counts as drawn, and the game only interpolates
+/// entities it draws.
 const CLEAR: i64 = 0x00FF_FFFF;
 const TEAM_SPECTATOR: i64 = 1;
 const LIFE_DEAD: i64 = 2;
@@ -67,7 +71,7 @@ const LIFE_DEAD: i64 = 2;
 const OBS_FIXED: i64 = 3;
 
 const PROP_TURN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
-/// Changed, the game puts the entity there at once.
+/// When this changes, the game moves the entity at once instead of interpolating.
 const PROP_CUT: SendPropIdentifier = prop_id("DT_BaseEntity", "m_ubInterpolationFrame");
 /// The values it has.
 const CUTS: u8 = 4;
@@ -79,7 +83,7 @@ const PROP_OBS_MODE: SendPropIdentifier = prop_id("DT_BasePlayer", "m_iObserverM
 const PROP_OBS_TARGET: SendPropIdentifier = prop_id("DT_BasePlayer", "m_hObserverTarget");
 const PROP_SIM_TIME: SendPropIdentifier = prop_id("DT_BaseEntity", "m_flSimulationTime");
 const PROP_FOV: SendPropIdentifier = prop_id("DT_BasePlayer", "m_iFOV");
-/// The cameraman's field of view: `hltv_fixed`'s.
+/// The cameraman's field of view, the same as `hltv_fixed` uses.
 const FOV: i64 = 90;
 const PROP_WEAPON: SendPropIdentifier = prop_id("DT_BaseCombatCharacter", "m_hActiveWeapon");
 
@@ -168,7 +172,7 @@ impl World {
         let rig = if let Some(rig) = self.shot.rig {
             rig
         } else {
-            // The highest free: players and entities come in from the lowest.
+            // Take the highest free slots: real players and entities fill from the lowest.
             let free = |mut range: std::ops::Range<u32>| {
                 range.rfind(|i| frame.get(*i).is_none() && !self.shot.taken.contains(i))
             };
@@ -208,7 +212,7 @@ impl World {
                 (PROP_CUT, int(i64::from(pose.cut % CUTS))),
             ],
         );
-        // When it moved, as a server says it: the game moves it between those moments.
+        // The time it moved, as a real server sends it. The game interpolates between these.
         if moved {
             put(frame, state, rig.prop, &[(PROP_SIM_TIME, int(sim_time(tick, rig.prop)))]);
         }
