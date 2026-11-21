@@ -88,6 +88,11 @@ impl Sequences {
         gone.iter().filter_map(|s| self.talking.remove(s)).collect()
     }
 
+    /// The slots nobody is in that a voice has.
+    pub(super) fn spares(&self) -> Vec<u8> {
+        self.spare.values().map(|(slot, _)| *slot).collect()
+    }
+
     /// Claims a slot for `steamid`, who is no player, of those nobody is in now (`free`): theirs while
     /// it stays free, else the first no other voice has. A client plays a voice in such a slot
     /// as of someone unconnected. None when there is none left.

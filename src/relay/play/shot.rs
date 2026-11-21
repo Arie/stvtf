@@ -117,6 +117,7 @@ impl Player<'_> {
             self.shot.settled = None;
             None
         };
+        c.dec.keep_from_shot(&self.voice_seq.spares());
         c.dec.set_shot(pose);
         // No frame to come: as if the last had it.
         let still = want.paused || (c.ended && c.next_tick().is_none());
@@ -170,6 +171,7 @@ impl Player<'_> {
                 c.dec.hltv_fixed(s.end.pos.map(whole), whole(s.end.pitch) as i16, whole(s.end.yaw) as i16)
             }),
         };
+        let sent = msg.is_some();
         if let Some(msg) = msg {
             tracing::debug!("relay: camera {cue:?}");
             let mut hub = self.relay.hub();
@@ -180,7 +182,8 @@ impl Player<'_> {
             hub.queue_to_active(&msg);
         }
         self.shot.held = matches!(cue, Cue::Man(_) | Cue::Spot(_));
-        if let (Cue::Spot(_), Some(s)) = (cue, &mut self.shot.settled) {
+        // Told the spot (a demo with no such event has none to tell: the cameraman stays).
+        if let (Cue::Spot(_), Some(s), true) = (cue, &mut self.shot.settled, sent) {
             s.told.get_or_insert_with(Instant::now);
         }
         self.shot.cued = Some((cue, Instant::now()));

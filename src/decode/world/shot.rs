@@ -44,6 +44,9 @@ pub(super) struct Shot {
     model: Option<u16>,
     /// How many players the server has room for.
     slots: u32,
+    /// The players' entities the cameraman is not to be: what something else of the relay's has
+    /// in a slot nobody is in (a voice).
+    taken: Vec<u32>,
 }
 
 /// The entities of ours in the stream's frames: the prop, and the player who watches from it.
@@ -96,6 +99,11 @@ impl World {
         self.shot.pose = pose;
         self.shot.model = model;
         self.shot.slots = u32::from(slots);
+    }
+
+    /// The player slots (from 0) the cameraman is not to take from now on.
+    pub(crate) fn keep_from_shot(&mut self, slots: &[u8]) {
+        self.shot.taken = slots.iter().map(|s| u32::from(*s) + 1).collect();
     }
 
     /// The same in every frame kept, as if it always was: for clients who get no frames (a room
@@ -174,7 +182,9 @@ impl World {
         } else {
             // The highest free: players come into the lowest slots, entities into the lowest
             // indexes.
-            let free = |mut range: std::ops::Range<u32>| range.rfind(|i| frame.get(*i).is_none());
+            let free = |mut range: std::ops::Range<u32>| {
+                range.rfind(|i| frame.get(*i).is_none() && !self.shot.taken.contains(i))
+            };
             let slots = self.shot.slots;
             let (Some(man), Some(prop)) = (free(1..slots + 1), free(slots + 1..u32::from(self.max_entries))) else {
                 return false;

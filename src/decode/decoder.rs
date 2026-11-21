@@ -594,6 +594,13 @@ impl Decoder {
         }
     }
 
+    /// The player slots (from 0) the cameraman is not to take: a voice's.
+    pub(crate) fn keep_from_shot(&mut self, slots: &[u8]) {
+        if let Some(w) = &mut self.world {
+            w.keep_from_shot(slots);
+        }
+    }
+
     /// The same without a frame, for clients who get none (a room paused). Whether that changed
     /// what they are to have: each needs a full update then.
     pub(crate) fn reshoot(&mut self) -> bool {
