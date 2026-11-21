@@ -563,6 +563,23 @@ impl Decoder {
         encode_message(SVC_GAMEEVENT, &GameEventMessage { event_type_id: def.id, event_type, event }, state)
     }
 
+    /// `hltv_fixed` at `pos` looking along `pitch` and `yaw` (degrees), for the same clients.
+    /// The game takes the coordinates and angles as signed, and no field of view but its own.
+    #[allow(clippy::cast_sign_loss)]
+    pub(crate) fn hltv_fixed(&self, pos: [i32; 3], pitch: i16, yaw: i16) -> Option<BitBuf> {
+        use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVFixedEvent};
+        self.game_event(GameEvent::HLTVFixed(HLTVFixedEvent {
+            pos_x: pos[0] as u32,
+            pos_y: pos[1] as u32,
+            pos_z: pos[2] as u32,
+            theta: pitch as u16,
+            phi: yaw as u16,
+            offset: 0,
+            fov: 90.0,
+            target: 0,
+        }))
+    }
+
     /// `hltv_cameraman`: the same clients see what player `index` does.
     pub(crate) fn hltv_cameraman(&self, index: u32) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVCameramanEvent};

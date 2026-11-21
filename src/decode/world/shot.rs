@@ -4,7 +4,9 @@
 //! the clients see what it does.
 //!
 //! The director's own cues do not do for a camera that moves: `hltv_fixed` turns in whole degrees
-//! and is placed per packet, and what `hltv_chase` aims at is eased by the game, and shakes.
+//! and is placed per packet, and what `hltv_chase` aims at is eased by the game, and shakes. But a
+//! client stays with a cameraman while there is one, its director off or not: for a camera that
+//! stays, `hltv_fixed` it is.
 
 use std::sync::Arc;
 
@@ -80,6 +82,9 @@ const PROP_COLOUR: SendPropIdentifier = prop_id("DT_BaseEntity", "m_clrRender");
 const PROP_LIFE: SendPropIdentifier = prop_id("DT_BasePlayer", "m_lifeState");
 const PROP_OBS_MODE: SendPropIdentifier = prop_id("DT_BasePlayer", "m_iObserverMode");
 const PROP_OBS_TARGET: SendPropIdentifier = prop_id("DT_BasePlayer", "m_hObserverTarget");
+const PROP_FOV: SendPropIdentifier = prop_id("DT_BasePlayer", "m_iFOV");
+/// The field of view the clients see through the cameraman: `hltv_fixed`'s, which a path ends on.
+const FOV: i64 = 90;
 const PROP_WEAPON: SendPropIdentifier = prop_id("DT_BaseCombatCharacter", "m_hActiveWeapon");
 
 impl World {
@@ -210,6 +215,7 @@ impl World {
                 (PROP_OBS_MODE, int(OBS_FIXED)),
                 (PROP_OBS_TARGET, int(i64::from(rig.prop | SERIAL << HANDLE_INDEX_BITS))),
                 (PROP_WEAPON, int(INVALID_EHANDLE)),
+                (PROP_FOV, int(FOV)),
             ],
         );
         touched

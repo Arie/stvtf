@@ -9,7 +9,7 @@ use super::player::Player;
 use super::tests::{bench_with_one_in, clients_ack, relay_playing};
 use super::tuning::NOT_A_FRAME;
 use super::{Camera, Path, Step, Want};
-use crate::decode::{Entities, Pose};
+use crate::decode::Entities;
 use crate::net::receiver::Receiver;
 use crate::relay::client::Phase;
 use crate::relay::tests::Bench;
@@ -36,13 +36,23 @@ struct Watcher {
     /// The players it was told are the cameraman, and how often it was sent into a player's eyes.
     men: Vec<u16>,
     chases: usize,
+    /// The spots it was told to watch from: where, the pitch and the yaw.
+    spots: Vec<([i32; 3], i16, i16)>,
 }
 
 impl Watcher {
     fn new(b: &Bench, demo: &std::path::Path) -> Self {
         b.client.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
         let dec = Cursor::open_detached(demo).unwrap();
-        Watcher { rx: Receiver::new(Some(b.challenge)), dec, fulls: 0, deltas: 0, men: Vec::new(), chases: 0 }
+        Watcher {
+            rx: Receiver::new(Some(b.challenge)),
+            dec,
+            fulls: 0,
+            deltas: 0,
+            men: Vec::new(),
+            chases: 0,
+            spots: Vec::new(),
+        }
     }
 
     /// Takes all it was sent since last time.
@@ -79,6 +89,11 @@ impl Watcher {
                         Ok(Message::GameEvent(e)) => match e.event {
                             GameEvent::HLTVCameraman(m) => self.men.push(m.index),
                             GameEvent::HLTVChase(_) => self.chases += 1,
+                            GameEvent::HLTVFixed(f) => self.spots.push((
+                                [f.pos_x, f.pos_y, f.pos_z].map(u32::cast_signed),
+                                f.theta.cast_signed(),
+                                f.phi.cast_signed(),
+                            )),
                             _ => {}
                         },
                         Ok(_) => {}
@@ -117,7 +132,7 @@ impl Watcher {
 
     /// Which of the relay's own entities it has: the prop, the cameraman.
     fn ours(&self, relay: &crate::decode::Decoder) -> [bool; 2] {
-        let (prop, man) = relay.rig_for_tests().expect("a camera of the relay's, once");
+        let Some((prop, man)) = relay.rig_for_tests() else { return [false, false] };
         let has = self.dec.dec.world_dump();
         [prop, man].map(|i| has.contains_key(&i))
     }
@@ -134,8 +149,8 @@ fn play(p: &mut Player<'_>, relay: &crate::relay::Relay, want: &mut Want, frames
 }
 
 /// A room's camera on a path: the clients have a prop where it is, turned the way it looks, and
-/// a player who watches from it, whom they are told is the cameraman; both gone again once the
-/// room lets go. A recorded demo's frames, and a live recording's that build on ones a few back.
+/// a player who watches from it, whom they are told is the cameraman; both gone again where it
+/// stays, which is a spot they are told. A recorded demo's frames, and a live recording's that build on ones a few back.
 #[test]
 fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
     let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
@@ -156,8 +171,8 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
         p.cur = Some(c);
         let mut client = Watcher::new(&b, &demo);
 
-        // Half a second of path, played past its end.
-        want.camera = Some(across(0.5));
+        // On its way along two seconds of path.
+        want.camera = Some(across(2.0));
         play(&mut p, &relay, &mut want, 60, &mut client);
         client.take(&b);
         let played = &p.cur.as_ref().unwrap().dec;
@@ -169,24 +184,29 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
         assert_eq!(played.rig_for_tests().map(|(_, man)| man), Some(man));
         assert!(man <= u32::from(played.extractor().max_players()));
         assert!(!client.men.is_empty() && client.men.iter().all(|m| u32::from(*m) == man), "{:?}", client.men);
-        let end = p.shot.pose.expect("a pose");
-        assert_eq!(end.pos, [800.0, -600.0, 1200.0]);
-        assert!((end.yaw - 143.13).abs() < 0.01 && (end.pitch - 41.99).abs() < 0.01, "{end:?}");
+        let on_the_way = p.shot.pose.expect("a pose");
+        assert!(on_the_way.pos[0] > -400.0 && on_the_way.pos[0] < 400.0 && client.spots.is_empty(), "{on_the_way:?}");
 
-        // Staying there, the stream's frames go as they are.
-        let was = client.deltas;
-        play(&mut p, &relay, &mut want, 20, &mut client);
+        // Past its end: the spot it ended at, in whole degrees, and the cameraman gone a moment
+        // after the clients were told so. The stream's frames go as they are from there.
+        let began = Instant::now();
+        while p.shot.pose.is_some() {
+            assert!(began.elapsed() < Duration::from_secs(10), "the cameraman stays");
+            play(&mut p, &relay, &mut want, 30, &mut client);
+            client.take(&b);
+        }
+        play(&mut p, &relay, &mut want, 10, &mut client);
         assert!(!p.cur.as_ref().unwrap().dec.shot_touched());
         client.take(&b);
-        assert!(client.deltas >= was + 10);
+        assert!(began.elapsed() >= Duration::from_millis(400));
+        assert_eq!(client.spots.last(), Some(&([800, -600, 1200], 42, 143)));
+        assert_eq!(client.ours(&p.cur.as_ref().unwrap().dec), [false, false]);
         client.has_what(&p.cur.as_ref().unwrap().dec);
 
-        // The room paused: a spot chosen then is where a full update has the camera.
-        // Until its next full update, and a while more for another.
+        // A camera that only stays is that at once, the room paused or not: no cameraman.
         let mut steps = |want: &Want, client: &mut Watcher| {
-            let (was, began) = (client.fulls, Instant::now());
-            while client.fulls == was || began.elapsed() < Duration::from_millis(600) {
-                assert!(began.elapsed() < Duration::from_secs(5), "no full update");
+            let began = Instant::now();
+            while began.elapsed() < Duration::from_millis(600) {
                 p.step(want).unwrap();
                 clients_ack(&relay);
                 client.hear(&relay);
@@ -199,21 +219,17 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
         let still = Step { secs: 0.0, pos: [100.0, 200.0, 800.0], aim: [100.0, 100.0, 800.0] };
         want.camera = Some(Camera::Along(Arc::new(Path { id: 2, began: Instant::now(), steps: vec![still] })));
         steps(&want, &mut client);
-        assert_eq!(client.fulls, fulls + 1);
-        assert_eq!(p.shot.pose, Some(Pose { pos: [100.0, 200.0, 800.0], pitch: 0.0, yaw: -90.0, cut: 2 }));
-        assert_eq!(client.ours(&p.cur.as_ref().unwrap().dec), [true, true]);
-        // Going on from there (a full update of a live recording is of a frame a few back).
+        assert_eq!((client.fulls, p.shot.pose), (fulls, None));
+        assert_eq!(client.spots.last(), Some(&([100, 200, 800], 0, -90)));
         want.paused = false;
         play(&mut p, &relay, &mut want, 20, &mut client);
         client.take(&b);
         client.has_what(&p.cur.as_ref().unwrap().dec);
-        assert_eq!(client.ours(&p.cur.as_ref().unwrap().dec), [true, true]);
 
         // Let go: both gone, and the clients sent into a player's eyes.
         want.camera = None;
         play(&mut p, &relay, &mut want, 20, &mut client);
         client.take(&b);
-        assert_eq!(client.ours(&p.cur.as_ref().unwrap().dec), [false, false]);
         assert!(p.cur.as_ref().unwrap().dec.cameraman().is_none());
         client.has_what(&p.cur.as_ref().unwrap().dec);
         assert_eq!(client.chases, 1);

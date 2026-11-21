@@ -41,6 +41,10 @@ pub(super) const CUE_EVERY: Duration = Duration::from_secs(3);
 /// jump.
 pub(super) const MOVE_GAP: f64 = 1.0;
 
+/// How long the cameraman stays once the clients were told the spot its path ended at
+/// (`hltv_fixed`): those on it have taken that by then.
+pub(super) const SETTLE: Duration = Duration::from_millis(500);
+
 /// The least `cl_interp_ratio` of clients watching through the relay's cameraman.
 pub(super) const INTERP_RATIO: &str = "2";
 

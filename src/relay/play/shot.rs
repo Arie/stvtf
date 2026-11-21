@@ -1,11 +1,15 @@
 //! The clients' camera where a room has it: at a spot of the map, or along a path through it.
+//!
+//! On its way it is the relay's cameraman's (see `decode::world::shot`), which a client cannot
+//! leave. Where it stays (a path of one moment, or the end of one) it is `hltv_fixed`'s, in whole
+//! degrees: a client with its director off looks where it likes.
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use super::cursor::Cursor;
 use super::player::Player;
-use super::tuning::{CUE_EVERY, INTERP_RATIO, MOVE_GAP, NOT_A_FRAME};
+use super::tuning::{CUE_EVERY, INTERP_RATIO, MOVE_GAP, NOT_A_FRAME, SETTLE};
 use super::{Camera, Path, Want};
 use crate::decode::Pose;
 
@@ -14,8 +18,10 @@ use crate::decode::Pose;
 pub(super) struct Shot {
     /// The camera they were last told to take, and when.
     pub(super) cued: Option<(Cue, Instant)>,
-    /// They watch through the relay's cameraman: a full update does not take them off it.
-    manned: bool,
+    /// They are on a camera of the relay's: a full update does not take them off it.
+    held: bool,
+    /// The path it came to the end of.
+    settled: Option<Settled>,
     /// The path the room has the camera on.
     moving: Option<Moving>,
     /// Where the room has it in the frame to come.
@@ -31,13 +37,24 @@ struct Moving {
     tick: i64,
 }
 
+/// A path the camera came to the end of.
+#[derive(Copy, Clone)]
+struct Settled {
+    id: u64,
+    end: Pose,
+    /// Since when the clients know it stays there.
+    told: Option<Instant>,
+}
+
 /// What the clients were last told to watch through.
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Cue {
     /// A player's eyes: their user id.
     Player(u16),
     /// The relay's cameraman: its entity.
     Man(u32),
+    /// The spot a path ended at: the path's id.
+    Spot(u64),
 }
 
 impl Path {
@@ -75,6 +92,7 @@ impl Player<'_> {
                 Some(m) if m.path.id == path.id => m,
                 // Set off a while ago (a relay just started): where it is by now.
                 gone => {
+                    self.shot.settled = None;
                     self.shot.cuts = self.shot.cuts.wrapping_add(1);
                     gone.insert(Moving { path: path.clone(), secs: path.began.elapsed().as_secs_f64(), tick })
                 }
@@ -84,9 +102,19 @@ impl Player<'_> {
                 m.secs += ahead;
             }
             m.tick = tick;
-            m.path.at(m.secs, self.shot.cuts)
+            let at = m.path.at(m.secs, self.shot.cuts);
+            if m.path.steps.last().is_some_and(|s| m.secs < f64::from(s.secs)) {
+                at
+            } else {
+                // At its end: the cameraman until those on it were told the spot a while ago,
+                // or not at all for a camera that only stays.
+                let told = self.shot.settled.and_then(|s| s.told);
+                self.shot.settled = at.map(|end| Settled { id: m.path.id, end, told });
+                at.filter(|_| m.path.steps.len() > 1 && told.is_none_or(|t| t.elapsed() < SETTLE))
+            }
         } else {
             self.shot.moving = None;
+            self.shot.settled = None;
             None
         };
         c.dec.set_shot(pose);
@@ -110,7 +138,7 @@ impl Player<'_> {
             // Off the relay's own: nothing but a cue takes the clients from it, and the demo's
             // next may be long in coming. A player's eyes, until then.
             self.shot.cued = None;
-            if std::mem::take(&mut self.shot.manned)
+            if std::mem::take(&mut self.shot.held)
                 && let Some(msg) = c.dec.living_players().first().and_then(|(player, _)| c.dec.hltv_chase(*player))
             {
                 let mut hub = self.relay.hub();
@@ -124,10 +152,11 @@ impl Player<'_> {
         };
         let cue = match camera {
             Camera::Follow { player } => Cue::Player(*player),
-            // Once a frame has the cameraman.
-            Camera::Along(_) => match c.dec.cameraman() {
-                Some(man) => Cue::Man(man),
-                None => return,
+            // At its end; on its way, once a frame has the cameraman.
+            Camera::Along(_) => match (self.shot.settled, c.dec.cameraman()) {
+                (Some(s), _) => Cue::Spot(s.id),
+                (None, Some(man)) => Cue::Man(man),
+                (None, None) => return,
             },
         };
         if self.shot.cued.is_some_and(|(was, at)| was == cue && at.elapsed() < CUE_EVERY) {
@@ -136,9 +165,13 @@ impl Player<'_> {
         let msg = match cue {
             Cue::Player(player) => c.dec.hltv_chase(player),
             Cue::Man(man) => c.dec.hltv_cameraman(man),
+            Cue::Spot(_) => self.shot.settled.and_then(|s| {
+                let whole = |v: f32| v.round() as i32;
+                c.dec.hltv_fixed(s.end.pos.map(whole), whole(s.end.pitch) as i16, whole(s.end.yaw) as i16)
+            }),
         };
         if let Some(msg) = msg {
-            tracing::debug!("relay: camera {camera:?}");
+            tracing::debug!("relay: camera {cue:?}");
             let mut hub = self.relay.hub();
             if matches!(cue, Cue::Man(_)) {
                 // Between two frames back, not from the last on: a frame lost does not show.
@@ -146,7 +179,10 @@ impl Player<'_> {
             }
             hub.queue_to_active(&msg);
         }
-        self.shot.manned = matches!(cue, Cue::Man(_));
+        self.shot.held = matches!(cue, Cue::Man(_) | Cue::Spot(_));
+        if let (Cue::Spot(_), Some(s)) = (cue, &mut self.shot.settled) {
+            s.told.get_or_insert_with(Instant::now);
+        }
         self.shot.cued = Some((cue, Instant::now()));
     }
 }
