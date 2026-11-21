@@ -601,15 +601,13 @@ impl Decoder {
         }
     }
 
-    /// The same without a frame, for clients who get none (a room paused). Whether that changed
-    /// what they are to have: each needs a full update then.
+    /// The same in the frames kept, for a room paused. Whether any changed: a full update then.
     pub(crate) fn reshoot(&mut self) -> bool {
         let state = self.handler.get_parser_state();
         self.world.as_mut().is_some_and(|w| w.reshoot(state))
     }
 
-    /// Whether the last frame changed what is the relay's own of the camera: its entities are for
-    /// no client as they are then.
+    /// Whether the last frame changed the relay's camera: its entities are for no client then.
     pub(crate) fn shot_touched(&self) -> bool {
         self.world.as_ref().is_some_and(super::world::World::shot_touched)
     }

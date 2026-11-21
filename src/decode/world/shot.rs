@@ -1,12 +1,8 @@
-//! The clients' camera where the relay wants it, moved between frames by the game itself: a prop
-//! nobody sees where the camera is, turned the way it looks, and a player nobody sees who watches
-//! from it as from a map's fixed camera. Told that player is the cameraman (`hltv_cameraman`),
-//! the clients see what it does.
+//! The relay's own camera: a see-through prop where it is, and a hidden player watching from it
+//! whom the clients take as cameraman (`hltv_cameraman`). The game moves it between frames.
 //!
-//! The director's own cues do not do for a camera that moves: `hltv_fixed` turns in whole degrees
-//! and is placed per packet, and what `hltv_chase` aims at is eased by the game, and shakes. But a
-//! client stays with a cameraman while there is one, its director off or not: for a camera that
-//! stays, `hltv_fixed` it is.
+//! `hltv_fixed` turns in whole degrees and `hltv_chase` shakes, so neither does for a move. A
+//! client cannot leave a cameraman, so a camera that stays is `hltv_fixed`'s.
 
 use std::sync::Arc;
 
@@ -19,15 +15,13 @@ use tf_demo_parser::demo::vector::Vector;
 use super::{Entity, Frame, Props, World, same};
 use crate::decode::props::{EF_NODRAW, INVALID_EHANDLE, PROP_EFFECTS, PROP_ORIGIN, PROP_TEAM_NUM, prop_id, prop_index};
 
-/// Where the clients' camera is, and the way it looks: degrees, down and counterclockwise
-/// positive.
+/// Where the camera is and the way it looks (degrees, down and counterclockwise positive).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct Pose {
     pub(crate) pos: [f32; 3],
     pub(crate) pitch: f32,
     pub(crate) yaw: f32,
-    /// Counts the cuts, round and round: a pose of another count is not moved to from the last,
-    /// it is there at once.
+    /// Changed, the camera is there at once, not moved there.
     pub(crate) cut: u8,
 }
 
@@ -44,8 +38,7 @@ pub(super) struct Shot {
     model: Option<u16>,
     /// How many players the server has room for.
     slots: u32,
-    /// The players' entities the cameraman is not to be: what something else of the relay's has
-    /// in a slot nobody is in (a voice).
+    /// Player entities the cameraman keeps off (a voice's slot).
     taken: Vec<u32>,
 }
 
@@ -66,8 +59,7 @@ const MAN_CLASS: &str = "CTFPlayer";
 const EF_NO_SHADOWS: i64 = 0x10 | 0x40;
 /// `m_nRenderMode`: drawn through its colour's alpha.
 const RENDER_TRANS: i64 = 2;
-/// `m_clrRender`: white, wholly see-through. Drawn so, not left out: the game only moves
-/// what it draws between frames.
+/// `m_clrRender`: see-through. Drawn all the same: the game only moves what it draws.
 const CLEAR: i64 = 0x00FF_FFFF;
 const TEAM_SPECTATOR: i64 = 1;
 const LIFE_DEAD: i64 = 2;
@@ -75,7 +67,7 @@ const LIFE_DEAD: i64 = 2;
 const OBS_FIXED: i64 = 3;
 
 const PROP_TURN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
-/// Changed, the game takes the entity as put elsewhere: it does not move it there between frames.
+/// Changed, the game puts the entity there at once.
 const PROP_CUT: SendPropIdentifier = prop_id("DT_BaseEntity", "m_ubInterpolationFrame");
 /// The values it has.
 const CUTS: u8 = 4;
@@ -87,14 +79,13 @@ const PROP_OBS_MODE: SendPropIdentifier = prop_id("DT_BasePlayer", "m_iObserverM
 const PROP_OBS_TARGET: SendPropIdentifier = prop_id("DT_BasePlayer", "m_hObserverTarget");
 const PROP_SIM_TIME: SendPropIdentifier = prop_id("DT_BaseEntity", "m_flSimulationTime");
 const PROP_FOV: SendPropIdentifier = prop_id("DT_BasePlayer", "m_iFOV");
-/// The field of view the clients see through the cameraman: `hltv_fixed`'s, which a path ends on.
+/// The cameraman's field of view: `hltv_fixed`'s.
 const FOV: i64 = 90;
 const PROP_WEAPON: SendPropIdentifier = prop_id("DT_BaseCombatCharacter", "m_hActiveWeapon");
 
 impl World {
-    /// The clients' camera from the next frame on: at `pose`, or (none) the director's again.
-    /// `model` is any prop's or player's model loaded, `slots` how many players the server has
-    /// room for.
+    /// The camera from the next frame on: at `pose`, or (none) the director's. `model` is any
+    /// model loaded, `slots` the server's player slots.
     pub(crate) fn set_shot(&mut self, pose: Option<Pose>, model: Option<u16>, slots: u8) {
         self.shot.pose = pose;
         self.shot.model = model;
@@ -106,8 +97,7 @@ impl World {
         self.shot.taken = slots.iter().map(|s| u32::from(*s) + 1).collect();
     }
 
-    /// The same in every frame kept, as if it always was: for clients who get no frames (a room
-    /// paused). Whether that changed any: every client needs a full update then.
+    /// The same in every frame kept, for a room paused. Whether any changed: a full update then.
     pub(crate) fn reshoot(&mut self, state: &ParserState) -> bool {
         let mut frames = std::mem::take(&mut self.frames);
         let mut touched = false;
@@ -118,8 +108,7 @@ impl World {
         touched
     }
 
-    /// Whether the last frame applied changed what is ours in it: the stream's own entities are
-    /// for no client then.
+    /// Whether the last frame changed ours: the stream's entities are for no client then.
     pub(crate) fn shot_touched(&self) -> bool {
         self.shot.touched
     }
@@ -136,8 +125,7 @@ impl World {
         self.shot.rig.map(|r| (r.prop, r.man))
     }
 
-    /// Puts what is ours in `frame`, which the stream's `pe` was just applied to. Whether that
-    /// changed any of it from the frame it builds on.
+    /// Puts ours in `frame`, after the stream's `pe`. Whether that changed any.
     pub(super) fn shoot(
         &mut self,
         pe: &PacketEntitiesMessage,
@@ -180,8 +168,7 @@ impl World {
         let rig = if let Some(rig) = self.shot.rig {
             rig
         } else {
-            // The highest free: players come into the lowest slots, entities into the lowest
-            // indexes.
+            // The highest free: players and entities come in from the lowest.
             let free = |mut range: std::ops::Range<u32>| {
                 range.rfind(|i| frame.get(*i).is_none() && !self.shot.taken.contains(i))
             };
@@ -221,8 +208,7 @@ impl World {
                 (PROP_CUT, int(i64::from(pose.cut % CUTS))),
             ],
         );
-        // When it was last elsewhere, as a server says it of what moves: the game moves it
-        // between the moments it was told of, each at its time.
+        // When it moved, as a server says it: the game moves it between those moments.
         if moved {
             put(frame, state, rig.prop, &[(PROP_SIM_TIME, int(sim_time(tick, rig.prop)))]);
         }
@@ -245,8 +231,7 @@ impl World {
     }
 }
 
-/// `m_flSimulationTime` of an entity that moved at `tick`, as a server sends it: the ticks since
-/// the last hundredth one, which each entity counts from a tick of its own.
+/// `m_flSimulationTime` as a server sends it: ticks since the entity's last hundredth one.
 fn sim_time(tick: u32, entity: u32) -> i64 {
     let base = 100 * (tick.saturating_sub(entity % 32) / 100);
     i64::from((tick - base) & 0xFF)

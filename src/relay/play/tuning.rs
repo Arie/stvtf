@@ -37,12 +37,10 @@ pub(super) const HAND_OVER_WAIT: Duration = Duration::from_secs(1);
 /// How often the camera cue is repeated, for clients that looked away.
 pub(super) const CUE_EVERY: Duration = Duration::from_secs(3);
 
-/// A path's camera goes on by the time between two frames played, up to this (seconds): more is a
-/// jump.
+/// The most seconds between two frames that a path's camera goes on by: more is a jump.
 pub(super) const MOVE_GAP: f64 = 1.0;
 
-/// How long the cameraman stays once the clients were told the spot its path ended at
-/// (`hltv_fixed`): those on it have taken that by then.
+/// How long the cameraman stays after the clients were told the spot its path ended at.
 pub(super) const SETTLE: Duration = Duration::from_millis(500);
 
 /// The least `cl_interp_ratio` of clients watching through the relay's cameraman.

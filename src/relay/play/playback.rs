@@ -41,8 +41,7 @@ pub enum Camera {
     Along(Arc<Path>),
 }
 
-/// A camera's way through a map, which the game takes it along between the moments given. One
-/// moment is a camera that stays.
+/// A camera's way through a map; one moment is a camera that stays.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Path {
     /// Which it is: the same again sets off anew under another.
