@@ -26,15 +26,18 @@ mod notes;
 mod playback;
 mod player;
 mod run;
+mod shot;
 mod tuning;
 mod voice;
 
 pub use self::light::Light;
 pub use self::names::Names;
 pub use self::notes::Note;
-pub use self::playback::{Camera, Playback, Want};
+pub use self::playback::{Camera, Path, Playback, Step, Want};
 pub use self::voice::VoiceIn;
 pub use crate::decode::beams::Beam;
 
+#[cfg(test)]
+mod shot_tests;
 #[cfg(test)]
 mod tests;

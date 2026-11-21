@@ -206,15 +206,10 @@ fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
     let GameEvent::HLTVChase(chase) = e.event else { panic!("{:?}", e.event) };
     assert_eq!(u32::from(chase.target_1), player.ent);
     assert_eq!(chase.in_eye, 1);
-    // A spot's coordinates and angles go as signed.
-    let msg = c.dec.hltv_fixed([-1200, 300, 1500], 60, -90).unwrap();
+    // The relay's own cameraman, by entity.
+    let msg = c.dec.hltv_cameraman(24).unwrap();
     let span = Span { id: u8::try_from(SVC_GAMEEVENT).unwrap(), bits: 0..msg.nbits() };
     assert!(c.dec.is_director_cue(msg.bytes(), &span));
-    let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
-    let t: tf_demo_parser::demo::message::MessageType = bitbuffer::BitRead::read(&mut s).unwrap();
-    let Message::GameEvent(e) = Message::from_type(t, &mut s, state).unwrap() else { panic!() };
-    let GameEvent::HLTVFixed(fixed) = e.event else { panic!("{:?}", e.event) };
-    assert_eq!((fixed.pos_x.cast_signed(), fixed.pos_z, fixed.theta, fixed.phi.cast_signed()), (-1200, 1500, 60, -90));
 }
 
 /// `pl_upward.dem` a few frames in, with the next one read as the server's changelevel would
@@ -240,7 +235,7 @@ fn upward_with_changelevel() -> (Cursor, Vec<u8>) {
     (c, ids)
 }
 
-fn four_frames_kept(c: &Cursor) -> bool {
+pub(super) fn four_frames_kept(c: &Cursor) -> bool {
     c.recent.len() >= 4
 }
 
@@ -261,7 +256,7 @@ fn sent_unreliably(b: &Bench, reader: &mut Cursor) -> Vec<Vec<u8>> {
 }
 
 /// The bench's client, in the game.
-fn bench_with_one_in() -> Bench {
+pub(super) fn bench_with_one_in() -> Bench {
     let mut b = Bench::new("", 1);
     b.connect();
     let c = b.client_state();
@@ -331,7 +326,7 @@ fn follow_as_a_game_client(b: &Bench, reader: &Cursor) -> (usize, usize) {
 
 /// A relay with the bench's hub, its client in the game, and a player of `c` toward `tick`, at
 /// speed 0: the tick stays.
-fn relay_playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
+pub(super) fn relay_playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
     let config = crate::relay::RelayConfig::new("127.0.0.1:0");
     let spare = crate::relay::hub::Hub::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap(), &config);
     let hub = std::mem::replace(&mut b.hub, spare);
@@ -354,7 +349,7 @@ fn relay_playing(b: &mut Bench, c: Cursor, tick: u32) -> (Relay, Cursor, Want) {
 }
 
 /// The clients ack the last frame they were sent, as a game client that got it does.
-fn clients_ack(relay: &Relay) {
+pub(super) fn clients_ack(relay: &Relay) {
     for c in relay.hub().clients.values_mut() {
         if let Some(last) = c.frames.back().copied() {
             (c.acked, c.keyed) = (Some(last), None);
@@ -1009,6 +1004,9 @@ fn going_into_a_demo_played_before_starts_from_its_checkpoints() {
 /// and acks the last, and a delta from a frame it lacks would crash it.
 struct LossyClient {
     rx: Receiver,
+    /// What it makes of what it gets, when the relay sends entities of its own: the relay's
+    /// decoder, which never read those, cannot read their changes.
+    own: Option<Cursor>,
     frames: std::collections::BTreeSet<u32>,
     got: usize,
     fulls: usize,
@@ -1027,8 +1025,13 @@ impl LossyClient {
             self.got += 1;
             let dropped = self.got.is_multiple_of(lose);
             for s in pkt.streams.iter().filter(|s| !s.reliable && !dropped) {
+                let reader = self.own.as_ref().unwrap_or(reader);
                 let Some(tick) = reader.dec.frame_tick(s.bits.bytes()) else { continue };
-                match reader.dec.entities(s.bits.bytes()) {
+                let entities = reader.dec.entities(s.bits.bytes());
+                if let Some(own) = &mut self.own {
+                    assert!(!own.dec.feed(s.bits.bytes(), s.bits.nbits()).lost_frame, "a frame the client cannot take");
+                }
+                match entities {
                     None => continue,
                     Some(Entities::Full) => {
                         self.frames.clear();
@@ -1063,16 +1066,28 @@ impl LossyClient {
 /// one it may lack, and it is given a full update when there is none to write them from.
 #[test]
 fn a_client_that_loses_datagrams_is_never_sent_a_delta_from_a_frame_it_lacks() {
+    loses_datagrams(None);
+}
+
+/// Nor with the relay's camera on its way along a path, each frame written for it.
+#[test]
+fn a_client_that_loses_datagrams_follows_a_camera_on_its_path() {
+    loses_datagrams(Some(&super::shot_tests::across(60.0)));
+}
+
+fn loses_datagrams(camera: Option<&super::Camera>) {
     for lose in [3, 7, 20] {
         let mut b = bench_with_one_in();
         b.client_state().set_phase(Phase::WaitingFull, Instant::now());
         let c = upward_until(four_frames_kept);
-        let (relay, c, _) = relay_playing(&mut b, c, 0);
+        let (relay, c, want) = relay_playing(&mut b, c, 0);
+        let want = Want { camera: camera.cloned(), ..want };
         relay.hub().start_playing();
         let mut p = Player::new(&relay);
         p.cur = Some(c);
         let mut client = LossyClient {
             rx: Receiver::new(Some(b.challenge)),
+            own: camera.is_some().then(|| Cursor::open_detached(&want.demo).unwrap()),
             frames: std::collections::BTreeSet::default(),
             got: 0,
             fulls: 0,
@@ -1087,12 +1102,17 @@ fn a_client_that_loses_datagrams_is_never_sent_a_delta_from_a_frame_it_lacks() {
                 while p.cur.as_mut().unwrap().next_tick() == Some(NOT_A_FRAME) {
                     p.cur.as_mut().unwrap().skip_next();
                 }
-                p.play_frame(None);
+                p.play_frame(&want);
             }
             // Read as the player's own decoder reads them: it has the baselines of now.
             client.take(&b, &relay, p.cur.as_ref().unwrap(), lose);
         }
         assert!(client.deltas > 150, "losing every {lose}th: {} full updates, {} deltas", client.fulls, client.deltas);
         assert!(client.fulls < 40, "not a full update for every loss: {}", client.fulls);
+        let man = p.cur.as_ref().unwrap().dec.cameraman();
+        assert_eq!(man.is_some(), camera.is_some());
+        if let Some(own) = &client.own {
+            assert!(own.dec.world_dump().contains_key(&man.unwrap()), "the client has the cameraman");
+        }
     }
 }

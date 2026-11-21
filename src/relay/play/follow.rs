@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use super::Camera;
+use super::Want;
 use super::cursor::{for_watchers, with_entities, without_cues, without_entities};
 use super::player::Player;
 use crate::decode::{Decoder, Entities};
@@ -11,9 +11,10 @@ use crate::relay::hub::{Part, Played};
 
 impl Player<'_> {
     /// Plays the next frame to the clients (without the demo's camera cues when the room has its
-    /// own `camera`). One they cannot follow as it is (see [`follows`]) is passed over, and they
+    /// own camera). One they cannot follow as it is (see [`follows`]) is passed over, and they
     /// get a full update of their own instead.
-    pub(super) fn play_frame(&mut self, camera: Option<Camera>) {
+    pub(super) fn play_frame(&mut self, want: &Want) {
+        self.shoot(want);
         let Some(c) = &mut self.cur else { return };
         let base = c.next_frame().and_then(|d| c.dec.entities(d));
         // With baselines of its own every frame is written anew, from what each client acked.
@@ -37,7 +38,7 @@ impl Player<'_> {
         let was_paused = c.paused;
         let Some((bits, life)) = c.decode() else { return };
         // Ours, not the demo's director's.
-        let (bits, life) = if camera.is_some() { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
+        let (bits, life) = if want.camera.is_some() { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
         let (bits, life) = if c.dec.players_own() { for_watchers(&bits, &life, c.view) } else { (bits, life) };
         let mut hub = self.relay.hub();
         if let Some(entities) = c.dec.entities(bits.bytes()) {
@@ -46,8 +47,9 @@ impl Player<'_> {
                 Entities::Delta(base) => Some(base),
             };
             // From each frame a client acked: it has that one for sure.
-            // So is a team's score that the room counts otherwise: the game's own is for nobody.
-            let rewritten = c.dec.own_baselines() || c.dec.score_touched();
+            // So is a team's score that the room counts otherwise, and a camera of the relay's that
+            // moved: the game's own is for nobody.
+            let rewritten = c.dec.own_baselines() || c.dec.score_touched() || c.dec.shot_touched();
             let from = hub.acked().into_iter().filter(|a| rewritten || base.is_some_and(|b| b != *a));
             let from = from.filter_map(|a| Some((a, with_entities(&bits, &life, &c.dec.entities_from(a)?)))).collect();
             let stripped = without_entities(&bits, &life);

@@ -37,6 +37,13 @@ pub(super) const HAND_OVER_WAIT: Duration = Duration::from_secs(1);
 /// How often the camera cue is repeated, for clients that looked away.
 pub(super) const CUE_EVERY: Duration = Duration::from_secs(3);
 
+/// A path's camera goes on by the time between two frames played, up to this (seconds): more is a
+/// jump.
+pub(super) const MOVE_GAP: f64 = 1.0;
+
+/// The least `cl_interp_ratio` of clients watching through the relay's cameraman.
+pub(super) const INTERP_RATIO: &str = "2";
+
 /// How often kept beams are shown again; each shows until then, its life rounded up to the step
 /// it is sent in, so they overlap by under a tenth of a second.
 pub(super) const KEPT_EVERY: Duration = Duration::from_secs(2);

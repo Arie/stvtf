@@ -73,6 +73,11 @@ impl Extractor {
         Some(u32::from(bot.entity))
     }
 
+    /// How many players the server has room for.
+    pub(crate) fn max_players(&self) -> u8 {
+        self.max_players
+    }
+
     /// The player slots nobody is in (no player, no bot, nobody still leaving), highest first:
     /// players come into the lowest.
     pub(crate) fn spare_slots(&self) -> Vec<u8> {

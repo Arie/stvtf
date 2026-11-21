@@ -291,6 +291,11 @@ impl Hub {
         self.clients.values().any(|c| c.takes_full_update(&self.backlog))
     }
 
+    /// Whether a client waits for a full update, ready for it or not.
+    pub(super) fn awaits_keyframe(&self) -> bool {
+        self.clients.values().any(|c| c.phase == Phase::WaitingFull)
+    }
+
     /// Every client in the game waits for a keyframe: playback jumped, paused or went on, or came
     /// to a frame they cannot follow.
     pub(super) fn rekey_all(&mut self, now: Instant) {

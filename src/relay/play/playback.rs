@@ -30,22 +30,38 @@ pub struct Want {
 }
 
 /// A camera the clients' director is told to take.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Camera {
     /// In the eyes of a player.
     Follow {
         /// Their user id.
         player: u16,
     },
-    /// At a spot of the map, looking one way.
-    Fixed {
-        /// Where it is.
-        pos: [i32; 3],
-        /// Degrees, down positive.
-        pitch: i16,
-        /// Degrees, as the game's yaw.
-        yaw: i16,
-    },
+    /// Along a path through the map, then at its end.
+    Along(Arc<Path>),
+}
+
+/// A camera's way through a map, which the game takes it along between the moments given. One
+/// moment is a camera that stays.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Path {
+    /// Which it is: the same again sets off anew under another.
+    pub id: u64,
+    /// When it set off.
+    pub began: Instant,
+    /// Its moments, in order.
+    pub steps: Vec<Step>,
+}
+
+/// A moment of a camera's path.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Step {
+    /// Seconds in.
+    pub secs: f32,
+    /// Where it is.
+    pub pos: [f32; 3],
+    /// What it looks at.
+    pub aim: [f32; 3],
 }
 
 impl Want {

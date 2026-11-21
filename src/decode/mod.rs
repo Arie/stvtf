@@ -27,6 +27,7 @@ pub use self::demo_file::demo_file;
 pub use self::send_tables::Tables;
 pub(crate) use self::tables::{BeamModel, ModelsSent, Placed};
 pub(crate) use self::voice_out::{steam_voice, voice_runs};
+pub(crate) use self::world::Pose;
 
 #[cfg(test)]
 mod baseline_tests;

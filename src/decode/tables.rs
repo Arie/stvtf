@@ -126,6 +126,8 @@ pub(crate) struct Tables {
     beam_sprite: Option<(usize, u16)>,
     /// One past the last entry of `modelprecache`.
     models: u16,
+    /// The first model loaded that is no map's and no sprite (a `.mdl`).
+    studio: Option<u16>,
 }
 
 impl Tables {
@@ -217,6 +219,11 @@ impl Tables {
 
     fn note_model(&mut self, index: u16, name: Option<&str>) {
         self.models = self.models.max(index.saturating_add(1));
+        if name.and_then(|n| n.rsplit_once('.')).is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("mdl"))
+            && self.studio.is_none_or(|i| index < i)
+        {
+            self.studio = Some(index);
+        }
         let Some(rank) = name.and_then(|n| BEAM_SPRITES.iter().position(|s| n.eq_ignore_ascii_case(s))) else { return };
         if self.beam_sprite.is_none_or(|(r, _)| rank < r) {
             self.beam_sprite = Some((rank, index));
@@ -226,6 +233,11 @@ impl Tables {
     /// The model index of a sprite to draw beams with, if one is loaded.
     pub(crate) fn beam_sprite(&self) -> Option<u16> {
         self.beam_sprite.map(|(_, i)| i)
+    }
+
+    /// The model index of some prop's or player's model, if one is loaded.
+    pub(crate) fn studio(&self) -> Option<u16> {
+        self.studio
     }
 
     /// The match's own laser, if it loaded it.

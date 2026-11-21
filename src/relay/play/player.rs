@@ -8,10 +8,8 @@ use std::time::Instant;
 use super::beams::Kept;
 use super::cursor::{Cursor, owned};
 use super::index::Index;
-use super::tuning::{
-    CUE_EVERY, FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, PAST_INDEXES, RETRY,
-};
-use super::{Camera, Playback, Want, light, names, notes, voice};
+use super::tuning::{FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, PAST_INDEXES, RETRY};
+use super::{Playback, Want, light, names, notes, shot, voice};
 use crate::Result;
 use crate::decode::{BeamModel, ModelsSent};
 use crate::error::bail;
@@ -46,8 +44,8 @@ pub(super) struct Player<'r> {
     pub(super) index: Option<Arc<Index>>,
     /// Those of the demos played before it, the last few: going back into one starts from them.
     pub(super) past: Vec<Arc<Index>>,
-    /// The camera the clients were last told to take, and when.
-    cued: Option<(Camera, Instant)>,
+    /// The clients' camera, as the room has it.
+    pub(super) shot: shot::Shot,
     /// The kept beams shown: when each last was, and what may be sent now.
     pub(super) kept: Kept,
     /// The notes the clients were given.
@@ -97,7 +95,7 @@ impl<'r> Player<'r> {
             given_up: None,
             index: None,
             past: Vec::new(),
-            cued: None,
+            shot: shot::Shot::default(),
             kept: Kept::new(Instant::now()),
             shown_notes: notes::Shown::default(),
             shown_names: names::Shown::default(),
@@ -258,7 +256,7 @@ impl Player<'_> {
     /// have and get a full update; `demo`'s signon is for those to come. With a laser of the
     /// relay's, only if one coming in later gets it where they have it.
     pub(super) fn goes_on_into(&mut self, demo: &std::path::Path) -> bool {
-        let (laser, port) = (self.laser, self.relay.port());
+        let (laser, port, pose) = (self.laser, self.relay.port(), self.shot.pose);
         let Some(c) = self.cur.as_mut().filter(|c| c.started && c.server.is_some()) else { return false };
         let Ok(mut next) = Cursor::open_detached(demo) else { return false };
         while !next.started && next.next_tick().is_some() {
@@ -304,6 +302,7 @@ impl Player<'_> {
         {
             next = there;
         }
+        next.dec.set_shot(pose);
         skim(&mut next, None, at);
         if at < begins || laser_there(&next).is_none() {
             let why =
@@ -349,6 +348,7 @@ impl Player<'_> {
             Some(m) => Cursor::restore(&played.demo, &m)?,
             None => Cursor::open_detached(&played.demo)?,
         };
+        self.shoot_in(&mut c);
         skim(&mut c, None, played.tick);
         if c.tick() != played.tick || !c.started {
             bail!("cannot find a frame of {} at {}", played.demo.display(), played.tick);
@@ -446,6 +446,7 @@ impl Player<'_> {
             Some(m) => Cursor::restore(&want.demo, m)?,
             None => Cursor::open_detached(&want.demo)?,
         };
+        self.shoot_in(&mut again);
         // The clients had the string table changes up to there.
         self.dry = skim(&mut again, None, target).1;
         tracing::debug!("relay: decoded back to {target} in {} ms", took.elapsed().as_millis());
@@ -476,6 +477,7 @@ impl Player<'_> {
         if self.restart_if_laser_loaded_twice() {
             return Ok(());
         }
+        self.shoot(want);
         let Some(c) = &self.cur else { return Ok(()) };
         let interval = c.dec.tick_interval();
         let target = target_tick(c, want, interval);
@@ -493,7 +495,7 @@ impl Player<'_> {
         } else if self.send_keyframe(interval).is_break() {
             return Ok(());
         }
-        self.cue(want.camera);
+        self.cue(want.camera.as_ref());
         self.advance(want, target);
         Ok(())
     }
@@ -553,6 +555,7 @@ impl Player<'_> {
             let passed = m.tables();
             self.relay.hub().add_table_changes(passed.get(c.tables.len()..).unwrap_or_default());
             *c = Cursor::restore(&want.demo, m)?;
+            c.dec.set_shot(self.shot.pose);
         }
         let (decoded, dry) = skim(c, Some(&self.relay.hub), target);
         let decoded = decoded + usize::from(mark.is_some());
@@ -613,7 +616,7 @@ impl Player<'_> {
         }
         self.problem = None;
         // Those just in are told where the camera is.
-        self.cued = None;
+        self.shot.cued = None;
         ControlFlow::Continue(())
     }
 
@@ -630,7 +633,7 @@ impl Player<'_> {
                     self.relay.hub().skim(&bits, &life);
                 }
             }
-            Some(next) if !want.paused && next <= target => self.play_frame(want.camera),
+            Some(next) if !want.paused && next <= target => self.play_frame(want),
             _ => std::thread::sleep(NAP),
         }
     }
@@ -654,34 +657,6 @@ impl Player<'_> {
         self.relay.hub().rekey_all(Instant::now());
         self.rekeyed = true;
         self.floor = None;
-    }
-
-    /// Tells the clients in the game to take `camera`, when it changed and every [`CUE_EVERY`].
-    fn cue(&mut self, camera: Option<Camera>) {
-        let Some(camera) = camera else {
-            // Off a spot: nothing but a cue takes the clients from it, and the demo's next may be
-            // long in coming. A player's eyes, until then.
-            if let Some((Camera::Fixed { .. }, _)) = self.cued.take()
-                && let Some(c) = self.cur.as_ref().filter(|c| c.started)
-                && let Some(msg) = c.dec.living_players().first().and_then(|(player, _)| c.dec.hltv_chase(*player))
-            {
-                self.relay.hub().queue_to_active(&msg);
-            }
-            return;
-        };
-        if self.cued.is_some_and(|(was, at)| was == camera && at.elapsed() < CUE_EVERY) {
-            return;
-        }
-        let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
-        let msg = match camera {
-            Camera::Follow { player } => c.dec.hltv_chase(player),
-            Camera::Fixed { pos, pitch, yaw } => c.dec.hltv_fixed(pos, pitch, yaw),
-        };
-        if let Some(msg) = msg {
-            tracing::debug!("relay: camera {camera:?}");
-            self.relay.hub().queue_to_active(&msg);
-        }
-        self.cued = Some((camera, Instant::now()));
     }
 }
 
