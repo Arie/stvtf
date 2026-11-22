@@ -13,7 +13,6 @@ const PAST: &[(&str, usize)] = &[
     ("src/output/events.rs", 557),
     ("src/relay/hub.rs", 510),
     ("src/relay/play/player.rs", 562),
-    ("src/relay/play/tests.rs", 989),
     ("src/relay/tests.rs", 644),
     ("src/session.rs", 668),
 ];
