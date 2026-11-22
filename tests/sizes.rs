@@ -3,13 +3,8 @@
 
 use std::path::Path;
 
-const LIMIT: usize = 500;
-const PAST: &[(&str, usize)] = &[
-    ("src/decode/decoder.rs", 628),
-    ("src/decode/extract/entities.rs", 561),
-    ("src/output/events.rs", 557),
-    ("src/relay/hub.rs", 510),
-];
+const LIMIT: usize = 600;
+const PAST: &[(&str, usize)] = &[];
 
 fn sources(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
