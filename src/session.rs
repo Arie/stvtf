@@ -66,6 +66,8 @@ pub fn parse_snapshot_hz(hz: &str) -> Result<f32> {
     }
     Ok(parsed)
 }
+/// The spawncount a client quotes before it was told one.
+const NO_SPAWNCOUNT: i32 = -1;
 /// How long a read waits, so tick acks go out on time.
 const READ_POLL: Duration = Duration::from_millis(20);
 const TICK_ACK_EVERY: Duration = Duration::from_millis(100);
@@ -275,6 +277,14 @@ impl<'o> Session<'o> {
     }
 
     fn advance(&mut self, state: Signon, emit: &mut dyn FnMut(Line)) {
+        if state == Signon::Connected && self.spawncount.is_none() {
+            // The server asks for a reconnect before any `ServerInfo` (a relay whose signon started
+            // over while we came in): said so as a game client does, no spawncount to quote yet.
+            if self.pending.is_none() {
+                self.send_reliable(&messages::signonstate(state, NO_SPAWNCOUNT), None);
+            }
+            return;
+        }
         if state == Signon::ChangeLevel {
             emit(Line::Status(Status::Changelevel));
             // Answer the next reconnect, even at the same spawncount.

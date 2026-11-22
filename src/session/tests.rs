@@ -155,3 +155,18 @@ fn a_packet_read_while_connecting_is_decoded_first() {
     assert!(lines.len() > 1, "{lines:?}");
     assert_eq!(lines, whole);
 }
+
+/// A relay whose signon starts over as we come in asks for a reconnect before it has sent a
+/// `ServerInfo`: answered, as a game client answers it, or the relay sends nothing more.
+#[test]
+fn a_reconnect_asked_before_any_server_info_is_answered() {
+    let opt = Options::default();
+    let mut s = Session::new(None, 0, &opt);
+    let sent = s.out_seq;
+    s.advance(Signon::Connected, &mut |_| {});
+    assert!(s.pending.is_some() && s.out_seq == sent + 1, "said once");
+    assert_eq!(s.state, Signon::Connected);
+    // Not again for the ack of it, nor while it is still on its way.
+    s.advance(Signon::Connected, &mut |_| {});
+    assert_eq!(s.out_seq, sent + 1);
+}
