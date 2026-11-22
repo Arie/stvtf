@@ -122,11 +122,6 @@ impl Decoder {
         self.world.as_ref()?.cameraman()
     }
 
-    #[cfg(test)]
-    pub(crate) fn rig_for_tests(&self) -> Option<(u32, u32)> {
-        self.world.as_ref()?.rig()
-    }
-
     /// The player slots nobody is in, highest first: not the cameraman's.
     pub(crate) fn spare_slots(&self) -> Vec<u8> {
         let man = self.cameraman();

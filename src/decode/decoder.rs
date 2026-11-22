@@ -11,8 +11,6 @@ use tf_demo_parser::demo::parser::{DemoHandler, Parse};
 
 use super::Tables;
 use super::extract::Extractor;
-#[cfg(test)]
-use super::props_index_for_tests;
 pub(crate) use super::tables::Placed;
 use crate::Result;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
@@ -162,11 +160,6 @@ impl Decoder {
         self.players_own
     }
 
-    #[cfg(test)]
-    pub(crate) fn player_for_tests(&self) -> Option<u32> {
-        self.world.as_ref()?.player()
-    }
-
     /// Whether the stream's entity messages are for no client as they are (see `world`).
     pub(crate) fn own_baselines(&self) -> bool {
         self.world.as_ref().is_some_and(super::world::World::own_baselines)
@@ -231,24 +224,6 @@ impl Decoder {
         None
     }
 
-    /// Whether frame `tick` is kept.
-    #[cfg(test)]
-    pub(crate) fn has_frame_for_tests(&self, tick: u32) -> bool {
-        self.world.as_ref().is_some_and(|w| w.has(tick))
-    }
-
-    /// A full update of frame `at`, kept.
-    #[cfg(test)]
-    pub(crate) fn keyframe_at_for_tests(&self, at: u32) -> Option<BitBuf> {
-        Some(self.world.as_ref()?.full_update(self.handler.get_parser_state(), Some(at), None)?.1)
-    }
-
-    /// Frame `to` as a delta from frame `from`, both kept.
-    #[cfg(test)]
-    pub(crate) fn delta_for_tests(&self, from: u32, to: u32) -> Option<BitBuf> {
-        self.world.as_ref()?.delta(self.handler.get_parser_state(), from, to)
-    }
-
     /// The server tick of the last frame.
     pub(crate) fn server_tick(&self) -> u32 {
         self.extractor().server_tick
@@ -257,42 +232,6 @@ impl Decoder {
     /// Seconds per server tick.
     pub(crate) fn tick_interval(&self) -> f32 {
         self.extractor().interval()
-    }
-
-    /// Every entity as the world has it.
-    #[cfg(test)]
-    pub(crate) fn world_dump(&self) -> std::collections::BTreeMap<u32, super::world::Dumped> {
-        self.world.as_ref().map_or_default(super::world::World::dump)
-    }
-
-    /// [`Decoder::world_dump`] to compare two decoders, one started from a full update: without
-    /// the weapons' `m_bResetParity`, which a full update gives as a client starts with it, nor a
-    /// player's own demo's player's origin for the other players, which it gives as their own.
-    #[cfg(test)]
-    pub(crate) fn world_compared(&self) -> std::collections::BTreeMap<u32, super::world::Dumped> {
-        let state = self.handler.get_parser_state();
-        let parity = tf_demo_parser::demo::sendprop::SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
-        let mut dump = self.world_dump();
-        for (class, _, props) in dump.values_mut() {
-            if let Some(at) = props_index_for_tests(state, *class, parity) {
-                props.retain(|(i, _)| *i != at);
-            }
-        }
-        if let Some((class, _, props)) = self.player_for_tests().and_then(|p| dump.get_mut(&p)) {
-            for name in ["m_vecOrigin", "m_vecOrigin[2]"] {
-                let id = tf_demo_parser::demo::sendprop::SendPropIdentifier::new("DT_TFNonLocalPlayerExclusive", name);
-                if let Some(at) = props_index_for_tests(state, *class, id) {
-                    props.retain(|(i, _)| *i != at);
-                }
-            }
-        }
-        dump
-    }
-
-    /// The entities the keyframe would hold.
-    #[cfg(test)]
-    pub(crate) fn world_len(&self) -> usize {
-        self.world.as_ref().map_or(0, super::world::World::len)
     }
 
     /// Feeds one message stream (bit packed from bit 0) and returns its lifecycle messages.
@@ -493,16 +432,6 @@ impl Decoder {
     /// Placement for streams already placed.
     pub(crate) fn set_placed(&mut self, placed: Placed) {
         self.tables.set_placed(placed);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn table_names_for_tests(&self, name: &str) -> Option<std::collections::BTreeMap<u16, Option<String>>> {
-        self.tables.names_for_tests(name)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn parser_state_for_tests(&self) -> &ParserState {
-        self.handler.get_parser_state()
     }
 
     pub(crate) fn extractor(&self) -> &Extractor {
