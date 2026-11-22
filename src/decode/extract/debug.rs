@@ -1,4 +1,4 @@
-//! `STVTF_DEBUG`: what a developer asks the extractor to say as it goes.
+//! `STVTF_DEBUG`: debug output a developer can ask the extractor to print as it runs.
 
 use std::sync::LazyLock;
 

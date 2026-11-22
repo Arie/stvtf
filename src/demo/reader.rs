@@ -32,7 +32,7 @@ pub enum Packet {
     Stop,
 }
 
-/// What reading on found.
+/// What the next read found.
 #[derive(Debug, PartialEq)]
 pub enum Next {
     /// A packet.
@@ -63,7 +63,7 @@ impl<R: Read + Seek> Reader<R> {
         Ok(Reader { r, pos: HEADER_LEN as u64, header: Header::parse(&b)?, view: [0.0; 3] })
     }
 
-    /// Reads on from `pos`, where a packet starts (one [`Reader::position`] gave).
+    /// Continues reading at `pos`, the start of a packet, as [`Reader::position`] gave it.
     pub fn seek_to(&mut self, pos: u64) -> Result<()> {
         self.r.seek(SeekFrom::Start(pos))?;
         self.pos = pos;

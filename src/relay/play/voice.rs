@@ -61,14 +61,14 @@ struct Talking {
 /// How long without frames ends a speaker's burst: posts come 100 ms apart.
 const STOPPED: Duration = Duration::from_millis(300);
 
-/// How long `SourceTV`'s slot stays its last speaker's after their last frame, and a slot nobody
-/// is in.
+/// How long `SourceTV`'s slot stays its last speaker's after their last frame, and how long a
+/// slot nobody is in does.
 const SLOT_HELD: Duration = Duration::from_millis(400);
 const SPARE_HELD: Duration = Duration::from_secs(30);
 
 impl Sequences {
-    /// `who` was sent in `slot`, numbered up to `seq`: ended once they stop. Their numbering is
-    /// kept for at most [`MAX_SPEAKERS`].
+    /// Records that `who` was sent in `slot`, with frames numbered up to `seq`: their voice is
+    /// ended once they stop. The numbering is kept for at most [`MAX_SPEAKERS`] speakers.
     fn record(&mut self, slot: Slot, seq: u16, who: Talking) {
         if self.next.len() < MAX_SPEAKERS || self.next.contains_key(&slot) {
             self.next.insert(slot, seq);
@@ -93,9 +93,9 @@ impl Sequences {
         self.spare.values().map(|(slot, _)| *slot).collect()
     }
 
-    /// Claims a slot for `steamid`, who is no player, of those nobody is in now (`free`): theirs while
-    /// it stays free, else the first no other voice has. A client plays a voice in such a slot
-    /// as of someone unconnected. None when there is none left.
+    /// Claims one of the slots nobody is in now (`free`) for `steamid`, who is no player: the one
+    /// they had while it stays free, else the first that no other voice has. A client plays a
+    /// voice in such a slot as that of someone unconnected. None when there is none left.
     pub(super) fn claim_spare(&mut self, steamid: &str, free: &[u8], now: Instant) -> Option<u8> {
         self.spare.retain(|_, (slot, last)| free.contains(slot) && now.saturating_duration_since(*last) < SPARE_HELD);
         let slot = match self.spare.get(steamid) {

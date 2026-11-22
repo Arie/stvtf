@@ -88,7 +88,7 @@ fn write_signonstate(w: &mut BitWriter, state: Signon, spawncount: i32) {
     w.write_i32(spawncount);
 }
 
-/// `net_SetConVar(userinfo)` followed by `net_SignonState(CONNECTED`, -1).
+/// `net_SetConVar(userinfo)` followed by `net_SignonState(CONNECTED, -1)`.
 pub fn connected_reply(name: &str) -> BitBuf {
     let mut w = BitWriter::new();
     w.write_bits(NET_SETCONVAR, TYPE_BITS);

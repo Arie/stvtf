@@ -12,10 +12,10 @@ use crate::relay::play::tuning::JUMP;
 use crate::sync::lock;
 
 impl Player<'_> {
-    /// Back to `target`: the demo again from the last checkpoint before it (or its start), decoded
-    /// up to there, and a full update of it: the clients stay in, and go back. If an entry of the
-    /// string tables they have changed value since (a player left or joined), those entries are set
-    /// back first.
+    /// Jumps back to `target`: the demo is decoded again from the last checkpoint before it (or its
+    /// start) up to there, and the clients, who stay in, get a full update of it. If an entry of
+    /// the string tables they have changed value since (a player left or joined), those entries
+    /// are set back first.
     pub(super) fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
         let Some(c) = &self.cur else { return Ok(()) };
         tracing::info!(
@@ -104,8 +104,8 @@ pub(super) fn jump_ticks(interval: f32) -> i64 {
 }
 
 /// Decodes on to `target` without sending: only string table changes reach the clients, through
-/// `hub` if given. How many frames it decoded, and whether it stopped short for want of more
-/// written.
+/// `hub` if given. Returns how many frames it decoded, and whether it stopped short because no
+/// more is written yet.
 pub(super) fn skim(c: &mut Cursor, hub: Option<&Mutex<Hub>>, target: i64) -> (usize, bool) {
     let mut decoded = 0;
     loop {

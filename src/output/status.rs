@@ -41,7 +41,7 @@ pub enum Status {
         /// Packets lost.
         lost: u64,
     },
-    /// A host is fetching a recording to play: this much of it is there, where it knows.
+    /// A host is fetching a recording to play: `percent` of it has arrived, if the host knows.
     Fetching {
         /// Of a hundred.
         percent: Option<u8>,

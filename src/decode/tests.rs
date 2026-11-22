@@ -91,7 +91,8 @@ fn signon_states_map_one_to_one() {
     }
 }
 
-/// What makes a session ask for a full update: nothing in a signon that was going well.
+/// `lost_frame` makes a session ask for a full update. A delta that comes before the first full
+/// update, in a signon that is going well, must not set it.
 #[test]
 fn a_delta_before_the_first_full_update_asks_for_nothing() {
     use crate::net::netchan::{self, Kind};

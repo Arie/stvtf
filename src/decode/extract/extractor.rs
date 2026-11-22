@@ -1,4 +1,4 @@
-//! The extractor: the game's messages and entities, as the lines of the match.
+//! The extractor: turns the game's messages and entities into the output lines of the match.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -64,7 +64,7 @@ per_entity! {
     /// Where each player entity last was while alive: a dead player's own position is
     /// their spectator camera, which follows teammates.
     last_alive: HashMap<u32, Pose>,
-    /// Per medic entity, to report changes.
+    /// The last charge seen per medic entity, to report changes.
     medic_charge: HashMap<u32, Charge>,
     /// Payload: tf-demo-parser takes every `func_tracktrain` for a cart, but only a payload
     /// map has a `team_train_watcher` (`KotH` and other maps use trains for lifts and props).
@@ -296,7 +296,7 @@ impl Extractor {
         self.events.borrow_mut().push(line);
     }
 
-    /// The game paused or went on: a line when that changed.
+    /// Records that the game paused or resumed, and queues a line when that changed.
     pub(super) fn set_pause(&mut self, p: &tf_demo_parser::demo::message::generated::SetPauseMessage) {
         if p.pause != self.paused {
             self.paused = p.pause;
@@ -304,10 +304,11 @@ impl Extractor {
         }
     }
 
-    /// A voice packet as a line: its speaker, the player in its slot (as the game shows them
-    /// talking: the `SteamID` in the packet comes from the speaker's own client), else the one
-    /// with that `SteamID`, and their own `SteamID`; and its Opus frames in base64. One without a
-    /// sample rate or of another codec is passed over.
+    /// Queues a voice packet as a line, with its Opus frames in base64. The speaker is the player
+    /// in the packet's slot, as the game shows them talking (the `SteamID` in the packet comes
+    /// from the speaker's own client), or else the player with that `SteamID`. The line has that
+    /// player's own `SteamID`, or the packet's when no player matches. A packet without a sample
+    /// rate or of another codec is skipped.
     pub(super) fn voice(&self, v: &tf_demo_parser::demo::message::voice::VoiceDataMessage<'_>) {
         use base64::Engine;
         let mut s = v.data.clone();

@@ -14,7 +14,7 @@ use crate::output::{
     ProjectileKind, Resist, Round, Ubered, round1,
 };
 
-/// Condition numbers: 0-31 and the four `Ex` words.
+/// How many condition numbers there are: 0-31 and the four `Ex` words.
 const COND_NUMBERS: u8 = (COND_BITS * (COND_WORDS - 1)) as u8;
 
 /// TF2 chat colour codes: the default colour, the sender's team colour, Valve's two greens, then

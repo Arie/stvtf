@@ -14,7 +14,7 @@ use crate::net::bits::BitBuf;
 /// A note the clients in the game keep seeing, until replaced.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Note {
-    /// Its own, while it is kept: what hides it.
+    /// Its id, unique while it is kept: the note is hidden by it.
     pub id: u32,
     /// What it says.
     pub text: String,
@@ -35,7 +35,7 @@ pub(super) struct Shown {
     version: Option<u64>,
     /// Each one's id and bubble.
     bubbles: Vec<(u32, BitBuf)>,
-    /// A note follows a player: looked at again in a while.
+    /// Whether a note follows a player: they are checked again every [`CHECK`].
     follows: bool,
     tried: Option<Instant>,
 }

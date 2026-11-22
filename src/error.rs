@@ -109,7 +109,7 @@ impl<T, E: Into<Error>> Context<T> for Result<T, E> {
     }
 }
 
-/// Nothing there is what is wrong: `doing` says what was missing.
+/// A `None` is the error: the argument says what was missing.
 impl<T> Context<T> for Option<T> {
     fn context(self, missing: impl Display) -> crate::Result<T> {
         self.ok_or_else(|| invalid!("{missing}"))

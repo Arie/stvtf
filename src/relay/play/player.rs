@@ -26,7 +26,7 @@ pub(super) struct Player<'r> {
     pub(super) cur: Option<Cursor>,
     /// Since when nobody is in.
     idle: Option<Instant>,
-    /// What the clients were last told.
+    /// Whether the room had playback paused, as last followed.
     paused: bool,
     /// When the trace last said where playback is.
     traced: Option<Instant>,
@@ -49,17 +49,17 @@ pub(super) struct Player<'r> {
     pub(super) past: Vec<Arc<Index>>,
     /// The clients' camera, as the room has it.
     pub(super) shot: shot::Shot,
-    /// The kept beams shown: when each last was, and what may be sent now.
+    /// The kept beams shown: when each was last sent, and how many may be sent now.
     pub(super) kept: Kept,
     /// The notes the clients were given.
     pub(super) shown_notes: notes::Shown,
     pub(super) shown_names: names::Shown,
-    /// Where each speaker's voice sent is.
+    /// The next frame number of each speaker's voice, and the slots voices have.
     pub(super) voice_seq: voice::Sequences,
     /// The light the clients were given.
     pub(super) shown_light: light::Shown,
-    /// Where the clients were given the laser beams are drawn with, if they were: theirs there
-    /// until the next signon.
+    /// The model index at which the clients were given the laser that beams are drawn with, if
+    /// they were: they have it there until the next signon.
     pub(super) laser: Option<u16>,
     /// What the clients' `modelprecache` has had since their signon.
     pub(super) models: ModelsSent,
@@ -74,7 +74,7 @@ pub(super) struct Player<'r> {
     /// The oldest frame the clients in the game may still have: a game client drops those older
     /// than the base of each delta, and all on a full update.
     pub(super) floor: Option<u32>,
-    /// The full update waits until then, their clock put ahead.
+    /// Until when the full update waits, after their clock was put ahead.
     pub(super) flushing: Option<Instant>,
     /// The demo whose signon the clients have: the next makes them reconnect first.
     signed_on: Option<std::path::PathBuf>,
@@ -149,7 +149,7 @@ impl Player<'_> {
         }
     }
 
-    /// The clients, once those in the game are at rest or [`HAND_OVER_WAIT`] is over, with where
+    /// Hands the clients over, once all are at rest or [`HAND_OVER_WAIT`] is over, with where
     /// playback is: the relay is silent from then on.
     pub(super) fn hand_over(&mut self) -> Handover {
         let until = Instant::now() + HAND_OVER_WAIT;
@@ -177,7 +177,8 @@ impl Player<'_> {
         self.show_light(playback.light());
         let (version, names) = playback.names();
         self.show_names(version, &names);
-        // A score counted otherwise: the clients have the one from before until a full update.
+        // The room adds something else to the score: the clients keep the old one until a full
+        // update.
         if self.cur.as_mut().is_some_and(|c| c.dec.scene_mut().set_score_add(playback.score())) {
             self.rekey();
         }
@@ -271,8 +272,8 @@ impl Player<'_> {
         self.rekey();
     }
 
-    /// A keyframe for the clients waiting for one: of the frame the next one builds on, with the
-    /// frames since. Break while their clock is first put past their beams.
+    /// A keyframe for the clients waiting for one: of the frame the next one builds on. Breaks
+    /// while their clock is first put past their beams.
     pub(super) fn send_keyframe(&mut self, interval: f32) -> ControlFlow<()> {
         let Some(at) = self.cur.as_ref().map(Cursor::tick) else { return ControlFlow::Continue(()) };
         if self.flush(at, interval) {
@@ -280,7 +281,7 @@ impl Player<'_> {
         }
         let Some(c) = &mut self.cur else { return ControlFlow::Continue(()) };
         // Of the frame the next one builds on, which from a live server is often a few ticks
-        // back: at the end of what is written so far, it waits for that frame, for a while. A
+        // back: at the end of what is written so far, it waits a while for the next frame. A
         // recording that stopped with no end has none, nor a paused match: the last frame then.
         c.peek();
         let next = c.next_frame();

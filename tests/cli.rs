@@ -23,7 +23,8 @@ fn lines(stdout: &[u8]) -> Vec<Value> {
         .collect()
 }
 
-/// A command fails with `status` and this on stderr, and stdout stays empty for whatever reads it.
+/// A command fails with `status` and `message` on stderr, and stdout stays empty for whatever
+/// reads it.
 #[track_caller]
 fn fails(args: &[&str], status: i32, message: &str) {
     let out = run(args);

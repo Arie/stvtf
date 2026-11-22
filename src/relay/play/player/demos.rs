@@ -15,9 +15,9 @@ use crate::relay::play::tuning::{NAP, NOT_A_FRAME, PAST_INDEXES, RETRY};
 use crate::relay::play::{Playback, Want, light, names, notes};
 
 impl Player<'_> {
-    /// Opens the demo `want` names unless it is playing, once no signon is held: break while it is,
-    /// or the demo cannot be opened. One not written yet is tried again every [`RETRY`]; one that
-    /// will never open, not again.
+    /// Opens the demo `want` names unless it is playing, once no signon is held. Breaks while one
+    /// is held, or when the demo cannot be opened. A demo not written yet is tried again every
+    /// [`RETRY`]; one that will never open is not tried again.
     pub(in crate::relay::play) fn open_wanted(&mut self, want: &Want, playback: &Playback) -> ControlFlow<()> {
         if self.cur.as_ref().is_some_and(|c| c.path == want.demo) {
             self.relay.hub().release_signon_hold();
@@ -76,7 +76,8 @@ impl Player<'_> {
         }
     }
 
-    /// The checkpoints of `demo` are the ones playback has; those it had are kept a while.
+    /// Makes the checkpoints of `demo` the ones playback uses; those it used before are kept a
+    /// while.
     pub(super) fn index_of(&mut self, demo: &std::path::Path) {
         if self.index.as_ref().is_some_and(|i| i.path == demo) {
             return;
@@ -90,7 +91,7 @@ impl Player<'_> {
         }
     }
 
-    /// Whether `demo` not opening for `why` is news.
+    /// Whether `demo` failing to open with `why` was not the last failure logged.
     pub(in crate::relay::play) fn refuses_anew(&mut self, demo: &std::path::Path, why: &str) -> bool {
         if self.refused.as_ref().is_some_and(|(d, w)| d == demo && w == why) {
             return false;
@@ -99,11 +100,12 @@ impl Player<'_> {
         true
     }
 
-    /// Whether `demo` goes on from the one playing, and playback now does: both are of one map load
-    /// of one server (a match recorded again by the next process), and the one playing has a frame
-    /// at or past where `demo` begins, which it is first played up to. The clients keep what they
-    /// have and get a full update; `demo`'s signon is for those to come. With a laser of the
-    /// relay's, only if one coming in later gets it where they have it.
+    /// Whether `demo` continues the one playing; if so, playback goes on in it. Both must be of
+    /// one map load of one server (a match recorded again by the next process), and the one
+    /// playing must have a frame at or past where `demo` begins: it is first played up to there.
+    /// The clients keep what they have and get a full update; `demo`'s signon is for those to
+    /// come. If the clients have the relay's laser, a client coming in later must get it at the
+    /// same model index.
     pub(in crate::relay::play) fn goes_on_into(&mut self, demo: &std::path::Path) -> bool {
         let (laser, port, pose) = (self.laser, self.relay.port(), self.shot.pose);
         let Some(c) = self.cur.as_mut().filter(|c| c.started && c.server.is_some()) else { return false };
@@ -122,8 +124,8 @@ impl Player<'_> {
             );
             return false;
         };
-        // Up to there on the one playing, its string table changes given: no further than it has.
-        // Frames passed over so: the clients need a full update either way.
+        // Decodes the one playing up to there, or as far as it has, passing on its string table
+        // changes. The frames are not sent: the clients need a full update either way.
         let mut passed = false;
         while c.tick() < begins {
             match c.next_tick() {
@@ -138,13 +140,15 @@ impl Player<'_> {
             }
         }
         let at = c.tick();
-        // Its laser's message there, for those to come: where the clients have it.
+        // The message that loads the laser in `next`, for those to come; none without a laser.
+        // None if it would not load at the index the clients have it at.
         let laser_there = |next: &Cursor| match (laser, next.dec.writer().beam_model(None, ModelsSent::default())) {
             (None, _) => Some(None),
             (Some(has), Some(BeamModel { index, load: Some(load) })) if index == has => Some(Some(load)),
             _ => None,
         };
-        // From its last checkpoint before there, if it has any made (a demo played before).
+        // `next` starts from its last checkpoint before there, if any were made (a demo played
+        // before).
         let made = self.past.iter().chain(&self.index).find(|i| i.path == demo);
         if let Some(m) = made.and_then(|i| i.before(at)).filter(|m| i64::from(m.tick) > next.tick())
             && let Ok(there) = Cursor::restore(demo, &m)
@@ -188,7 +192,7 @@ impl Player<'_> {
         true
     }
 
-    /// Goes on where the process before `played`: its demo decoded up to there, giving the
+    /// Goes on where the process before was (`played`): its demo decoded up to there, giving the
     /// clients nothing (they have it), and a full update of wherever playback is wanted next.
     pub(super) fn go_on_from(&mut self, played: Played) -> Result<()> {
         let took = Instant::now();
@@ -218,7 +222,7 @@ impl Player<'_> {
         Ok(())
     }
 
-    /// Plays `c`, just opened: the clients sign on to its tables, the laser not among them.
+    /// Plays `c`, just opened: the clients sign on to its tables, which lack the relay's laser.
     pub(in crate::relay::play) fn start_demo(&mut self, c: Cursor) {
         if self.match_laser.as_ref().is_some_and(|p| *p != c.path) {
             self.match_laser = None;

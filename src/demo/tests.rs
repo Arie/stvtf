@@ -113,7 +113,7 @@ fn voice_is_written_into_a_demo_as_frames_of_its_own_at_their_ticks() {
 fn voice_is_heard_no_earlier_than_what_went_before_it_whatever_a_demos_ticks_say() {
     assert_eq!(heard_at(7, 4, 10), 7);
     assert_eq!(heard_at(2, 4, 10), 4);
-    // A demo whose ticks go back: at the frame's, no panic.
+    // A demo whose ticks go backwards: heard at the frame's tick, and no panic.
     assert_eq!(heard_at(-5, 0, -1), -1);
 }
 

@@ -1,4 +1,4 @@
-//! The game's sizes and values the extractor reads by.
+//! Sizes and constant values of the game that the extractor relies on.
 
 use std::sync::LazyLock;
 

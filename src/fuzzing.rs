@@ -51,14 +51,15 @@ fn packet(challenge: u32, sequence: i32, piece: &[u8]) -> Cow<'_, [u8]> {
     }
 }
 
-/// The packets a server's reply to a client can be: what a watch reads while connecting.
+/// Connectionless packets: what a watch reads while connecting, and what a relay reads from its
+/// clients.
 pub fn out_of_band(data: &[u8]) {
     let _ = handshake::parse_from_client(data);
     let _ = handshake::parse_challenge(data, 0);
     let _ = handshake::parse_a2s_version(data);
 }
 
-/// Any packets, raw and past the checksum: joining, inflating and reliable transfers.
+/// Any packets, raw or sealed to pass the checksum: joining, inflating and reliable transfers.
 pub fn channel(data: &[u8]) {
     let mut rx = Receiver::new(Some(CHALLENGE));
     let now = Instant::now();
@@ -94,7 +95,7 @@ pub fn decoder(data: &[u8]) {
 }
 
 /// Inputs for [`channel`] and [`decoder`] from a real capture: the fuzzer starts from traffic that
-/// gets far, not from nothing. Each is `(channel, decoder)`.
+/// gets far, not from nothing. Returns `(channel, decoder)`.
 pub fn seeds(capture_bytes: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let records = capture::read(capture_bytes).expect("internal error: the seed capture does not read");
     let challenge = records[0].challenge().expect("internal error: the seed capture has no session first");
@@ -109,7 +110,7 @@ pub fn seeds(capture_bytes: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         if netchan::classify(r.data) != Kind::InBand {
             continue;
         }
-        // Without the checksum and challenge, which `channel` makes up.
+        // Without the header: `channel` seals the body with a checksum and challenge of its own.
         let body = netchan::decode_header(r.data).map_or(SEALED_HEADER, |h| h.body_offset).min(r.data.len());
         let reliable = netchan::decode_header(r.data).is_ok_and(|h| h.reliable());
         channel.push(prefixed(&[&[if reliable { RELIABLE } else { 0 }], &r.data[body..]].concat()));

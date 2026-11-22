@@ -86,7 +86,7 @@ pub(crate) fn prop_vec(props: &[SendProp], id: SendPropIdentifier) -> Option<Vec
     }
 }
 
-/// Where prop `id` is among `table`'s props, as a prop's index counts.
+/// The index of prop `id` among `table`'s flattened props, as `SendProp::index` counts.
 pub(crate) fn prop_index(table: &SendTable, id: SendPropIdentifier) -> Option<u32> {
     u32::try_from(table.flattened_props.iter().position(|d| d.identifier == id)?).ok()
 }

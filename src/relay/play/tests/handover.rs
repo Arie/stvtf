@@ -114,8 +114,8 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
 }
 
 /// Going into a demo played before (back into an earlier part of the match), playback starts
-/// from the checkpoints made of it then: it stands where it would decoded from the demo's start,
-/// and one coming in later is given the same.
+/// from the checkpoints made of it then: it is where it would be if decoded from the demo's
+/// start, and one coming in later is given the same.
 #[test]
 fn going_into_a_demo_played_before_starts_from_its_checkpoints() {
     let tmp = tempfile::tempdir().unwrap();

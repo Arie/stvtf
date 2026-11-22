@@ -171,7 +171,7 @@ fn read(file: &Path) -> Result<Vec<u8>> {
 }
 
 fn main() -> Result<()> {
-    // The library's log on stderr; `RUST_LOG` sets what (default info).
+    // The library logs to stderr; `RUST_LOG` sets the level (default info).
     let level = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
     tracing_subscriber::fmt()

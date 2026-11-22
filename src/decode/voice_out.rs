@@ -15,8 +15,8 @@ const END: u16 = 0xFFFF;
 /// What goes before each frame: its length and its number.
 const FRAME_HEADER: usize = 4;
 
-/// The most bytes of frames (each with its length and number) in one message: a client takes
-/// some four thousand of voice whole, and drops what is longer.
+/// The most bytes of frames (each with its length and number) in one message. A client takes
+/// about four thousand bytes of voice in one message, and drops a longer one.
 pub(crate) const MAX_CHUNK: usize = 2000;
 
 /// The account of `[U:1:<account>]`.
@@ -44,11 +44,12 @@ pub(crate) fn voice_runs(frames: &[Vec<u8>]) -> impl Iterator<Item = &[Vec<u8>]>
 }
 
 impl Writer<'_> {
-    /// `frames` (Opus, 20 ms each) as the voice of the player with user id `user`, or with none
-    /// (a caster, a coach: `steamid` theirs, if they have one) in slot `spare`, which nobody is
-    /// in, or without one as `SourceTV`'s own, in its bot's slot. Numbered from `seq` on, which
-    /// goes on by as many. None for no frames, more than a packet holds, a player not in the match
-    /// or without a `SteamID`, or no bot to speak as.
+    /// `frames` (Opus, 20 ms each) as a voice message. With `user`, it is the voice of the player
+    /// with that user id. Without (a caster or coach; `steamid` is theirs, if they have one), it
+    /// goes in slot `spare`, which nobody is in, or without `spare` in the slot of `SourceTV`'s
+    /// bot. Frames are numbered from `seq`, which advances by their count. None for no frames,
+    /// more than a message holds, a player not in the match or without a `SteamID`, or no bot to
+    /// speak as.
     pub(crate) fn voice_message(
         &self,
         user: Option<u16>,
@@ -86,8 +87,8 @@ impl Writer<'_> {
 
 /// `frames` (Opus, 20 ms each) as the game sends a player's voice: `svc_VoiceData` in `slot`
 /// (the player's entity less one), Steam's framing with their account round the frames, numbered
-/// from `seq` on, which goes on by as many. None for no frames, or more than a message holds
-/// ([`voice_runs`] makes runs that fit): then no numbers are used.
+/// from `seq`, which advances by their count. None for no frames, or for more than a message
+/// holds ([`voice_runs`] makes runs that fit); `seq` then stays as it was.
 pub(crate) fn steam_voice(slot: u8, account: u64, rate: u16, frames: &[Vec<u8>], seq: &mut u16) -> Option<BitBuf> {
     if frames.is_empty() {
         return None;

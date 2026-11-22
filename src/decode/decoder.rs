@@ -1,4 +1,4 @@
-//! The decoder: a connection's messages, as the game state and the lines of it.
+//! The decoder: parses a connection's message streams into game state and output lines.
 
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, LittleEndian};
 use tf_demo_parser::ParserState;
@@ -31,7 +31,7 @@ pub(crate) struct Lifecycle {
     /// Where each message of the stream is, in order. After a decode error the rest of the
     /// stream is one span of type [`UNPARSED`].
     pub spans: Vec<Span>,
-    /// The stream if the decoder rewrote it; `spans` are of it.
+    /// The rewritten stream, if the decoder rewrote it. `spans` then index into it.
     pub stream: Option<BitBuf>,
 }
 
@@ -41,8 +41,8 @@ impl Lifecycle {
         self.stream.as_ref().unwrap_or(fed)
     }
 
-    /// `bits`, the stream this came from, up to the end of its last message: what follows is
-    /// padding, and followed by more it would be read as messages.
+    /// `bits` (the stream this came from) cut at the end of its last message. What follows is
+    /// padding, which would be read as messages if more were appended.
     pub fn cut(&self, bits: &BitBuf) -> BitBuf {
         let end = self.spans.last().map_or(0, |s| s.bits.end);
         BitReader::slice(bits.bytes(), 0..end)
@@ -59,12 +59,12 @@ pub(crate) struct Span {
 /// The type of a span that could not be decoded.
 pub(crate) const UNPARSED: u8 = u8::MAX;
 
-/// `svc_GameEvent`: its length's bits, then the event id's.
+/// Field widths in `svc_GameEvent`: the length, then the event id.
 pub(super) const GAMEEVENT_LENGTH_BITS: usize = 11;
 
 pub(super) const EVENT_ID_BITS: usize = 9;
 
-/// `svc_PacketEntities`: its entry count's bits (`MAX_EDICT_BITS`).
+/// Bits in the entry count of `svc_PacketEntities` (`MAX_EDICT_BITS`).
 pub(super) const ENTRY_COUNT_BITS: usize = 11;
 
 /// A frame's entities: in full, or as a delta from the frame at a server tick.
@@ -74,7 +74,7 @@ pub(crate) enum Entities {
     Delta(u32),
 }
 
-/// A stream's own baselines (see [`Decoder::baselines`]).
+/// A stream's own baselines (see [`super::scene::View::baselines`]).
 pub(crate) struct Baselines(pub(super) Box<[tf_demo_parser::demo::parser::state::Baseline; 2]>);
 
 pub(crate) struct Decoder {
@@ -88,7 +88,7 @@ pub(crate) struct Decoder {
     pub(super) seen_full_update: bool,
     /// What a relay keeps of the stream for its clients (see `scene`).
     pub(super) scene: super::scene::Scene,
-    /// The stream is a player's game's, not a `SourceTV`'s.
+    /// The stream comes from a player's game, not from a `SourceTV`.
     pub(super) players_own: bool,
     pub(super) out: Vec<Line>,
 }
@@ -111,7 +111,7 @@ impl Decoder {
         })
     }
 
-    /// Takes the stream's `ServerInfo`: its count of map loads and map.
+    /// Records the stream's `ServerInfo`. Returns its count of map loads and its map.
     pub(super) fn server_info(&mut self, i: &tf_demo_parser::demo::message::ServerInfoMessage) -> (i32, String) {
         self.players_own = !i.stv;
         if let (true, Some(w)) = (self.players_own, &mut self.scene.world) {
@@ -120,13 +120,13 @@ impl Decoder {
         (i.server_count as i32, i.map.clone())
     }
 
-    /// Whether the stream is a player's game's (a demo a player recorded), not a `SourceTV`'s: a
-    /// client given it is that player.
+    /// Whether the stream comes from a player's game (a demo a player recorded), not from a
+    /// `SourceTV`. A client sent this stream plays as that player.
     pub(crate) fn players_own(&self) -> bool {
         self.players_own
     }
 
-    /// Goes on with `baselines`, another decoder's there.
+    /// Continues from `baselines`, taken from another decoder.
     pub(crate) fn set_baselines(&mut self, baselines: &Baselines) {
         self.handler.state_handler.instance_baselines.clone_from(&baselines.0);
         if let Some(w) = &mut self.scene.world {
@@ -134,22 +134,20 @@ impl Decoder {
         }
     }
 
-    /// The server tick message stream `data` is of (its `net_Tick`), read, not decoded into
-    /// anything.
+    /// The server tick of message stream `data` (its `net_Tick`). Changes no decoder state.
     pub(crate) fn frame_tick(&self, data: &[u8]) -> Option<u32> {
         self.find_message(data, MessageType::NetTick, |stream, _| {
             tf_demo_parser::demo::message::NetTickMessage::read(stream).ok().map(|m| u32::from(m.tick))
         })
     }
 
-    /// The entities in message stream `data`, if any: in full, or as a delta from which frame;
-    /// read, not decoded into anything.
+    /// The entities in message stream `data`, if any: in full, or as a delta from which frame.
+    /// Changes no decoder state.
     pub(crate) fn entities(&self, data: &[u8]) -> Option<Entities> {
         entities_in(self.handler.get_parser_state(), data)
     }
 
-    /// `read` of the first message of type `kind` in message stream `data`, the ones before it
-    /// skipped.
+    /// Skips to the first message of type `kind` in message stream `data` and returns `read` of it.
     pub(super) fn find_message<T>(
         &self,
         data: &[u8],
@@ -198,7 +196,7 @@ impl Decoder {
         let Ok(mut stream) = outer.read_bits(nbits) else { return life };
         let state = self.handler.get_parser_state();
         let mut messages = Vec::new();
-        // The span of each message parsed.
+        // For each message parsed, the index of its span in `life.spans`.
         let mut parsed_spans = Vec::new();
         while stream.bits_left() > TYPE_BITS {
             let start = stream.pos();
@@ -246,8 +244,8 @@ impl Decoder {
             }
         }
         self.place_baselines(&mut life, &data[..nbytes], &mut messages, &parsed_spans);
-        // Applied once the packet is: a new class's baseline may come in the same packet, before
-        // the entities that need it.
+        // The world applies these after the parser handled the packet: a new class's baseline may
+        // come in the same packet as the entities that need it.
         let frames = if self.scene.world.is_some() { entity_frames(&messages) } else { Vec::new() };
         self.scene.tables.note(&messages);
         let bytes = life.stream.as_ref().map_or(&data[..nbytes], BitBuf::bytes);
@@ -298,7 +296,7 @@ impl Decoder {
         life
     }
 
-    /// Keeps the last event that decides whether the round's win panel shows (see `round`).
+    /// Keeps the last event that decides whether the round's win panel shows (see `Scene::round`).
     pub(super) fn note_round(&mut self, messages: &[Message<'_>], spans_of: &[usize], spans: &[Span], data: &[u8]) {
         use tf_demo_parser::demo::gameevent_gen::GameEventType as E;
         for (m, &i) in messages.iter().zip(spans_of) {
@@ -355,8 +353,8 @@ impl Decoder {
     }
 }
 
-/// `read` of the first message of type `kind` in message stream `data`, read as `state` has the
-/// stream, the ones before it skipped.
+/// Skips to the first message of type `kind` in message stream `data` and returns `read` of it.
+/// `state` is the parser state the stream is read with.
 pub(super) fn find_message<T>(
     state: &ParserState,
     data: &[u8],
@@ -382,7 +380,7 @@ pub(super) fn entities_in(state: &ParserState, data: &[u8]) -> Option<Entities> 
     })
 }
 
-/// `data` with the `moved` updates re-encoded.
+/// Puts `data` with the `moved` string table updates re-encoded in `life`, with its spans.
 pub(super) fn replace_messages(
     life: &mut Lifecycle,
     data: &[u8],
@@ -407,7 +405,7 @@ pub(super) fn replace_messages(
     life.stream = Some(w.finish());
 }
 
-/// `msg` as a message stream of it alone, its type `svc` first.
+/// `msg` as a message stream that holds only it, with its type `svc` first.
 pub(super) fn encode_message(
     svc: u32,
     msg: &impl tf_demo_parser::demo::parser::Encode,
@@ -425,7 +423,7 @@ pub(super) fn encode_message(
     Some(w.finish())
 }
 
-/// The entities messages among `messages`.
+/// The `PacketEntities` messages among `messages`.
 pub(super) fn entity_frames(
     messages: &[Message<'_>],
 ) -> Vec<tf_demo_parser::demo::message::packetentities::PacketEntitiesMessage> {

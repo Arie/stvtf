@@ -196,9 +196,10 @@ impl Extractor {
         {
             self.ents.prop_origins.insert(idx, v);
         }
-        // A slot taken over by an entity of another class (an implicit delete); tf-demo-parser
+        // A slot taken over by an entity of another class (an implicit delete). tf-demo-parser
         // keeps the old projectile or building, and applied this update to the old projectile:
-        // a new projectile is built again from it, so it keeps its team and owner.
+        // the old one is removed and a new projectile is built from this update, so it keeps its
+        // team and owner.
         if self.gs.state.projectiles.get(&e.entity_index).is_some_and(|p| p.class != e.server_class) {
             self.gs.state.projectiles.remove(&e.entity_index);
             if class.is_some_and(|c| {
@@ -258,7 +259,8 @@ impl Extractor {
         self.modes.forget(idx);
         self.ents.flags.remove(&idx);
         self.ents.sentries.remove(&idx);
-        // What only one class keeps goes with a slot of another; the same class's is overwritten.
+        // State kept for one class only is dropped when another class takes the slot; an entity of
+        // the same class overwrites it.
         if class != "CWeaponMedigun" {
             self.ents.mediguns.remove(&idx);
         }

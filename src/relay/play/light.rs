@@ -21,8 +21,8 @@ pub struct Light {
     pub exponent: u8,
 }
 
-/// How often the light is shown again, and for how long each time: past the next showing at the
-/// fastest a room plays (4×, the clients' clock with it).
+/// How often the light is shown again, and for how long each time: long enough to last past the
+/// next showing at the fastest a room plays (4×, which speeds up the clients' clock too).
 const EVERY: Duration = Duration::from_secs(4);
 const LIFE: f32 = 25.0;
 

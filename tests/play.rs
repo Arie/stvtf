@@ -1,5 +1,5 @@
 //! A relay playing a demo, end to end: stvtf connects to it over UDP as any client would, joins
-//! while it plays, follows a jump back and a pause. What the client sees must be the demo's.
+//! while it plays, follows a jump back and a pause. What the client sees must match the demo.
 
 mod common;
 
@@ -77,7 +77,7 @@ fn client<'s>(s: &'s std::thread::Scope<'s, '_>, addr: &str, stop: &'s AtomicBoo
     let mut w = Watch::new(addr, "pw");
     w.build = Some(stvtf::builds::CURRENT.to_string());
     w.snapshot_hz = 1000.0;
-    // A test waits a few times.
+    // A test waits up to `LIMIT` several times.
     w.duration = Some(LIMIT * 4);
     let into = seen.clone();
     s.spawn(move || {
@@ -102,7 +102,7 @@ fn since(seen: &Seen, since: Instant) -> Vec<Snapshot> {
     snapshots(seen).into_iter().filter(|(t, _)| *t > since).map(|(_, s)| s).collect()
 }
 
-/// Every snapshot the client got is the demo's at that tick.
+/// Every snapshot the client got matches the demo's snapshot at that tick.
 fn assert_as_the_demo(got: &[(Instant, Snapshot)], demo: &BTreeMap<u32, Snapshot>) {
     let mut compared = 0;
     for (_, s) in got {
@@ -152,7 +152,7 @@ fn a_client_follows_a_jump_back_and_a_pause() {
         let jumped = Instant::now();
         wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick < first + 10 * SECOND));
         wait_for("a second after the jump", || since(seen, jumped).len() > FRAMES_A_SECOND);
-        // Paused where it is: nothing new comes, but that moment's full update if it is late.
+        // Paused where it is: nothing new comes, except that moment's full update if it is late.
         let at = snapshots(seen).last().unwrap().1.tick;
         playback.set_want(want(at, true, false));
         std::thread::sleep(Duration::from_millis(300));
@@ -205,7 +205,8 @@ fn a_client_follows_a_jump_ahead() {
         let jumped = Instant::now();
         wait_for("the jump", || since(seen, jumped).iter().any(|s| s.tick >= first + 100 * SECOND));
         wait_for("a second after it", || since(seen, jumped).len() > FRAMES_A_SECOND);
-        // Frames on their way when it jumped aside, nothing between there and the moment wanted.
+        // Apart from frames already on their way when it jumped, nothing comes from between there
+        // and the moment wanted.
         let between: Vec<u32> = since(seen, jumped)
             .iter()
             .map(|s| s.tick)
@@ -245,7 +246,7 @@ fn a_jump_back_before_the_first_round_start_still_gets_one() {
     let playback = Playback::new(want(first + 20 * SECOND, false, false));
     watching(&playback, Duration::ZERO, |seen| {
         wait_for("a second of the demo", || snapshots(seen).len() > FRAMES_A_SECOND);
-        // A win panel up there would stay, without one of our own.
+        // A win panel shown there would stay up unless the relay sent a round start of its own.
         let jumped = Instant::now();
         playback.set_want(want(first, false, false));
         wait_for("a round start with the jump", || {

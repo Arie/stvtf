@@ -9,7 +9,7 @@ use crate::net::messages::{
 const USERMESSAGE_RESETHUD: u32 = 6;
 const USERMESSAGE_VGUIMENU: u32 = 12;
 
-/// The state `msg`, of type `id`, says if it is a `net_SignonState`.
+/// The signon state in `msg`, if its type `id` is `net_SignonState`.
 pub(super) fn signon_state(id: u8, msg: &BitBuf) -> Option<Signon> {
     if u32::from(id) != NET_SIGNONSTATE {
         return None;
@@ -26,8 +26,8 @@ pub(super) fn table_changes<'a>(bits: &'a BitBuf, life: &'a Lifecycle) -> impl I
     life.spans.iter().filter(|s| is_table_change(s.id)).map(|s| BitReader::slice(bits.bytes(), s.bits.clone()))
 }
 
-/// The user message `ResetHUD` (no. 6, a byte), as a match's own: a game client resets every panel
-/// of its HUD.
+/// The user message `ResetHUD` (no. 6, one byte of data), as a server sends it in a match: a game
+/// client resets every panel of its HUD.
 #[cfg(test)]
 pub(super) fn reset_hud() -> BitBuf {
     let mut w = BitWriter::new();

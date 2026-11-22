@@ -4,8 +4,8 @@ use super::*;
 /// and acks the last, and a delta from a frame it lacks would crash it.
 struct LossyClient {
     rx: Receiver,
-    /// What it makes of what it gets, when the relay sends entities of its own: the relay's
-    /// decoder, which never read those, cannot read their changes.
+    /// Its own decoder, for when the relay sends entities of its own: the relay's decoder, which
+    /// never read those, cannot read their changes.
     own: Option<Cursor>,
     frames: std::collections::BTreeSet<u32>,
     got: usize,
@@ -98,7 +98,7 @@ fn loses_datagrams(camera: Option<&super::super::Camera>) {
             if relay.hub().wants_keyframe() {
                 let _ = p.send_keyframe(0.015);
             } else {
-                // The next frame, past what is none.
+                // The next frame, skipping packets that are not frames.
                 while p.cur.as_mut().unwrap().next_tick() == Some(NOT_A_FRAME) {
                     p.cur.as_mut().unwrap().skip_next();
                 }

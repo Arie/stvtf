@@ -7,9 +7,10 @@
 //!
 //! A delta builds on the frame it names, which from a live `SourceTV` is the last one acked, often
 //! a few ticks back: the frames since are kept (entities shared between them), as a game client
-//! keeps them. A stream with baselines of its own (`updated_base_line`: a player's demo, whose game
-//! acked them) has entities enter on them, which a client started from a full update lacks: none of
-//! its entity messages are for a client then, each is written anew (see [`World::own_baselines`]).
+//! keeps them. Some streams have baselines of their own (`updated_base_line`: a player's demo,
+//! whose game acked them), and their entities enter on those. A client started from a full update
+//! lacks them, so none of the stream's entity messages can go to a client: each is written anew
+//! (see [`World::own_baselines`]).
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -25,8 +26,8 @@ use crate::net::messages::{self, SVC_PACKETENTITIES};
 mod shot;
 pub(crate) use self::shot::Pose;
 
-/// Ticks of frames kept for a delta to a client to build on: 3 s of a 66.67-tick server's, more
-/// than a client's ack takes to come.
+/// How many ticks back frames are kept for a delta to a client to build on: 3 s on a 66.67-tick
+/// server, longer than a client's ack takes to arrive.
 const KEEP_TICKS: u32 = 200;
 /// Frames kept for later deltas to build on, at most.
 const MAX_FRAMES: usize = 128;
@@ -35,7 +36,7 @@ const MAX_FRAMES: usize = 128;
 struct Entity {
     class: ClassId,
     serial: u32,
-    /// By prop index, every prop sent since the entity entered, over its baseline.
+    /// Every prop sent since the entity entered, on top of its baseline, by prop index.
     props: Props,
 }
 
@@ -111,16 +112,17 @@ impl Frame {
 #[cfg(test)]
 pub(crate) type Dumped = (u16, u32, Vec<(u32, String)>);
 
-/// Whose baselines a stream's entities enter on.
+/// Which baselines a stream's entities enter on.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 enum Baselines {
-    /// Their class's.
+    /// Their class's static baseline.
     #[default]
     Static,
-    /// Their class's, and its full update sets baselines (as a server's to a viewer does): a
-    /// keyframe does the same, so the client keeps the baselines the stream's frames expect.
+    /// Their class's static baseline, and the stream's full update sets baselines (as a server's
+    /// full update to a viewer does). A keyframe does the same, so the client keeps the baselines
+    /// the stream's frames expect.
     SetByFull,
-    /// Its own (see [`World::own_baselines`]). Stays so.
+    /// The stream's own (see [`World::own_baselines`]). Never changes back.
     Own,
 }
 
@@ -131,13 +133,13 @@ pub(crate) struct World {
     max_entries: u16,
     /// No full update came yet, or a frame was lost since.
     broken: bool,
-    /// The entity of the player whose game the stream is of, if it is one's.
+    /// The entity of the player whose game the stream comes from, if it comes from one.
     player: Option<u32>,
     seen_full: bool,
-    /// Whose baselines the stream's entities enter on.
+    /// Which baselines the stream's entities enter on.
     baselines: Baselines,
-    /// What what is written for a client adds to the teams' scores, BLU's then RED's (a room's
-    /// own count of them).
+    /// Added to the teams' scores in what is written for a client, BLU then RED (a room's own
+    /// count).
     score_add: [i64; 2],
     /// The last frame applied set the score of a team that has something added.
     score_touched: bool,
@@ -145,26 +147,27 @@ pub(crate) struct World {
     shot: shot::Shot,
 }
 
-/// The teams' entity, its score, and which team it is (2 RED, 3 BLU).
+/// A team's entity class, its score prop, and its team number prop (2 RED, 3 BLU).
 const TEAM_CLASS: &str = "CTFTeam";
 const TEAM_SCORE: SendPropIdentifier = SendPropIdentifier::new("DT_Team", "m_iScore");
 const TEAM_NUM: SendPropIdentifier = SendPropIdentifier::new("DT_Team", "m_iTeamNum");
 
 impl World {
-    /// Adds `add` (BLU's, RED's) to the teams' scores in what is written for a client from now
-    /// on; whether that changed. A client keeps what it was sent: it needs a full update then.
+    /// Adds `add` (BLU, RED) to the teams' scores in what is written for a client from now on.
+    /// Returns whether `add` changed. A client keeps what it was sent, so it then needs a full
+    /// update.
     pub(crate) fn set_score_add(&mut self, add: [i64; 2]) -> bool {
         std::mem::replace(&mut self.score_add, add) != add
     }
 
-    /// Whether the last frame applied set the score of a team that has something added: its own
-    /// entities are for no client then.
+    /// Whether the last frame applied set the score of a team that has something added. The
+    /// stream's entity message then cannot go to a client as it is.
     pub(crate) fn score_touched(&self) -> bool {
         self.score_touched
     }
 
-    /// For a team's entity with something added to its score: where its score is among its
-    /// props, and the score a client is to see.
+    /// For a team entity with something added to its score: the index of its score prop, and the
+    /// score a client should see.
     fn score_shown(&self, state: &ParserState, e: &Entity) -> Option<(u32, i64)> {
         if self.score_add == [0, 0] || state.server_classes.get(usize::from(e.class))?.name.as_str() != TEAM_CLASS {
             return None;
@@ -183,8 +186,9 @@ impl World {
             .then_some((super::props::prop_index(table, TEAM_SCORE)?, (int(TEAM_SCORE).unwrap_or(0) + add).max(0)))
     }
 
-    /// Puts the score a client is to see in `props` of team entity `e`, as written for it: in
-    /// place of the game's, and when `entering` also where the game's is its baseline's.
+    /// Puts the score a client should see in `props`, the props written for team entity `e`. It
+    /// replaces the game's score. When `entering`, it is also added if the game's score is not
+    /// listed because it equals the baseline.
     fn show_score(&self, state: &ParserState, e: &Entity, props: &mut Vec<SendProp>, entering: bool) {
         let Some((index, score)) = self.score_shown(state, e) else { return };
         let value = SendPropValue::Integer(score);
@@ -198,8 +202,8 @@ impl World {
         }
     }
 
-    /// Applies the entities of the frame at server tick `tick`; `state` is the parser's once it
-    /// took the frame.
+    /// Applies the entities of the frame at server tick `tick`. `state` is the parser's state
+    /// after it handled the frame.
     pub(crate) fn apply(&mut self, pe: &PacketEntitiesMessage, state: &ParserState, tick: u32) {
         self.max_entries = pe.max_entries;
         let mut frame = match pe.delta {
@@ -237,8 +241,8 @@ impl World {
                         && dynamic.get(e.entity_index).is_some_and(|b| b.server_class == e.server_class)
                     {
                         self.baselines = Baselines::Own;
-                        // The parser keeps such a baseline as the props sent; a game has it over
-                        // the class's.
+                        // The parser keeps such a baseline as only the props sent; a game applies
+                        // it on top of the class's static baseline.
                         for p in state.get_static_baseline(e.server_class, table).unwrap_or_default() {
                             props.set(&p);
                         }
@@ -277,9 +281,10 @@ impl World {
             e.props.iter().any(|p| p.identifier == TEAM_SCORE)
                 && frame.get(u32::from(e.entity_index)).is_some_and(|w| self.score_shown(state, w).is_some())
         });
-        // A later delta of the stream never builds on a frame older than this one's base, but one
-        // written for a client does, on the frame it acked: those of the last [`KEEP_TICKS`] stay.
-        // A full update keeps them: a stream that asked for one can have deltas from before it.
+        // Drops old frames. A later delta of the stream never builds on a frame older than this
+        // delta's base, but a delta written for a client builds on the frame that client acked, so
+        // frames of the last `KEEP_TICKS` ticks stay too. A full update drops none: a stream that
+        // asked for one can still have deltas from before it.
         if let Some(base) = pe.delta {
             let from = u32::from(base).min(tick.saturating_sub(KEEP_TICKS));
             self.frames.retain(|(t, _)| *t >= from);
@@ -290,8 +295,8 @@ impl World {
         }
     }
 
-    /// Whether the stream's deltas use baselines of its own, which no client of ours has: its
-    /// entity messages are then for nobody as they are. Stays so.
+    /// Whether the stream's deltas use baselines of its own, which no relay client has. Its entity
+    /// messages then cannot go to a client as they are. Once true, stays true.
     pub(crate) fn own_baselines(&self) -> bool {
         self.baselines == Baselines::Own
     }
@@ -300,7 +305,7 @@ impl World {
         self.baselines = Baselines::Own;
     }
 
-    /// The stream is the game's of the player who is entity `player`.
+    /// Marks the stream as coming from the game of the player who is entity `player`.
     pub(crate) fn set_player(&mut self, player: u32) {
         self.player = Some(player);
     }
@@ -324,7 +329,7 @@ impl World {
         self.frames.back().map(|(_, f)| f)
     }
 
-    /// The entities may be off from here until the next full update.
+    /// Marks the entities as possibly wrong until the next full update.
     pub(crate) fn lost_frame(&mut self) {
         self.broken = true;
     }
@@ -353,14 +358,14 @@ impl World {
         self.latest().map_or(0, Frame::len)
     }
 
-    /// `net_Tick` and the entities in full of the frame at server tick `at` (the latest when not
-    /// given; None when it is not kept), as one message stream: the frame the next delta builds on,
-    /// so a client that starts from it can follow. None when they cannot be trusted (see `broken`)
-    /// or do not encode.
+    /// `net_Tick` and every entity in full, of the frame at server tick `at` (the latest when not
+    /// given), as one message stream, with that frame's tick. When `at` is the frame the next delta
+    /// builds on, a client that starts from this can follow. None when the frame is not kept, the
+    /// entities cannot be trusted (see `broken`), or they do not encode.
     ///
-    /// With `hold` (the seconds a tick lasts), every running round timer is held where it is at
-    /// that frame: a client whose clock runs on with no frames coming (a room paused) shows the
-    /// time as it was, until a full update without.
+    /// With `hold` (the seconds a tick lasts), every running round timer is written as paused at
+    /// its time in that frame. A client's clock runs on while no frames come (a paused room), so
+    /// this keeps the time shown as it was, until a full update without `hold`.
     pub(crate) fn full_update(&self, state: &ParserState, at: Option<u32>, hold: Option<f32>) -> Option<(u32, BitBuf)> {
         if self.broken || !self.seen_full {
             return None;
@@ -392,9 +397,9 @@ impl World {
         Some((tick, encode(state, &msg, tick)?))
     }
 
-    /// `net_Tick(to)` and the entities of frame `to` as a delta from frame `from`, both kept: a
-    /// client that has `from` gets `to` from it, where the stream's own frame `to` builds on one
-    /// the client lacks.
+    /// `net_Tick(to)` and the entities of frame `to` as a delta from frame `from`. None unless
+    /// both are kept. For a client that has `from`, when the stream's own frame `to` builds on a
+    /// frame the client lacks.
     pub(crate) fn delta(&self, state: &ParserState, from: u32, to: u32) -> Option<BitBuf> {
         let entities = self.delta_entities(state, from, to)?;
         let msg = PacketEntitiesMessage {
@@ -408,9 +413,9 @@ impl World {
         encode(state, &msg, to)
     }
 
-    /// The entities of frame `to` as a delta from frame `from`, both kept, as the one message: to
-    /// put in a frame's stream in place of its own, for a client that has `from` and not the frame
-    /// those build on.
+    /// The entities of frame `to` as a delta from frame `from`, as one message without `net_Tick`.
+    /// None unless both are kept. It replaces the entity message in a frame's stream, for a client
+    /// that has `from` but not the frame that message builds on.
     pub(crate) fn delta_message(&self, state: &ParserState, from: u32, to: u32) -> Option<BitBuf> {
         let entities = self.delta_entities(state, from, to)?;
         let msg = PacketEntitiesMessage {
@@ -424,8 +429,9 @@ impl World {
         super::decoder::encode_message(SVC_PACKETENTITIES, &msg, state)
     }
 
-    /// By entity index, the props that changed from one kept frame to the next between `from` and
-    /// `to`; none (the entity enters anew) for one that was gone, or another, in a frame between.
+    /// By entity index, the indexes of the props that changed in any kept frame after `from` up to
+    /// `to`. None (the entity must enter anew) when the entity was gone, or was a different
+    /// entity, in a frame between.
     fn changed_between(&self, from: u32, to: u32) -> BTreeMap<u32, Option<std::collections::BTreeSet<u32>>> {
         let mut changed: BTreeMap<u32, Option<std::collections::BTreeSet<u32>>> = BTreeMap::new();
         let way: Vec<&Frame> = self.frames.iter().filter(|(t, _)| (from..=to).contains(t)).map(|(_, f)| f).collect();
@@ -470,14 +476,15 @@ impl World {
         let (old, new) = (&self.kept(from)?.1, &self.kept(to)?.1);
         let changed = self.changed_between(from, to);
         // By index, as the message lists them: what changed or entered, and what is gone. A game
-        // client keeps every entity a delta does not name, so one gone is named, leaving and
-        // deleted, as a server does (the message's own deletion list only frees what is left).
+        // client keeps every entity a delta does not name, so an entity that is gone is listed as
+        // leaving and deleted, as a server does (the message's separate deletion list only frees
+        // entities that already left).
         let mut entities: BTreeMap<u32, PacketEntity> = BTreeMap::new();
         for (index, e) in new.iter() {
             match old.get(index) {
                 Some(o) if o.class == e.class && o.serial == e.serial && changed.get(&index) != Some(&None) => {
-                    // Every prop that changed on the way, as a server lists them: one back at
-                    // its value in `from` is not at it for a client that took a frame between.
+                    // Lists every prop that changed in a frame between, as a server does: a prop
+                    // back at its value in `from` may differ on a client that took a frame between.
                     let on_the_way = changed.get(&index).and_then(Option::as_ref);
                     let mut props: Vec<SendProp> = e
                         .props
@@ -505,9 +512,10 @@ impl World {
     }
 }
 
-/// A round timer's clock, every prop of it, for a full update: as it is, or with `hold` (the time
-/// now) a running one held where it is. Every one, not those off its baseline only: a client
-/// keeps a timer held by an earlier full update, until told it runs. None for another entity.
+/// All clock props of a round timer, for a full update: as they are, or with `hold` (the time
+/// now) a running timer written as paused at its current time. All are sent, not only those that
+/// differ from the baseline, because a client keeps a timer paused by an earlier full update
+/// until told it runs. None for any other entity.
 fn timer_props(state: &ParserState, e: &Entity, hold: Option<f32>) -> Option<Vec<SendProp>> {
     if state.server_classes.get(usize::from(e.class))?.name.as_str() != "CTeamRoundTimer" {
         return None;
@@ -536,11 +544,11 @@ fn timer_props(state: &ParserState, e: &Entity, hold: Option<f32>) -> Option<Vec
     ])
 }
 
-/// A TF weapon's `m_bResetParity` as a client creates the weapon with it, for a full update: one
-/// that differs from it, the client takes for a reset (`CTFWeaponBase::OnDataChanged`), and a
-/// medigun's charge goes to 0 until it changes. A weapon whose own is the other one then misses
-/// its next real reset, whose flip is to what the client has; what a reset changes still comes, as
-/// props. None for another entity.
+/// A TF weapon's `m_bResetParity` set to 0, the value a client creates the weapon with, for a full
+/// update. The client takes any other value for a reset (`CTFWeaponBase::OnDataChanged`), and a
+/// medigun's charge then shows 0 until it changes. A weapon whose real value is 1 misses its next
+/// real reset, because that flips the prop to the value the client already has; the props a reset
+/// changes still arrive. None for any other entity.
 fn reset_parity(state: &ParserState, e: &Entity) -> Option<Vec<SendProp>> {
     let table = state.send_tables.get(usize::from(e.class))?;
     let id = SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
@@ -549,9 +557,9 @@ fn reset_parity(state: &ParserState, e: &Entity) -> Option<Vec<SendProp>> {
 }
 
 impl World {
-    /// [`enter`], the stream's own player where its game has them: a player's origin is two props,
-    /// one for their own game and one for the others', of which a client takes the last, and their
-    /// own game is only sent the first.
+    /// [`enter`] with the score a client should see, and with the stream's own player placed where
+    /// their game has them. A player's origin is two props, one sent to their own game and one
+    /// sent to the others. A client reads the second, and their own game is only sent the first.
     fn enter(&self, state: &ParserState, index: u32, e: &Entity) -> Option<PacketEntity> {
         let mut entering = enter(state, index, e)?;
         self.show_score(state, e, &mut entering.props, true);

@@ -82,8 +82,8 @@ impl Receiver {
             return None;
         }
         let header = netchan::decode_header(data).ok()?;
-        // The server stamps every packet of the connection with our challenge; one
-        // without it would let a spoofer skip the check by clearing the flag.
+        // The server stamps every packet of the connection with our challenge. Accepting a
+        // packet without it would let a spoofer skip the check by clearing the flag.
         if let Some(ours) = self.challenge
             && header.challenge != Some(ours)
         {

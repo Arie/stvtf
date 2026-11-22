@@ -70,7 +70,7 @@ pub fn random_password() -> String {
 /// A relay: a socket clients connect to, fed by one upstream session.
 pub struct Relay {
     pub(super) sock: UdpSocket,
-    /// The port clients connect to: which relay a log line is of.
+    /// The port clients connect to: log lines name the relay by it.
     pub(super) port: u16,
     pub(super) hub: Mutex<Hub>,
     /// Clients were taken over (see [`Relay::take_over`]), and where their playback was: the
@@ -90,7 +90,7 @@ impl Relay {
     /// Takes in the clients a relay on this address handed over
     /// ([`Playback::hand_over`](super::Playback::hand_over)),
     /// before [`Relay::play`]: they go on where they were with a full update, or failing that
-    /// sign on again, connected still. False if the handover does not read: they are not taken.
+    /// sign on again, connected still. False if the handover cannot be decoded: none is taken.
     pub fn take_over(&self, h: &Handover) -> bool {
         if self.hub().take_over(h, Instant::now()).is_none() {
             return false;

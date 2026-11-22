@@ -24,8 +24,8 @@ fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
 }
 
 /// Kept beams are drawn only to clients in the game, past a pending full update: at a demo's
-/// start, before playback skims to the wanted moment, the relay loads no laser of its own. Once the
-/// match loaded its own after the relay's, the relay's is not loaded again for that demo.
+/// start, before playback skims to the wanted moment, the relay loads no laser of its own. Once
+/// the match loaded its own after the relay's, the relay's is not loaded again for that demo.
 #[test]
 fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     let c = upward_until(four_frames_kept);

@@ -34,7 +34,7 @@ fn the_frames_sent_with_a_full_update_are_without_the_servers_changelevel() {
 fn a_live_recording_plays_on_after_a_full_update() {
     let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
     let live = crate::demo::record_capture_for_tests("bots_cp_badlands.cap", &opt).1;
-    // Keyed at a few places, each its own.
+    // A full update at each of a few places, each in a run of its own.
     for at in [40, 41, 42, 43, 44, 45] {
         let mut c = Cursor::open_detached(&live).unwrap();
         while c.recent.len() < at {

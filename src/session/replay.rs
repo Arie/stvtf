@@ -28,7 +28,7 @@ pub fn replay(
 }
 
 /// Replays one recorded session at the pace it was recorded, `speed` times as fast, into a
-/// tap. `wait` pauses the clock while it says so (a relay client still signing on).
+/// tap. `wait` pauses the clock while it returns true (a relay client still signing on).
 #[allow(clippy::too_many_arguments, reason = "internal plumbing")]
 pub(crate) fn replay_paced(
     challenge: u32,

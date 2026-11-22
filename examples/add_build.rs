@@ -101,7 +101,7 @@ fn fetch(url: &str) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-/// The demo up to and with its data tables, then a stop: all `Tables` reads.
+/// The demo up to and including its data tables, then a stop: that is all `Tables` reads.
 fn cut_after_data_tables(data: &[u8]) -> Result<Vec<u8>> {
     let mut out = data[..HEADER].to_vec();
     let mut tick = None;

@@ -19,7 +19,7 @@ fn a_full_update_holds_the_round_timer_and_the_next_runs_it_again() {
         assert!(h.paused, "{h:?}");
         assert!((h.remaining - r.remaining).abs() < 0.5, "held at {} where it was {}", h.remaining, r.remaining);
     }
-    // Going on: a full update as it is runs them again, though running is their baseline.
+    // Going on: a plain full update runs them again, though running is their baseline.
     let (_, plain) = relay.dec.scene().keyframe(next).expect("a full update");
     client.dec.feed(plain.bytes(), plain.nbits());
     let timers = client.dec.extractor().snapshot().timers;

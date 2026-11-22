@@ -28,9 +28,9 @@ impl Writer<'_> {
         Some(self.extractor.snapshot().players.iter().find(|p| p.id.0 == user)?.ent)
     }
 
-    /// `teamplay_update_timer`: the HUD's timers redraw, as from a time the clock went back past
-    /// (a jump back, playback going on after a pause), and nothing else does (`ResetHUD` would
-    /// blank the medic's charge meter until the charge changes).
+    /// `teamplay_update_timer`: makes the HUD redraw its timers after the clock went back (a jump
+    /// back, or playback resuming after a pause). It redraws nothing else (`ResetHUD` would blank
+    /// the medic's charge meter until the charge changes).
     pub(crate) fn update_timer(&self) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, TeamPlayUpdateTimerEvent};
         self.game_event(GameEvent::TeamPlayUpdateTimer(TeamPlayUpdateTimerEvent {}))
@@ -63,8 +63,9 @@ impl Writer<'_> {
         encode_message(SVC_GAMEEVENT, &GameEventMessage { event_type_id: def.id, event_type, event }, state)
     }
 
-    /// `hltv_fixed` at `pos` looking along `pitch` and `yaw` (degrees), for the same clients.
-    /// The game takes the coordinates and angles as signed, and no field of view but its own.
+    /// `hltv_fixed` at `pos` looking along `pitch` and `yaw` (degrees), for clients on
+    /// `spec_autodirector 1`. The game reads the coordinates and angles as signed, and ignores the
+    /// field of view sent.
     #[allow(clippy::cast_sign_loss)]
     pub(crate) fn hltv_fixed(&self, pos: [i32; 3], pitch: i16, yaw: i16) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVFixedEvent};
@@ -80,7 +81,7 @@ impl Writer<'_> {
         }))
     }
 
-    /// `hltv_cameraman`: the same clients see what player `index` does.
+    /// `hltv_cameraman`: clients on `spec_autodirector 1` see what player `index` sees.
     pub(crate) fn hltv_cameraman(&self, index: u32) -> Option<BitBuf> {
         use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVCameramanEvent};
         self.game_event(GameEvent::HLTVCameraman(HLTVCameramanEvent { index: u16::try_from(index).ok()? }))

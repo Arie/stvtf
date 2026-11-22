@@ -20,8 +20,8 @@ fn a_new_map_signs_every_client_on_again() {
     assert_eq!((c.phase, c.cursor, c.gate, c.queue.len()), (Phase::Signon, 0, None, 0));
 }
 
-/// Another demo's signon goes only once no client is in one: a game client sent a second while
-/// it loads the map crashes.
+/// Another demo's signon goes only once no client is in one: a game client crashes on a second
+/// one sent while it loads the map.
 #[test]
 fn a_new_signon_waits_for_the_clients_in_one() {
     let mut b = Bench::new("", 1);
@@ -183,7 +183,7 @@ fn a_client_coming_in_during_a_hold_waits_for_the_next_signon() {
 }
 
 /// A playing relay's new signon finds a client part-way through the last one, not told to
-/// reconnect (it came in as the switch went): it is, before it gets the new one.
+/// reconnect (it came in as the switch went): it is told to, before it gets the new one.
 #[test]
 fn a_client_part_way_through_the_last_demos_signon_is_told_to_reconnect() {
     let mut b = Bench::new("", 1);

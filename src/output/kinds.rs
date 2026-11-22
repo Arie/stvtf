@@ -71,15 +71,15 @@ pub enum ProjectileKind {
     Sticky,
     LooseCannon,
     Flare,
-    /// The crossbow's.
+    /// A crossbow bolt.
     HealingArrow,
-    /// The huntsman's.
+    /// A Huntsman arrow.
     Arrow,
-    /// The Cow Mangler's.
+    /// Fired by the Cow Mangler.
     EnergyBall,
-    /// The Righteous Bison's and the Pomson's.
+    /// Fired by the Righteous Bison or the Pomson.
     EnergyRing,
-    /// The Dragon's Fury's.
+    /// Fired by the Dragon's Fury.
     Fireball,
     Cleaver,
     Jarate,

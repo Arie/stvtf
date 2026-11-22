@@ -1,4 +1,4 @@
-//! One `SourceTV` session: climb the signon ladder to FULL, keep acking, decode.
+//! One `SourceTV` session: sign on up to FULL, keep acking, decode.
 //!
 //! The server pushes each signon state; the client echoes `net_SignonState(state, spawncount)`
 //! for every state from CONNECTED up, quoting the spawncount of the latest
@@ -226,7 +226,7 @@ impl<'o> Session<'o> {
         self.broke.get_or_insert((reason, fatal));
     }
 
-    /// Sends a packet; its sequence.
+    /// Sends a packet and returns its sequence.
     fn send(&mut self, reliable: Option<&BitBuf>, unreliable: Option<&BitBuf>) -> i32 {
         let sequence = self.out_seq;
         self.out_seq += 1;
@@ -389,7 +389,7 @@ impl<'o> Session<'o> {
                 self.pending = None;
                 self.echo(self.state);
             } else if pkt.header.ack >= p.seq {
-                // The server takes every copy it gets: one goes only once this one is lost.
+                // The server takes every copy it gets, so another goes only once this one is lost.
                 self.transmit_pending();
             }
         }

@@ -11,7 +11,7 @@ const ROLE_ATTACKERS: i64 = 2;
 /// `STOPWATCH_OVERTIME`.
 const STATE_RUNNING: i64 = 1;
 const STATE_OVERTIME: i64 = 2;
-/// A round timer this close to the stopwatch's time shows it.
+/// A round timer within this many seconds of the stopwatch's time is showing the stopwatch.
 const SAME_TIME: f64 = 0.5;
 
 impl Extractor {

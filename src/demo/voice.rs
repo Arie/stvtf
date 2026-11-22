@@ -8,10 +8,10 @@ use super::{HEADER_LEN, Header, HeldTables, Next, Packet, Reader};
 use crate::Result;
 
 /// Voice to write into a demo: Opus frames (20 ms each) as the voice of the player in `slot`
-/// (their entity less one), whose Steam account is `account`, heard at demo tick `tick`.
+/// (their entity index minus one), whose Steam account is `account`, heard at demo tick `tick`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Voiced {
-    /// The demo's tick it is heard at: the server's, less that of the demo's first frame.
+    /// The demo tick it is heard at: the server tick minus that of the demo's first frame.
     pub tick: i32,
     /// The speaker's slot.
     pub slot: u8,
@@ -29,10 +29,10 @@ pub(super) fn heard_at(due: i32, before: i32, tick: i32) -> i32 {
     due.max(before).min(tick)
 }
 
-/// Copies demo `src` to `out` with `voices` in it, each a frame of its own before the first of
-/// the demo's at or after its tick, as the game's own voice messages (so the demo plays them as
-/// the players talking). The header's counts are made anew, and a demo still being written (no
-/// stop packet yet) gets one.
+/// Copies demo `src` to `out` with `voices` in it. Each goes in a frame of its own, before the
+/// first demo frame at or after its tick, as the game's own voice messages (so the demo plays
+/// them as the players talking). The header's counts are computed again, and a demo still being
+/// written (no stop packet yet) gets one.
 pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mut out: W) -> Result<W> {
     let mut r = Reader::new(src)?;
     let mut header = r.header.clone();
@@ -82,7 +82,7 @@ pub fn with_voice<R: Read + Seek, W: Write + Seek>(src: R, voices: &[Voiced], mu
             Next::Packet(Packet::Stop) | Next::Stop | Next::More => break,
         }
     }
-    // Said after the demo's last frame: with it.
+    // Voice from after the demo's last frame goes at that frame's tick.
     for v in order {
         voice.say(&mut out, &mut header, v, last)?;
     }

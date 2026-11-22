@@ -1,5 +1,5 @@
 //! Whatever comes off the network or out of a file may be garbage or forged: it must never
-//! panic. The inputs are random but seeded, so a failure repeats. For a longer hunt,
+//! panic. The inputs are random but seeded, so a failure repeats. For a longer run,
 //! `STVTF_FUZZ_ROUNDS` multiplies how many are tried and `STVTF_FUZZ_SEED` picks other inputs;
 //! the same two values give the same inputs again.
 
@@ -22,10 +22,10 @@ fn rounds(default: u64) -> u64 {
 struct Rng(u64);
 
 impl Rng {
-    /// The inputs numbered `n`, of those `STVTF_FUZZ_SEED` picks.
+    /// The generator for test `n`, in the run that `STVTF_FUZZ_SEED` picks.
     fn seeded(n: u64) -> Self {
         let run = std::env::var("STVTF_FUZZ_SEED").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        // xorshift never leaves 0.
+        // A xorshift state of 0 stays 0, so start from at least 1.
         Rng((n ^ run.wrapping_mul(0x9E37_79B9_7F4A_7C15)).max(1))
     }
 
@@ -45,7 +45,7 @@ impl Rng {
         (0..len).map(|_| self.next() as u8).collect()
     }
 
-    /// Corrupts `data`: flipped bits, a random byte, or a cut-off end.
+    /// Corrupts `data`: a flipped bit, a random byte, a 0xff byte, or a cut-off end.
     fn mutate(&mut self, data: &mut Vec<u8>) {
         if data.is_empty() {
             return;
@@ -146,7 +146,7 @@ fn garbage_for_the_decoder_never_panics_the_process() {
     }
 }
 
-/// A corrupted stream through the whole session and decoder. The checksum is put right after
+/// A corrupted stream through the whole session and decoder. The checksum is recomputed after
 /// each change, or the receiver would drop the packet before anything interesting.
 #[test]
 fn corrupted_sessions_never_panic_the_process() {

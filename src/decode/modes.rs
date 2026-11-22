@@ -222,7 +222,7 @@ pub(crate) struct Modes {
 /// A player, for the objectives that point at one: user id and position.
 pub(crate) type PlayerAt<'a> = &'a dyn Fn(u32) -> Option<(PlayerId, Vector)>;
 
-/// The team and origin props of a positioned entity.
+/// Updates `at` from a team or origin prop of a positioned entity.
 pub(crate) fn placed(at: &mut Placed, p: &SendProp) {
     match p.identifier {
         PROP_TEAM_NUM => at.team = team_byte(as_int(&p.value)),

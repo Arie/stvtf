@@ -1,5 +1,5 @@
-//! Beams drawn in the world for the clients of a relay (`TE_BeamPoints`), as the game's own
-//! temp entities: a room's strokes, seen in TF2.
+//! Beams drawn in the world for the clients of a relay, sent as the game's own temp entities
+//! (`TE_BeamPoints`). They show a room's strokes in TF2.
 
 use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage};
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
@@ -14,8 +14,8 @@ use crate::net::messages::SVC_TEMPENTITIES;
 const PER_MESSAGE: usize = 16;
 /// The longest a beam can last, and widest it can be, as the game sends them.
 const MAX_LIFE: f32 = 25.5;
-/// A beam's life goes in steps of this (8 bits up to 25.6 s), and one of 0 lasts forever: a life
-/// is rounded up to a whole step, one at least.
+/// A beam's life is sent in steps of this (8 bits up to 25.6 s). A life of 0 lasts forever, so a
+/// life is rounded up to a whole step, at least one.
 const LIFE_STEP: f32 = 25.6 / 255.0;
 const MAX_WIDTH: f32 = 127.0;
 

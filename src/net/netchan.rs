@@ -139,7 +139,7 @@ pub fn build_packet(h: &OutHeader, reliable_region: Option<&BitBuf>, unreliable:
     out
 }
 
-/// Puts a packet's checksum right after a test changed the packet.
+/// Recomputes a packet's checksum after a test or fuzz target changed the packet.
 #[cfg(any(test, fuzzing))]
 pub fn reseal(packet: &mut [u8]) {
     if packet.len() >= HEADER_MIN {

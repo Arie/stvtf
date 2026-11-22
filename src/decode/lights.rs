@@ -11,7 +11,7 @@ use crate::net::bits::BitBuf;
 use crate::net::messages::SVC_TEMPENTITIES;
 
 pub(crate) const TABLE: &str = "DT_TEDynamicLight";
-/// The smallest a light is, and the longest it lasts, as the game sends them.
+/// The smallest and largest radius of a light, and the longest it lasts, as the game sends them.
 const MIN_RADIUS: f32 = 10.0;
 const MAX_RADIUS: f32 = 2560.0;
 const MAX_LIFE: f32 = 25.5;
@@ -45,7 +45,7 @@ impl Writer<'_> {
         super::decoder::encode_message(SVC_TEMPENTITIES, &TempEntitiesMessage { events: vec![event] }, state)
     }
 
-    /// The light put out: the smallest, gone at once, in its place.
+    /// Puts the light out: the smallest light, gone at once, takes its place.
     pub(crate) fn no_light(&self) -> Option<BitBuf> {
         self.light([0.0; 3], [0; 3], MIN_RADIUS, 0, 0.0)
     }

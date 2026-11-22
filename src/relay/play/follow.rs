@@ -1,4 +1,5 @@
-//! Frames played to the clients in the game, as they are where a game client can follow them.
+//! Playing frames to the clients in the game: as they are when a game client can follow them,
+//! else with their entities written anew, or a full update instead.
 
 use std::time::Instant;
 
@@ -37,7 +38,7 @@ impl Player<'_> {
         }
         let was_paused = c.paused;
         let Some((bits, life)) = c.decode() else { return };
-        // Ours, not the demo's director's.
+        // The room's camera, not the demo's director's.
         let (bits, life) = if want.camera.is_some() { without_cues(&c.dec, &bits, &life) } else { (bits, life) };
         let (bits, life) = if c.dec.players_own() { for_watchers(&bits, &life, c.view) } else { (bits, life) };
         let mut hub = self.relay.hub();
@@ -46,9 +47,9 @@ impl Player<'_> {
                 Entities::Full => None,
                 Entities::Delta(base) => Some(base),
             };
-            // From each frame a client acked: it has that one for sure.
-            // So is a team's score that the room counts otherwise, and a camera of the relay's that
-            // moved: the game's own is for nobody.
+            // Written as a delta from each frame a client acked: it has that one for sure. With
+            // baselines of its own, a score the room adds to, or a relay camera that moved, the
+            // demo's own entities are for no client.
             let rewritten =
                 c.dec.scene().own_baselines() || c.dec.scene().score_touched() || c.dec.scene().shot_touched();
             let from = hub.acked().into_iter().filter(|a| rewritten || base.is_some_and(|b| b != *a));
@@ -78,10 +79,10 @@ impl Player<'_> {
     }
 }
 
-/// Whether clients that may have no frame older than `floor` follow one whose entities build on
-/// `base`. Not a full update: a game client keeps no frame from
-/// before it, and the demo's next delta may build on one (a recording that asked for a full update
-/// can have deltas from before it).
+/// Whether clients that may have no frame older than `floor` can follow a frame whose entities
+/// build on `base`. Never a full update: a game client keeps no frame from before one, and the
+/// demo's next delta may build on such a frame (a recording that asked for a full update can have
+/// deltas from before it).
 pub(super) fn follows(floor: Option<u32>, base: Option<Entities>) -> bool {
     match base {
         None => true,
@@ -90,8 +91,8 @@ pub(super) fn follows(floor: Option<u32>, base: Option<Entities>) -> bool {
     }
 }
 
-/// The oldest frame the clients in the game may have, from `floor`, once those just in got a full
-/// update of frame `key` and the frames `since`: what the latest of them builds on.
+/// The oldest frame the clients in the game may still have, after `floor`, once those just in got
+/// a full update of frame `key` and the frames `since`: the latest frame any of these builds on.
 pub(super) fn floor_after(floor: Option<u32>, dec: &Decoder, key: u32, since: &[BitBuf]) -> u32 {
     let base = since
         .iter()

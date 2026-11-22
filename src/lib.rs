@@ -101,12 +101,12 @@ impl Error {
         self.inner().find_map(|i| if let error::Inner::Rejected(r) = i { Some(r) } else { None })
     }
 
-    /// The game port given for `SourceTV`'s, if that is what this is.
+    /// The game port that was given instead of the `SourceTV` port, if that is what this is.
     pub(crate) fn game_port(&self) -> Option<&net::handshake::GamePort> {
         self.inner().find_map(|i| if let error::Inner::GamePort(g) = i { Some(g) } else { None })
     }
 
-    /// Whether this is a stop asked for.
+    /// Whether this is a stop that was asked for.
     pub(crate) fn is_stopped(&self) -> bool {
         self.inner().any(|i| matches!(i, error::Inner::Stopped(_)))
     }

@@ -89,8 +89,8 @@ pub(super) fn bench_with_one_in() -> Bench {
 }
 
 /// The frames the bench's client is sent, as a game client keeps them: it drops those older than
-/// the base of each delta, and all on a full update. Panics on a delta from a frame it lacks. How
-/// many full updates, and deltas.
+/// the base of each delta, and all on a full update. Panics on a delta from a frame it lacks.
+/// Returns how many full updates and deltas it got.
 fn follow_as_a_game_client(b: &Bench, reader: &Cursor) -> (usize, usize) {
     b.client.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
     let mut rx = Receiver::new(Some(b.challenge));
@@ -218,8 +218,9 @@ fn game_client_table_differs(relay: &Relay, player: &Player<'_>, signon: usize, 
     (!wrong.is_empty() || !misplaced.is_empty()).then(|| format!("demo vs client {wrong:?}, misplaced {misplaced:?}"))
 }
 
-/// A relay playing `pl_upward.dem` some way in, its one client in the game with all it was sent
-/// acked; the player, what it wants, and where the backlog's signon ends.
+/// `pl_upward.dem` played some way in to one client, in the game with all it was sent acked,
+/// then handed over: the relay that took over, what is wanted, and where the backlog's signon
+/// ends.
 fn upward_played_to_a_client(b: &mut Bench) -> (Relay, Want, usize) {
     let path = crate::testing::fixture("pl_upward.dem");
     let first = upward_until(|c| c.started);
@@ -258,7 +259,7 @@ fn upward_played_to_a_client(b: &mut Bench) -> (Relay, Want, usize) {
 }
 
 /// A relay playing `pl_upward.dem` some way in to its one client, in the game with all it was
-/// sent acked; its player and what it wants.
+/// sent acked; the relay and what is wanted.
 fn upward_playing_to_a_client(b: &mut Bench) -> (Relay, Want) {
     let first = upward_until(|c| c.started);
     let from = i64::from(first.dec.server_tick());

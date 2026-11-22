@@ -16,12 +16,13 @@ pub(super) struct Entry {
 
 pub(super) struct Backlog {
     entries: Vec<Entry>,
-    /// The string table changes in it: a server's unreliable parts come again until acked, and
-    /// the relay's own are added once.
+    /// The string table changes in it, so that none is added twice: a server sends its own again
+    /// in each datagram until acked, and the relay adds each of its own once.
     tables: HashSet<BitBuf>,
     /// The last string table change added.
     last_table: Option<BitBuf>,
-    /// Every reliable message joins it until the first entities after a signon start.
+    /// While open, every reliable message joins it: from a signon's start until the first
+    /// entities after it.
     pub(super) open: bool,
 }
 
@@ -31,7 +32,7 @@ pub(super) enum Delivery {
     /// It came in a datagram's unreliable part, which the clients in the game get as it is; with
     /// `queue`, reliably as well (a demo has it once: a lost datagram would lose it for good).
     InDatagrams { queue: bool },
-    /// It was passed over (a jump): reliably.
+    /// A jump skipped the stream it was in: reliably.
     Reliably,
 }
 
@@ -56,7 +57,7 @@ impl Backlog {
         self.entries.iter()
     }
 
-    /// An entry of the backlog before (a handover's), a string table change known as one.
+    /// Adds an entry of a handover's backlog; a string table change is recorded as one.
     pub(super) fn restore(&mut self, bits: BitBuf, gate: Option<Signon>) {
         if super::handover::is_table_change(&bits) {
             self.tables.insert(bits.clone());
@@ -77,7 +78,7 @@ impl Backlog {
         self.tables.contains(msg)
     }
 
-    /// Those string table changes are added again when they come again.
+    /// Forgets these string table changes: each is added again the next time it comes.
     pub(super) fn forget_table_changes<'a>(&mut self, msgs: impl IntoIterator<Item = &'a BitBuf>) {
         for m in msgs {
             self.tables.remove(m);
@@ -85,8 +86,8 @@ impl Backlog {
     }
 
     /// Adds string table change `msg` and gives it to the clients: those at the end of the backlog
-    /// as `delivery` says, the others as they get to it. One the same as an earlier one is a change
-    /// too, unless that was the last (a server's repeat).
+    /// as `delivery` says, the others as they get to it. A change equal to an earlier one is
+    /// added too, unless that was the last one added (a server's repeat).
     pub(super) fn add_table_change(
         &mut self,
         msg: &BitBuf,

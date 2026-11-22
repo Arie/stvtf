@@ -1,8 +1,8 @@
 //! The string tables as the frames so far left them, as far as a jump back needs: which entries
-//! each table has, and the values of those whose later ones a client must not keep. Those are
-//! `userinfo` (who is in each player slot) and `instancebaseline` (what an entity of each class
-//! starts from: the full updates are written against the decoder's); the rest only grow, or do not
-//! matter at an earlier moment (the lights, which models are loaded).
+//! each table has, and the entry values of the two tables where a client must not keep later
+//! values. Those are `userinfo` (who is in each player slot) and `instancebaseline` (what an entity
+//! of each class starts from; full updates are written against the decoder's baselines). The other
+//! tables only grow, or do not matter at an earlier moment (the lights, which models are loaded).
 //!
 //! A client that has the tables of a later moment is set back with `svc_UpdateStringTable`s of the
 //! entries that differ ([`Tables::set_back`]).
@@ -18,7 +18,7 @@ use tf_demo_parser::demo::packet::stringtable::{ExtraData, StringTable, StringTa
 use crate::net::bits::BitBuf;
 use crate::net::messages::SVC_UPDATESTRINGTABLE;
 
-/// Entries in one message of a snapshot's: well within its length.
+/// The most entries put in one message of a snapshot: well within the message's length limit.
 const SNAPSHOT_ENTRIES: usize = 64;
 
 /// The tables whose values are kept.
@@ -26,7 +26,7 @@ fn kept(name: &str) -> bool {
     matches!(name, "userinfo" | "instancebaseline")
 }
 
-/// An entry's value: its text, and its data with the data's bits, to compare.
+/// An entry's value: its text, and its data with the data's bytes, which are what is compared.
 #[derive(Clone)]
 struct Value {
     text: Option<String>,
@@ -68,8 +68,8 @@ const MODEL_PRECACHE: &str = "modelprecache";
 /// Sprites a beam can be drawn with, best first, as `modelprecache` names them.
 const BEAM_SPRITES: [&str; 3] = ["sprites/laserbeam.vmt", "sprites/physbeam.vmt", "sprites/laser.vmt"];
 
-/// What the clients' `modelprecache` has had since their signon, which a jump back does not take
-/// from them: how many entries, and where the match's own laser is.
+/// What the clients' `modelprecache` holds since their signon, which a jump back does not remove:
+/// how many entries, and the index of the match's own laser.
 #[derive(Copy, Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ModelsSent {
     next: u16,
@@ -83,22 +83,23 @@ impl ModelsSent {
         ModelsSent { next, laser: None }
     }
 
-    /// These, with what `tables` have: the clients were sent them too.
+    /// These combined with what `tables` hold, which the clients were sent too.
     pub(super) fn with_tables(self, tables: &Tables) -> ModelsSent {
         ModelsSent { next: self.next.max(tables.models), laser: self.laser.or(tables.match_laser()) }
     }
 }
 
-/// The model index to draw beams with, and the message that loads it, to send first, if the
-/// clients do not have it.
+/// The model index to draw beams with. If the clients do not have that model, also the message
+/// that loads it, which must be sent first.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BeamModel {
     pub(crate) index: u16,
     pub(crate) load: Option<BitBuf>,
 }
 
-/// Where a game client puts each `instancebaseline` entry, by server index: past its end goes
-/// at its end. Baselines are found by name, so moving them is safe.
+/// Where a game client puts each `instancebaseline` entry, by server index. An entry with an
+/// index past the end of the client's table goes at its end. Baselines are found by name, so
+/// moving them is safe.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Placed {
     table: Option<u8>,
@@ -126,12 +127,13 @@ pub(crate) struct Tables {
     beam_sprite: Option<(usize, u16)>,
     /// One past the last entry of `modelprecache`.
     models: u16,
-    /// The first model loaded that is no map's and no sprite (a `.mdl`).
+    /// The lowest index of a loaded `.mdl` model (not part of the map, not a sprite).
     studio: Option<u16>,
 }
 
 impl Tables {
-    /// Renumbers `instancebaseline` entries as a game client places them; the moved updates.
+    /// Renumbers `instancebaseline` entries as a game client places them. Returns the indexes of
+    /// the updates in which an entry moved.
     pub(crate) fn place(&mut self, messages: &mut [Message<'_>]) -> Vec<usize> {
         let mut changed = Vec::new();
         let mut id = self.by_id.len();
@@ -163,17 +165,17 @@ impl Tables {
         changed
     }
 
-    /// Baseline placement.
+    /// Where the `instancebaseline` entries were placed so far.
     pub(crate) fn placed(&self) -> Placed {
         self.placed.clone()
     }
 
-    /// Placement for streams already placed.
+    /// Sets the placement, for a decoder fed streams that were already placed.
     pub(crate) fn set_placed(&mut self, placed: Placed) {
         self.placed = placed;
     }
 
-    /// Takes the string table messages among a stream's.
+    /// Records the string table messages among a stream's `messages`.
     pub(crate) fn note(&mut self, messages: &[Message<'_>]) {
         for msg in messages {
             match msg {
@@ -240,7 +242,7 @@ impl Tables {
         self.studio
     }
 
-    /// The match's own laser, if it loaded it.
+    /// The model index of the match's own laser, if the match loaded it.
     pub(crate) fn match_laser(&self) -> Option<u16> {
         self.beam_sprite.filter(|(rank, _)| *rank == 0).map(|(_, i)| i)
     }
@@ -252,13 +254,14 @@ impl Tables {
         before.is_some_and(|b| self.match_laser().is_some_and(|m| m != b))
     }
 
-    /// The model index to draw beams with: the solid laser, loaded by the match or else by an
-    /// `svc_UpdateStringTable` (also given) adding it to `modelprecache`. A game client adds an
-    /// entry past its last at the end, whatever its index, so it goes in the next free one: past
-    /// all the clients were `sent`, which after a jump back is more than these tables have.
-    /// `before` is where the clients were given it: they keep it there until they sign on again,
-    /// whatever the match loads there later (for an index it has, a game client takes only the
-    /// data), and a jump back leaves it too. None when the table is full or unknown.
+    /// The model index to draw beams with: the solid laser. If the clients do not have it yet,
+    /// also the `svc_UpdateStringTable` that adds it to `modelprecache`. A game client puts an
+    /// entry past its last one at the end, whatever its index, so the laser goes in the next free
+    /// index: past everything the clients were `sent`, which after a jump back is more than these
+    /// tables have. `before` is the index where the clients were given it. They keep it there
+    /// until they sign on again, whatever the match loads there later (for an index it has, a game
+    /// client takes only the data), and a jump back leaves it too. None when the table is full or
+    /// unknown.
     pub(crate) fn laser(&self, state: &ParserState, before: Option<u16>, sent: ModelsSent) -> Option<BeamModel> {
         if let Some(index) = before {
             return Some(BeamModel { index, load: None });
@@ -283,8 +286,8 @@ impl Tables {
         Some(t.values.as_ref()?.iter().map(|(i, v)| (*i, v.text.clone())).collect())
     }
 
-    /// How many entries of `userinfo` and `instancebaseline` were rewritten so far: a client with
-    /// the tables of a later moment has the wrong ones for this only if the count grew since.
+    /// How many entries of `userinfo` and `instancebaseline` were rewritten so far. A client with
+    /// the tables of a later moment has wrong entries for this moment only if the count grew since.
     pub(crate) fn rewritten(&self) -> u32 {
         self.rewritten
     }
@@ -313,8 +316,9 @@ impl Tables {
     }
 
     /// `svc_UpdateStringTable`s that set a client with the tables of `later` back to these: the
-    /// entries whose values differ, as they are here. Entries only `later` has stay, as a slot or
-    /// class not used yet. None if one does not encode, or the tables are not the same ones.
+    /// entries whose values differ, as they are here. Entries only `later` has are left alone: a
+    /// slot or class not used yet. None if one does not encode, or the tables are not the same
+    /// ones.
     pub(crate) fn set_back(&self, later: &Tables, state: &ParserState) -> Option<Vec<BitBuf>> {
         let mut out = Vec::new();
         for (id, (ours, theirs)) in self.by_id.iter().zip(&later.by_id).enumerate() {
@@ -355,9 +359,9 @@ fn c_str(bytes: &[u8]) -> &[u8] {
 }
 
 impl Tables {
-    /// An `svc_UpdateStringTable` of `userinfo` giving the players in it a name of `names` (by
-    /// `SteamID`; the game's own for those with `None`), cut to what the game takes. None when
-    /// none of them is in it.
+    /// An `svc_UpdateStringTable` of `userinfo` that gives each player in it the name `names` has
+    /// for their `SteamID` (`None` gives back the game's own name), cut to the length the game
+    /// takes. None when none of them is in the table.
     pub(crate) fn named(&self, names: &BTreeMap<String, Option<String>>, state: &ParserState) -> Option<BitBuf> {
         let (id, table) = self.by_id.iter().enumerate().find(|(_, t)| t.name == "userinfo")?;
         let mut entries = Vec::new();

@@ -142,8 +142,8 @@ pub(super) struct RoundTimer {
     pub(super) show: bool,
     pub(super) disabled: bool,
     pub(super) setup: bool,
-    /// The stopwatch's own timer, and whether it is timing captures (the first half), its total
-    /// the time of the last one.
+    /// Whether this is the stopwatch's own timer, whether it is timing captures (the first half),
+    /// and its total: the time of the last capture.
     pub(super) stopwatch: bool,
     pub(super) watching_caps: bool,
     pub(super) total: f32,

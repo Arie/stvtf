@@ -51,8 +51,8 @@ pub(super) struct Client {
     /// Reliable messages not yet in a transfer.
     pub(super) queue: Vec<BitBuf>,
     /// When to give it the notes again: once its HUD is up, and past a HUD reset (see
-    /// [`Hub::notes`](super::hub::Hub::notes)). Each its own: a reset must not put off or bring
-    /// forward the other.
+    /// [`Hub::notes`](super::hub::Hub::notes)). Two separate times: a reset must not delay or
+    /// bring forward the other.
     pub(super) notes_entered: Option<Instant>,
     pub(super) notes_reset: Option<Instant>,
     pub(super) outgoing: Option<Outgoing>,
@@ -67,13 +67,13 @@ pub(super) struct Client {
     /// The frames with entities it was sent since its last full update, by server tick: one of
     /// them is what it acks.
     pub(super) frames: VecDeque<u32>,
-    /// The frame it last acked: it has it, and a delta from it it can take. A game client sent
-    /// one from a frame it lacks (a datagram lost) crashes.
+    /// The frame it last acked: it can take a delta from that frame. A game client crashes on a
+    /// delta from a frame it lacks (its datagram was lost).
     pub(super) acked: Option<u32>,
     /// When it was sent a full update it has not acked yet: no delta until it does.
     pub(super) keyed: Option<Instant>,
-    /// It keeps what it has while the backlog is made anew (see [`Hub::hold_in_game`]): none of
-    /// that is for it.
+    /// It keeps what it has while the backlog is rebuilt (see [`Hub::hold_in_game`]): it gets
+    /// none of the new entries.
     ///
     /// [`Hub::hold_in_game`]: super::hub::Hub::hold_in_game
     pub(super) held: bool,
@@ -145,8 +145,8 @@ impl Client {
         self.frames.push_back(tick);
     }
 
-    /// It says it has frame `tick`: only one it was sent since its full update counts (one from
-    /// before a jump it no longer has).
+    /// It acks frame `tick`. Only a frame it was sent since its full update counts: it no longer
+    /// has one from before a jump.
     fn ack(&mut self, tick: u32) {
         if self.frames.contains(&tick) {
             self.frames.retain(|t| *t >= tick);
@@ -171,14 +171,14 @@ impl Client {
         self.phase != Phase::Signon && self.cursor == backlog.len()
     }
 
-    /// Whether the client has acked the whole backlog. Only then can it take entities: those of a
-    /// class whose baseline it lacks stop a game client.
+    /// Whether the client has acked the whole backlog. Only then can it take entities: a game
+    /// client stops on entities of a class whose baseline it lacks.
     pub(super) fn through_backlog(&self, backlog: &Backlog) -> bool {
         self.cursor == backlog.len() && self.queue.is_empty() && self.outgoing.is_none()
     }
 
-    /// The client goes into the game: it gets `notes`, and again once its HUD is up (sent with its
-    /// first entities they may come before it).
+    /// The client goes into the game: it gets `notes`, and again once its HUD is up (those sent
+    /// with its first entities may come before the HUD).
     pub(super) fn enter_notes(&mut self, notes: &[BitBuf], now: Instant) {
         self.queue.extend(notes.iter().cloned());
         self.notes_entered = Some(now + NOTES_AFTER_ENTERING);
@@ -218,7 +218,7 @@ impl Client {
                             "relay: {from} signon {s:?} at {} ms",
                             now.duration_since(self.connected).as_millis()
                         );
-                        // Only the answer to a reconnect counts.
+                        // From a client told to reconnect, only CONNECTED counts.
                         if self.reconnecting && s != Signon::Connected {
                             continue;
                         }

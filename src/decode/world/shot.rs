@@ -28,14 +28,14 @@ pub(crate) struct Pose {
     pub(crate) cut: u8,
 }
 
-/// The clients' camera as the relay has it.
+/// The relay's state for the clients' camera.
 #[derive(Default)]
 pub(super) struct Shot {
-    /// Where it is to be: nowhere of the relay's choosing, with none.
+    /// Where the relay wants the camera. None leaves the camera to the director.
     pose: Option<Pose>,
-    /// What is ours in the frames for it.
+    /// The entities the relay added to the frames for it.
     rig: Option<Rig>,
-    /// The last frame applied changed what is ours in it.
+    /// The last frame applied changed the relay's entities.
     pub(super) touched: bool,
     /// Any prop's or player's model loaded.
     model: Option<u16>,
@@ -45,20 +45,20 @@ pub(super) struct Shot {
     taken: Vec<u32>,
 }
 
-/// The entities of ours in the stream's frames: the prop, and the player who watches from it.
+/// The relay's entities in the stream's frames: the prop, and the player who watches from it.
 #[derive(Copy, Clone)]
 struct Rig {
     prop: u32,
     man: u32,
 }
 
-/// Both entities' serial: with the prop's index, the handle the player watches.
+/// The serial of both entities. With the prop's index it makes the handle the player watches.
 const SERIAL: u32 = 777;
-/// A handle's index bits.
+/// Bits of the entity index in a handle.
 const HANDLE_INDEX_BITS: u32 = 11;
 const PROP_CLASS: &str = "CBaseAnimating";
 const MAN_CLASS: &str = "CTFPlayer";
-/// `m_fEffects`: casts no shadow, takes none.
+/// `m_fEffects`: casts no shadow and receives none.
 const EF_NO_SHADOWS: i64 = 0x10 | 0x40;
 /// `m_nRenderMode`: drawn through its colour's alpha.
 const RENDER_TRANS: i64 = 2;
@@ -67,13 +67,13 @@ const RENDER_TRANS: i64 = 2;
 const CLEAR: i64 = 0x00FF_FFFF;
 const TEAM_SPECTATOR: i64 = 1;
 const LIFE_DEAD: i64 = 2;
-/// `m_iObserverMode`: from where its target is, looking as it does.
+/// `m_iObserverMode`: views from its target's position, along its target's angles.
 const OBS_FIXED: i64 = 3;
 
 const PROP_TURN: SendPropIdentifier = prop_id("DT_BaseEntity", "m_angRotation");
 /// When this changes, the game moves the entity at once instead of interpolating.
 const PROP_CUT: SendPropIdentifier = prop_id("DT_BaseEntity", "m_ubInterpolationFrame");
-/// The values it has.
+/// How many values it can have.
 const CUTS: u8 = 4;
 const PROP_MODEL: SendPropIdentifier = prop_id("DT_BaseEntity", "m_nModelIndex");
 const PROP_RENDER_MODE: SendPropIdentifier = prop_id("DT_BaseEntity", "m_nRenderMode");
@@ -88,7 +88,7 @@ const FOV: i64 = 90;
 const PROP_WEAPON: SendPropIdentifier = prop_id("DT_BaseCombatCharacter", "m_hActiveWeapon");
 
 impl World {
-    /// The camera from the next frame on: at `pose`, or (none) the director's. `model` is any
+    /// Sets the camera from the next frame on: `pose`, or None for the director's. `model` is any
     /// model loaded, `slots` the server's player slots.
     pub(crate) fn set_shot(&mut self, pose: Option<Pose>, model: Option<u16>, slots: u8) {
         self.shot.pose = pose;
@@ -96,12 +96,13 @@ impl World {
         self.shot.slots = u32::from(slots);
     }
 
-    /// The player slots (from 0) the cameraman is not to take from now on.
+    /// Sets the player slots (from 0) the cameraman must not take from now on.
     pub(crate) fn keep_from_shot(&mut self, slots: &[u8]) {
         self.shot.taken = slots.iter().map(|s| u32::from(*s) + 1).collect();
     }
 
-    /// The same in every frame kept, for a room paused. Whether any changed: a full update then.
+    /// Places the camera in every frame kept, for a paused room. Returns whether any changed;
+    /// clients then need a full update.
     pub(crate) fn reshoot(&mut self, state: &ParserState) -> bool {
         let mut frames = std::mem::take(&mut self.frames);
         let mut touched = false;
@@ -112,24 +113,26 @@ impl World {
         touched
     }
 
-    /// Whether the last frame changed ours: the stream's entities are for no client then.
+    /// Whether the last frame changed the relay's entities. The stream's entity message then
+    /// cannot go to a client as it is.
     pub(crate) fn shot_touched(&self) -> bool {
         self.shot.touched
     }
 
-    /// The player who watches for the clients, once a frame has them.
+    /// The entity of the hidden player the clients watch through, once the latest frame has it.
     pub(crate) fn cameraman(&self) -> Option<u32> {
         let rig = self.shot.rig.filter(|_| self.shot.pose.is_some())?;
         self.latest()?.get(rig.man).map(|_| rig.man)
     }
 
-    /// The prop and the player of ours, once there were.
+    /// The relay's prop and player entities, once chosen.
     #[cfg(test)]
     pub(crate) fn rig(&self) -> Option<(u32, u32)> {
         self.shot.rig.map(|r| (r.prop, r.man))
     }
 
-    /// Puts ours in `frame`, after the stream's `pe`. Whether that changed any.
+    /// Puts the relay's entities in `frame`, after the stream's `pe` was applied. Returns whether
+    /// any changed.
     pub(super) fn shoot(
         &mut self,
         pe: &PacketEntitiesMessage,
@@ -138,7 +141,7 @@ impl World {
         tick: u32,
     ) -> bool {
         let Some(rig) = self.shot.rig else { return self.place(frame, state, tick) };
-        // The stream's own entered where one of ours is: both elsewhere.
+        // An entity of the stream entered at an index the relay uses: move both relay entities.
         let entered =
             |i: u32| pe.entities.iter().any(|e| e.update_type == UpdateType::Enter && u32::from(e.entity_index) == i);
         let taken = [rig.prop, rig.man].map(entered);
@@ -155,7 +158,8 @@ impl World {
         true
     }
 
-    /// Ours in `frame`, as wanted: there at the pose, or gone.
+    /// Makes the relay's entities in `frame` match the pose: present at it, or removed when there
+    /// is none. Returns whether any changed.
     fn place(&mut self, frame: &mut Frame, state: &ParserState, tick: u32) -> bool {
         let Some(pose) = self.shot.pose else {
             let Some(rig) = self.shot.rig else { return false };
@@ -185,7 +189,7 @@ impl World {
         let mut touched = false;
         for (i, class) in [(rig.prop, prop_class), (rig.man, man_class)] {
             if frame.get(i).is_none() {
-                // As a client has one entering: its class's baseline.
+                // Starts from its class's baseline, as an entering entity does on a client.
                 let mut props = Props::default();
                 let base =
                     state.send_tables.get(usize::from(class)).and_then(|t| state.get_static_baseline(class, t).ok());
@@ -235,7 +239,8 @@ impl World {
     }
 }
 
-/// `m_flSimulationTime` as a server sends it: ticks since the entity's last hundredth one.
+/// `m_flSimulationTime` as a server sends it: the ticks since a base tick that moves every 100
+/// ticks, offset by the entity's index modulo 32.
 fn sim_time(tick: u32, entity: u32) -> i64 {
     let base = 100 * (tick.saturating_sub(entity % 32) / 100);
     i64::from((tick - base) & 0xFF)
@@ -247,7 +252,8 @@ fn class(state: &ParserState, name: &str) -> Option<ClassId> {
     Some(ClassId::from(u16::try_from(at).ok()?))
 }
 
-/// Gives the entity at `index` each of `props` its class has; whether any was not so already.
+/// Sets each of `props` that its class has on the entity at `index`. Returns whether any value
+/// changed.
 fn put(frame: &mut Frame, state: &ParserState, index: u32, props: &[(SendPropIdentifier, SendPropValue)]) -> bool {
     let Some(e) = frame.get_mut(index) else { return false };
     let Some(table) = state.send_tables.get(usize::from(e.class)) else { return false };

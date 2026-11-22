@@ -1,4 +1,4 @@
-//! A demo's header: what it is of, and its counts.
+//! A demo's header: the server, map and game it was recorded on, and its counts.
 
 use crate::error::bail;
 /// Bytes before the first packet.

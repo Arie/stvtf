@@ -17,7 +17,7 @@ pub(super) struct Admission {
     /// What `A2S_INFO` says is played, and on which build.
     pub(super) map: String,
     pub(super) build: String,
-    /// A client was let in, ever.
+    /// Whether any client was ever let in.
     pub(super) seen_client: bool,
 }
 

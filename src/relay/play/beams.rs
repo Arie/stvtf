@@ -11,8 +11,8 @@ use crate::decode::BeamModel;
 use crate::net::bits::BitBuf;
 use crate::net::messages;
 
-/// The kept beams shown: which of them were last handed over, when each was last sent, and
-/// how many may be sent now (refilled at [`KEPT_RATE`]).
+/// The kept beams shown: the version of them last seen, when each was last sent, and how many
+/// may be sent now (refilled at [`KEPT_RATE`]).
 pub(super) struct Kept {
     version: u64,
     sent: HashMap<BeamKey, Instant>,
@@ -20,7 +20,7 @@ pub(super) struct Kept {
     refilled: Instant,
 }
 
-/// A beam as shown, but for how long.
+/// A beam as shown, except for how long.
 type BeamKey = ([u32; 3], [u32; 3], [u8; 3], u32, u8);
 
 fn beam_key(b: &Beam) -> BeamKey {
@@ -74,7 +74,8 @@ impl Kept {
     }
 }
 
-/// The tick past the beams, if the clock at `now` goes back to `key` with beams until `until`.
+/// The tick that puts the clients' clock past their beams, which show until `until`; only if the
+/// clock at `now` is before that and goes back to `key` by more than [`SET_BACK`].
 pub(super) fn past_beams(now: f64, key: f64, until: f64, interval: f32) -> Option<i32> {
     (now < until && now - key > SET_BACK && interval > 0.0).then(|| ((until + 1.0) / f64::from(interval)).ceil() as i32)
 }
@@ -112,14 +113,15 @@ impl Player<'_> {
         }
     }
 
-    /// `beams` as messages, drawn with the laser: the clients are given it first if they have not
-    /// been (and those to come too), where they will have it.
+    /// `beams` as messages, drawn with the laser model: the clients are given it first if they
+    /// have not been, through the backlog, so those to come get it too.
     fn beam_messages(&mut self, beams: &[Beam]) -> Option<Vec<BitBuf>> {
         let c = self.cur.as_ref().filter(|c| c.started)?;
         self.models = self.models.with(&c.dec);
         let mut model = c.dec.writer().beam_model(self.laser, self.models)?;
         if model.load.is_some() && self.match_laser.as_ref() == Some(&c.path) {
-            // Its own comes later: until the clients have it, a sprite of the match's or none.
+            // The match loads its own laser later: until the clients have it, the beams use a
+            // sprite of the match's, or are not shown.
             model = BeamModel { index: c.dec.writer().beam_sprite()?, load: None };
         }
         if let Some(msg) = &model.load {
@@ -129,9 +131,9 @@ impl Player<'_> {
         c.dec.writer().beams(beams, model.index)
     }
 
-    /// Whether the match loaded the laser after the clients were given the relay's: every model of
-    /// the match's after it is one off for them, so they sign on again (the demo opened afresh),
-    /// after which its own is used.
+    /// Whether the match loaded the laser after the clients were given the relay's: every model
+    /// the match loads after it is one index off for them, so they sign on again (the demo is
+    /// opened afresh), and from then on the match's own laser is used.
     pub(super) fn restart_if_laser_loaded_twice(&mut self) -> bool {
         if !self.cur.as_ref().is_some_and(|c| c.dec.writer().laser_loaded_twice(self.laser)) {
             return false;
@@ -147,7 +149,7 @@ impl Player<'_> {
     pub(super) fn show_kept(&mut self, playback: &Playback) {
         let Versioned { version, items: beams } = playback.beams();
         // Only once a client is in the game where playback is: at a demo's start, before it skims
-        // to the wanted moment, a laser loaded would be the match's slot later.
+        // to the wanted moment, a laser loaded would take a slot the match uses later.
         if self.cur.as_ref().is_none_or(|c| !c.started) || self.rekeyed || !self.relay.hub().any_in_game() {
             return;
         }

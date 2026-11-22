@@ -33,12 +33,12 @@ impl Decoder {
         self.scene.world.as_ref().is_some_and(|w| w.has(tick))
     }
 
-    /// A full update of frame `at`, kept.
+    /// A full update of frame `at`, if kept.
     pub(crate) fn keyframe_at_for_tests(&self, at: u32) -> Option<BitBuf> {
         Some(self.scene.world.as_ref()?.full_update(self.handler.get_parser_state(), Some(at), None)?.1)
     }
 
-    /// Frame `to` as a delta from frame `from`, both kept.
+    /// Frame `to` as a delta from frame `from`, if both are kept.
     pub(crate) fn delta_for_tests(&self, from: u32, to: u32) -> Option<BitBuf> {
         self.scene.world.as_ref()?.delta(self.handler.get_parser_state(), from, to)
     }
@@ -48,9 +48,10 @@ impl Decoder {
         self.scene.world.as_ref().map_or_default(super::world::World::dump)
     }
 
-    /// [`Decoder::world_dump`] to compare two decoders, one started from a full update: without
-    /// the weapons' `m_bResetParity`, which a full update gives as a client starts with it, nor a
-    /// player's own demo's player's origin for the other players, which it gives as their own.
+    /// [`Decoder::world_dump`] for comparing two decoders, one of which started from a full
+    /// update. Leaves out the weapons' `m_bResetParity`, which a full update sets to the value a
+    /// client starts with. In a player's own demo it also leaves out that player's origin as sent
+    /// to other players, which a full update copies from the origin sent to their own game.
     pub(crate) fn world_compared(&self) -> std::collections::BTreeMap<u32, super::world::Dumped> {
         let state = self.handler.get_parser_state();
         let parity = tf_demo_parser::demo::sendprop::SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");
@@ -71,7 +72,7 @@ impl Decoder {
         dump
     }
 
-    /// The entities the keyframe would hold.
+    /// How many entities a keyframe would hold.
     pub(crate) fn world_len(&self) -> usize {
         self.scene.world.as_ref().map_or(0, super::world::World::len)
     }

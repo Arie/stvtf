@@ -6,7 +6,7 @@ use crate::Result;
 use crate::error::bail;
 
 const MAX_OUTPUT: usize = 1 << 22;
-/// A compressed block starts with its kind; LZSS's then has the uncompressed size (u32).
+/// A compressed block starts with its kind; an LZSS block then has the uncompressed size (u32).
 pub const SNAPPY_MAGIC: &[u8; 4] = b"SNAP";
 const LZSS_MAGIC: &[u8; 4] = b"LZSS";
 const LZSS_HEADER: usize = LZSS_MAGIC.len() + 4;

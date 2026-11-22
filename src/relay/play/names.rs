@@ -1,7 +1,8 @@
-//! A room's names in TF2: the players' in `userinfo`, as a server tells of a name changed, and
-//! the teams' as the tournament's (`mp_tournament_blueteamname`, `mp_tournament_redteamname`).
-//! The demo's own tell the clients the game's names again (a player joining, a jump back), so
-//! they are given the room's after every full update, and when the demo rewrote a name.
+//! A room's names in TF2: players' names are set in `userinfo`, as a server does when a name
+//! changes, and teams' names in the tournament cvars (`mp_tournament_blueteamname`,
+//! `mp_tournament_redteamname`). The demo's own messages give the clients the game's names again
+//! (a player joining, a jump back), so they are given the room's names after every full update,
+//! and when the demo rewrote a name.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -36,16 +37,16 @@ const TEAMS: [(&str, &str, &str); 2] =
 pub(super) struct Shown {
     version: Option<u64>,
     names: Arc<Names>,
-    /// What gives them: sent again after every full update.
+    /// The messages that set them: sent again after every full update.
     pub(super) msgs: Vec<BitBuf>,
-    /// How many names the demo had rewritten then.
+    /// How many string table entries the demo had rewritten then.
     rewritten: u32,
     tried: Option<Instant>,
 }
 
 impl Player<'_> {
     /// Gives the clients the room's names when they changed, when a player named joined and when
-    /// the demo told them a name again; the game's own back for those named no more.
+    /// the demo told them a name again; those no longer named get the game's own name back.
     pub(super) fn show_names(&mut self, version: u64, names: &Arc<Names>) {
         let s = &self.shown_names;
         if names.players.is_empty() && names.teams.is_empty() && s.msgs.is_empty() && s.names.players.is_empty() {
@@ -60,7 +61,7 @@ impl Player<'_> {
         let mut msgs: Vec<BitBuf> = c.dec.scene().named(&given).into_iter().collect();
         let team = |side: &str, own: &'static str| names.teams.get(side).map_or(own, String::as_str).to_string();
         let teams: Vec<BitBuf> = TEAMS.iter().map(|(side, cvar, own)| set_convar(cvar, &team(side, own))).collect();
-        // Named no more: the game's own names again, once.
+        // No longer named: the game's own names again, sent once.
         let dropped: BTreeMap<String, Option<String>> =
             s.names.players.keys().filter(|id| !names.players.contains_key(*id)).map(|id| (id.clone(), None)).collect();
         let mut once: Vec<BitBuf> = c.dec.scene().named(&dropped).into_iter().collect();

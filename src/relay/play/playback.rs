@@ -41,10 +41,10 @@ pub enum Camera {
     Along(Arc<Path>),
 }
 
-/// A camera's way through a map; one moment is a camera that stays.
+/// A camera's way through a map. A path of one moment is a camera that stands still.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Path {
-    /// Which it is: the same again sets off anew under another.
+    /// Its id: the same path under a new id sets off again.
     pub id: u64,
     /// When it set off.
     pub began: Instant,
@@ -112,7 +112,8 @@ pub struct Playback {
     names: Mutex<(u64, Arc<Names>)>,
     /// What they see added to the teams' scores, BLU's then RED's.
     score: Mutex<[i64; 2]>,
-    /// The clients asked for, to hand to the next process, and given.
+    /// Whether the clients were asked for, to hand to the next process, and the handover once
+    /// given.
     hand: Mutex<Hand>,
     handed: Condvar,
 }
@@ -201,8 +202,8 @@ impl Playback {
         lock(&self.names).clone()
     }
 
-    /// Sends `v` to the clients in the game as that player's voice, those in it now; when more
-    /// waits than they could take, the oldest goes.
+    /// Sends `v` to the clients now in the game as that player's voice; when more waits than they
+    /// could take, the oldest is dropped.
     pub fn push_voice(&self, v: VoiceIn) {
         let mut q = lock(&self.voice);
         if q.len() >= voice::MAX_QUEUED {

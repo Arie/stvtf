@@ -16,7 +16,7 @@ use crate::decode::ModelsSent;
 use crate::net::bits::{BitBuf, BitReader};
 use crate::net::messages::{self, Signon};
 
-/// What a client left out of a handover is told, in its console.
+/// Shown in the console of a client left out of a handover.
 const RESTARTING: &str = "stv.tf: restarting, retry";
 
 /// A relay's clients and what they have, for [`Relay::take_over`](super::Relay::take_over).
@@ -123,8 +123,8 @@ impl Hub {
         Handover { clients, backlog, map: self.admission.map.clone(), build: self.admission.build.clone(), played }
     }
 
-    /// Takes the clients of `h` in, waiting for a full update with all of its backlog had. None
-    /// if the backlog does not read.
+    /// Takes in the clients of `h`: each has all of its backlog and waits for a full update.
+    /// None if the backlog cannot be decoded.
     pub(super) fn take_over(&mut self, h: &Handover, now: Instant) -> Option<()> {
         let b64 = base64::engine::general_purpose::STANDARD;
         let mut backlog = Backlog::new();
@@ -156,7 +156,7 @@ impl Hub {
     }
 }
 
-/// A table change's bits, for the backlog to know it by.
+/// Whether the message in `bits` is a string table change.
 pub(super) fn is_table_change(bits: &BitBuf) -> bool {
     BitReader::new(bits.bytes())
         .read_bits(messages::TYPE_BITS)

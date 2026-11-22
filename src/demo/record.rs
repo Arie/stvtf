@@ -26,7 +26,7 @@ pub trait Files: Send + Sync {
 #[derive(Default)]
 struct State {
     map: String,
-    /// The data tables of the build, from its tables.
+    /// The data tables packet of the build, from its [`Tables`].
     datatables: Vec<u8>,
     /// The signon so far: each stream byte padded.
     signon: Vec<Vec<u8>>,
@@ -133,7 +133,7 @@ impl Recorder {
                     signon_bytes: 0,
                 };
                 let mut w = Writer::new(BufWriter::new(file), header, crate::DEFAULT_TICK_INTERVAL)?;
-                // Where TF2 takes the data tables when it plays the file itself.
+                // The data tables go where TF2 needs them to play the file itself.
                 let mut tables = HeldTables::new(Some(&st.datatables));
                 for s in &st.signon {
                     if let Some(t) = tables.before(s) {
@@ -192,7 +192,7 @@ pub(crate) mod tests {
     use crate::output::Line;
     use crate::session::{self, Options};
 
-    /// Files in a folder of their own, named after their first tick.
+    /// Files in a folder of their own, named after their map and first tick.
     struct Folder(PathBuf);
 
     impl Files for Folder {

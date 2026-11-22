@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn transfers_reassemble_a_few_fragments_at_a_time() {
-        // Incompressible, so it goes out raw in five packets.
+        // Incompressible, so it goes out raw in six packets.
         let mut x = 1u32;
         let mut noise = || {
             x ^= x << 13;

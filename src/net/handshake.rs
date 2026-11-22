@@ -173,10 +173,10 @@ pub fn parse_challenge(data: &[u8], nonce: u32) -> Result<Option<Challenge>> {
     Ok(Some(Challenge { challenge: word(CHALLENGE_SERVER), auth_proto: word(CHALLENGE_AUTH) }))
 }
 
-/// How often a wait for a server looks up from the socket.
+/// How often a wait for a server stops reading to check whether it is over.
 const WAIT_POLL: Duration = Duration::from_millis(50);
 
-/// What ends a wait for a server early: asked to stop, or out of time as a whole.
+/// What ends a wait for a server early: a request to stop, or the overall deadline.
 #[derive(Copy, Clone)]
 pub struct Wait<'a> {
     pub stop: &'a AtomicBool,
@@ -220,9 +220,9 @@ pub fn connect(
     sock.send_to(&build_getchallenge(nonce), server)?;
     let mut buf = vec![0u8; MAX_DATAGRAM];
     let deadline = Instant::now() + timeout;
-    // Replies are taken from any address (see `recv_from_port`), so only the nonce tells
-    // the server's from a forgery: skip the ones without it, and those that do not parse, rather
-    // than fail on them. The last that did not parse is named if no reply comes.
+    // Replies are taken from any address (see `recv_from_port`), so only the nonce tells the
+    // server's reply from a forged one: skip replies without it, and those that do not parse,
+    // rather than fail on them. The last one that did not parse is named if no reply comes.
     let mut junk: Option<crate::Error> = None;
     let (ch, from) = loop {
         let got = recv_from_port(&sock, server.port(), &mut buf, deadline, wait);
@@ -269,7 +269,7 @@ pub fn connect(
                 _ => continue,
             }
         }
-        // Too short for a netchan header otherwise.
+        // Anything shorter than a sequence number cannot be a channel packet.
         if n >= netchan::SEQUENCE_LEN {
             return Ok(Connection { sock, challenge: ch.challenge, pending: Some(data.to_vec()) });
         }
@@ -420,7 +420,7 @@ pub fn build_challenge(challenge: u32, nonce: u32) -> Vec<u8> {
     v
 }
 
-/// The 'B' accept of a connect; the client checks it echoes its nonce.
+/// The 'B' accept of a connect; a game client checks that it echoes its nonce.
 pub fn build_accept(nonce: u32) -> Vec<u8> {
     let mut v = oob(S2C_CONNECTION);
     v.extend_from_slice(&nonce.to_le_bytes());

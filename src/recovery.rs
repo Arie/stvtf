@@ -27,12 +27,12 @@ const PACE: Duration = Duration::from_millis(2);
 const ANSWER_ONCE_PER: Duration = Duration::from_millis(500);
 /// How many packets go missing: enough that no delta after them has its base.
 const LOSS: usize = 20;
-/// When helpers give up, should a failed test never tell them to stop: it must fail, not hang.
+/// When helper threads give up if a failed test never tells them to stop: it must fail, not hang.
 const HELPER_LIMIT: Duration = Duration::from_secs(70);
 /// Snapshots to see after a full update before calling it recovered.
 const SNAPSHOTS: usize = 5;
 
-/// The build the fake server says it is: unknown, as any newer server's is.
+/// The build the fake server says it is: an unknown one, as a newer server's build would be.
 const FAKE_BUILD: &str = "99999999";
 
 /// A capture as plain channel packets.
@@ -289,7 +289,7 @@ fn lost(lines: &[Line]) -> u64 {
         .expect("the client disconnects")
 }
 
-/// The test of the tests: what recovers below must be recovering from something.
+/// A control for the tests below: what recovers there must be recovering from something.
 #[test]
 fn without_loss_nobody_asks_for_a_full_update() {
     let server = FakeServer::new();
@@ -347,7 +347,7 @@ fn with_relay_watching<T>(server: &FakeServer, mut upstream: Watch, client: impl
     })
 }
 
-/// Waits until the server has sent `packets`, or `LIMIT`; false then.
+/// Waits until the server has sent `packets` packets; false if `LIMIT` passes first.
 fn sent(server: &FakeServer, packets: usize) -> bool {
     let limit = Instant::now() + LIMIT;
     while server.position.load(Ordering::Relaxed) < packets && Instant::now() < limit {

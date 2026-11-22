@@ -61,7 +61,7 @@ fn a_decoder_started_from_a_keyframe_follows_as_one_from_the_start() {
     }
 }
 
-/// A live recording of one's own, keyframes at several points.
+/// A live recording the developer supplies, with keyframes at several points.
 #[test]
 #[ignore = "a demo in STVTF_KEYFRAME_DEMO"]
 fn a_decoder_follows_a_given_demo_from_keyframes() {
@@ -94,7 +94,7 @@ fn follows_from_a_keyframe(demo: &str, at: usize, of: usize) {
                 tables_since.push(BitReader::slice(f, span.bits.clone()));
             }
         }
-        // Of the frame the next builds on.
+        // A keyframe of the frame that the next frame builds on.
         let (key_tick, key) = whole.scene().keyframe(Some(&frames[half])).expect("a keyframe");
         assert!(whole.world_len() > 50, "{demo}: {} entities", whole.world_len());
         whole.take_output();
@@ -109,15 +109,16 @@ fn follows_from_a_keyframe(demo: &str, at: usize, of: usize) {
         }
         let life = late.feed(key.bytes(), key.nbits());
         assert!(life.full_update && !life.lost_frame, "{demo}");
-        // Then the frames played since the one it is of, as the relay sends them with it.
+        // Then the frames played since the keyframe's frame, as the relay sends them with it.
         let recent: Vec<(u32, BitBuf)> =
             frames[..half].iter().zip(&ticks).map(|(f, t)| (*t, BitBuf::from_bytes(f.clone()))).collect();
         for f in whole.scene().catch_up(key_tick, &recent) {
             let life = late.feed(f.bytes(), f.nbits());
             assert!(!life.lost_frame, "{demo}: a frame sent with the keyframe builds on one the client lacks");
         }
-        // A demo's next frame builds on the last: the keyframe is of where `whole` is. (A live
-        // session's builds on one a few ticks back, which the keyframe is of instead.)
+        // A demo's next frame builds on the last one, so the keyframe is of the frame `whole` is
+        // at. (A live session's next frame builds on one a few ticks back, and the keyframe is of
+        // that one instead.)
         if matches!(whole.entities(&frames[half]), Some(super::Entities::Delta(base)) if base == whole.server_tick()) {
             assert_same_world(&whole, &late, &format!("{demo} at the keyframe"));
         }
@@ -155,8 +156,8 @@ fn scores(lines: Vec<Line>) -> Vec<[i64; 2]> {
         .collect()
 }
 
-/// A room counts the score otherwise: a client started from a keyframe has the room's, and keeps
-/// it through a round won, whose frame is written for it.
+/// A room keeps its own count of the score. A client started from a keyframe has the room's
+/// score, and keeps it through a round won, because that frame is written anew for it.
 #[test]
 fn a_score_counted_otherwise_reaches_a_client_in_full_updates_and_as_the_game_changes_it() {
     let demo = crate::testing::fixture("pl_upward.dem").display().to_string();
@@ -190,7 +191,7 @@ fn a_score_counted_otherwise_reaches_a_client_in_full_updates_and_as_the_game_ch
     for f in &frames[half..] {
         let before = whole.server_tick();
         whole.feed(f, f.len() * 8);
-        // The frame of a round won: written for the client, from the frame before.
+        // The frame of a round won: written for the client, as a delta from the frame before.
         let life = if whole.scene().score_touched() {
             written += 1;
             let delta = whole.delta_for_tests(before, whole.server_tick()).expect("the frame written anew");

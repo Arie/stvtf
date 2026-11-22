@@ -149,8 +149,9 @@ fn play(p: &mut Player<'_>, relay: &crate::relay::Relay, want: &mut Want, frames
 }
 
 /// A room's camera on a path: the clients have a prop where it is, turned the way it looks, and
-/// a player who watches from it, whom they are told is the cameraman; both gone again where it
-/// stays, which is a spot they are told. A recorded demo's frames, and a live recording's that build on ones a few back.
+/// a player who watches from it, whom they are told is the cameraman. Once it stands still both
+/// are gone, and the clients are told the spot (`hltv_fixed`). On a recorded demo's frames, and
+/// on a live recording's, which build on frames a few back.
 #[test]
 fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
     let opt = crate::Options { snapshot_hz: 0.0, ..crate::Options::default() };
@@ -203,7 +204,8 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
         assert_eq!(client.ours(&p.cur.as_ref().unwrap().dec), [false, false]);
         client.has_what(&p.cur.as_ref().unwrap().dec);
 
-        // A camera that only stays is that at once, the room paused or not: no cameraman.
+        // A camera that only stands still uses `hltv_fixed` at once, the room paused or not: no
+        // cameraman.
         let mut steps = |want: &Want, client: &mut Watcher| {
             let began = Instant::now();
             while began.elapsed() < Duration::from_millis(600) {
@@ -226,7 +228,7 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
         client.take(&b);
         client.has_what(&p.cur.as_ref().unwrap().dec);
 
-        // Let go: both gone, and the clients sent into a player's eyes.
+        // The room gave the camera up: both gone, and the clients sent into a player's eyes.
         want.camera = None;
         play(&mut p, &relay, &mut want, 20, &mut client);
         client.take(&b);

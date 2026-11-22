@@ -1,5 +1,6 @@
 //! Which build a watch offers: a fake `SourceTV` reports builds over `A2S_INFO` and refuses every
-//! connect, as a server does a build not its own, and records the build each connect carried.
+//! connect, as a server refuses a build that is not its own, and records the build each connect
+//! carried.
 
 mod common;
 

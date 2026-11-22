@@ -3,8 +3,9 @@ use std::sync::Once;
 
 static HOOK: Once = Once::new();
 
-// The session contains a panic in the demo parser, a dependency, and reconnects: that is not a
-// finding here. libFuzzer's hook would abort on it, so only a panic elsewhere goes on to that hook.
+// The decoder catches a panic in the demo parser (a dependency) and the session reconnects, so
+// that is not a finding here. libFuzzer's hook would abort on it, so only a panic elsewhere goes
+// on to that hook.
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     HOOK.call_once(|| {
         let abort = std::panic::take_hook();

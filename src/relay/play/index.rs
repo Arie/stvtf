@@ -34,8 +34,8 @@ pub(super) struct Checkpoint {
     pos: u64,
     tables: Vec<Arc<BitBuf>>,
     key: BitBuf,
-    /// The frames played since the one `key` is of, by server tick: as the decoder's own or, where
-    /// they build on an older one, from `key`'s.
+    /// The frames played since the one `key` is of, by server tick: as the demo has them or, where
+    /// they build on an older frame, rewritten as deltas from `key`'s.
     since: Vec<(u32, BitBuf)>,
     first: Option<i64>,
     offset: i64,
@@ -174,7 +174,7 @@ impl Cursor {
         c.dec.take_output();
         c.dec.scene_mut().set_round_event(mark.round.clone());
         c.dec.scene_mut().set_placed(mark.placed.clone());
-        // After the frames written here, which use none.
+        // Set after feeding the frames written here, which use no baselines of the stream's own.
         if let Some(b) = &mark.baselines {
             c.dec.set_baselines(b);
         }
@@ -195,7 +195,7 @@ impl Cursor {
 mod tests {
     use super::*;
 
-    /// Every frame of the demo at `path`, from `c` on.
+    /// Decodes every frame of `c`'s demo, from where `c` is to the end.
     fn read_out(mut c: Cursor) -> Cursor {
         while let Some(t) = c.next_tick() {
             if t == NOT_A_FRAME {

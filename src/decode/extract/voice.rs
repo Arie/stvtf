@@ -1,5 +1,5 @@
-//! Players' voice (`svc_VoiceData`), Steam's framing taken off: the speaker, the sample rate, and
-//! the Opus frames, each as a browser's decoder takes it.
+//! Reads players' voice (`svc_VoiceData`) out of Steam's framing: the speaker, the sample rate,
+//! and the Opus frames, each as a browser's decoder takes it.
 //!
 //! A Steam voice packet is the speaker's `SteamID64` (8 bytes, little endian), then chunks, each a
 //! type byte: `0x0B` the sample rate (u16), `0x06` Opus with packet loss concealment (a u16

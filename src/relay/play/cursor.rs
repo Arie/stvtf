@@ -53,7 +53,8 @@ pub(super) struct Cursor {
     pub(super) view: [f32; 3],
 }
 
-/// Whether a demo that did not open for `e` may yet: it is not there, or not written far enough.
+/// Whether a demo that failed to open with `e` may open later: it is not there yet, or not
+/// written far enough.
 pub(super) fn may_open_yet(e: &crate::Error) -> bool {
     use std::io::ErrorKind::{NotFound, UnexpectedEof};
     e.is_not_yet() || matches!(e.io_kind(), Some(NotFound | UnexpectedEof))
@@ -129,9 +130,10 @@ impl Cursor {
         }
     }
 
-    /// The server tick the next frame has: its own `net_Tick`, or as far as the frames so far tell
-    /// (a demo's tick less the server's, which a pause changes: an STV demo has no frames while the
-    /// server is paused); None when there is none yet, [`NOT_A_FRAME`] for another packet.
+    /// The server tick of the next frame: its own `net_Tick`, or else its demo tick plus the
+    /// offset of the last frame (a pause changes that offset: an STV demo has no frames while the
+    /// server is paused). None when no packet is there yet, [`NOT_A_FRAME`] for a packet that is
+    /// not a frame.
     pub(super) fn next_tick(&mut self) -> Option<i64> {
         let offset = self.offset;
         self.peek()?;
@@ -210,7 +212,8 @@ fn read_signon(path: &Path, reader: &mut demo::Reader<File>) -> Result<Signon> {
 }
 
 /// Decodes the `signon` packets, and passes them to `hub` if any, with the spawn count a game
-/// client takes; then what the string tables had more as recording started (`snapshot`).
+/// client takes; then the same for what the string tables had beyond that when recording started
+/// (`snapshot`). Returns the server's count of map loads and the map.
 fn feed_signon(
     dec: &mut Decoder,
     signon: Vec<Vec<u8>>,
@@ -276,8 +279,8 @@ fn with_spawncount(bits: &BitBuf, life: &Lifecycle, count: i32) -> (BitBuf, Life
 }
 
 /// A frame's stream without the server's `net_SignonState`s (a changelevel, say): a client's
-/// signon is the relay's. A `net_Disconnect` ends a stream, and is cut with what follows it. One in
-/// what the decoder could not parse (an [`UNPARSED`](crate::decode::UNPARSED) span) goes through.
+/// signon is the relay's. A `net_Disconnect` ends a stream, and is cut with what follows it. One
+/// in what the decoder could not parse (an `UNPARSED` span) goes through.
 fn without_signon(bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
     let (bits, life) = without(bits, life, |s| u32::from(s.id) == NET_SIGNONSTATE);
     (bits, Lifecycle { signon: Vec::new(), ..life })
@@ -288,8 +291,9 @@ pub(super) fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (B
     without(bits, life, |s| dec.writer().is_director_cue(bits.bytes(), s))
 }
 
-/// What a client watching a player's own demo is told with every full update: it is that player
-/// to its game, which must not move them on its own, and looks where they did (`view`).
+/// What a client watching a player's own demo is told with every full update: its game takes it
+/// for that player, so it must not predict the player's moves, and it looks where they did
+/// (`view`).
 pub(super) fn as_the_player(view: [f32; 3]) -> [BitBuf; 2] {
     [messages::set_convar("sv_client_predict", "0"), messages::fix_angle(view)]
 }
@@ -320,7 +324,7 @@ pub(super) fn with_entities(bits: &BitBuf, life: &Lifecycle, entities: &BitBuf) 
     w.finish()
 }
 
-/// A frame's stream without its entity message, nor its tick: for a client that stays at the
+/// A frame's stream without its entity message and its tick: for a client that stays at the
 /// frame it has.
 pub(super) fn without_entities(bits: &BitBuf, life: &Lifecycle) -> BitBuf {
     without(bits, life, |s| matches!(u32::from(s.id), messages::SVC_PACKETENTITIES | messages::NET_TICK)).0
@@ -341,7 +345,7 @@ fn without(bits: &BitBuf, life: &Lifecycle, drop: impl Fn(&Span) -> bool) -> (Bi
     (w.finish(), Lifecycle { spans, stream: None, ..life.clone() })
 }
 
-/// String table changes as messages of their own.
+/// Copies of shared string table changes, as owned messages.
 pub(super) fn owned(tables: &[Arc<BitBuf>]) -> Vec<BitBuf> {
     tables.iter().map(|t| (**t).clone()).collect()
 }

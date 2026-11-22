@@ -1,6 +1,6 @@
 use super::*;
 
-/// A wait only its own timeout ends.
+/// A wait that only the call's own timeout ends.
 fn no_end() -> Wait<'static> {
     static NEVER: AtomicBool = AtomicBool::new(false);
     Wait { stop: &NEVER, until: None }

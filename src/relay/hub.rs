@@ -20,13 +20,13 @@ use crate::net::bits::{BitBuf, BitReader, BitWriter};
 use crate::net::messages::{self, SVC_PACKETENTITIES, SVC_SERVERINFO, Signon};
 use crate::net::netchan;
 
-/// What a client dropped for a signon it did not finish in time is told, in its console.
+/// Shown in the console of a client dropped for not finishing its signon in time.
 const SLOW_SIGNON: &str = "stv.tf: took too long to load, retry";
 
 /// Everything the upstream and client threads share.
 pub(super) struct Hub {
     pub(super) out: Out,
-    /// The port it listens on: which relay a log line is of.
+    /// The port it listens on: log lines name the relay by it.
     port: u16,
     pub(super) admission: Admission,
     pub(super) clients: HashMap<SocketAddr, Client>,
@@ -36,8 +36,8 @@ pub(super) struct Hub {
     tail_full: bool,
     /// The unreliable parts since the last full update, while there are few.
     pub(super) since_full: Option<Vec<BitBuf>>,
-    /// Messages a client gets again, reliably, after every full update: what one drops (a room's
-    /// note bubbles).
+    /// Messages a client gets again, reliably, after every full update, which drops what they
+    /// show (a room's note bubbles).
     pub(super) notes: Vec<BitBuf>,
     /// Sent once with the next full update.
     with_next: Vec<BitBuf>,
@@ -54,8 +54,8 @@ pub(super) struct Hub {
     frame: Option<Played>,
 }
 
-/// A frame played, for clients that acked different frames: a game client sent a delta from a
-/// frame it lacks crashes, and any datagram may be lost.
+/// A frame played, for clients that acked different frames: a game client crashes on a delta
+/// from a frame it lacks, and any datagram may be lost.
 pub(super) struct Played {
     pub(super) tick: u32,
     /// The frame its entities build on; none for entities in full.
@@ -64,14 +64,14 @@ pub(super) struct Played {
     pub(super) from: HashMap<u32, BitBuf>,
     /// Its stream without the entities, for a client that can take none of those.
     pub(super) bare: BitBuf,
-    /// Its own entities are for no client (see `decode::world`): only those in `from`.
+    /// Whether its own entities are for no client (see `decode::world`): only those in `from` are.
     pub(super) rewritten: bool,
 }
 
 impl Played {
-    /// The frame as `c` can take it: its entities from the frame `c` acked. With none it acked,
-    /// or none written from it, without them: one not waiting for its full update's ack any more
-    /// (see [`KEY_WAIT`]) waits for another.
+    /// The frame as `c` can take it: its entities as a delta from the frame `c` acked. If `c`
+    /// acked none, or no delta from that frame was written, it gets the frame without entities,
+    /// and waits for another full update unless its last is still within [`KEY_WAIT`].
     fn for_client<'a>(&'a self, c: &mut Client, played: Option<&'a BitBuf>, now: Instant) -> Option<&'a BitBuf> {
         let stream = match (self.base, c.acked) {
             (None, _) => {
@@ -151,7 +151,8 @@ impl Hub {
         let play = self.mode.is_play();
         for c in self.clients.values_mut().filter(|c| !c.held) {
             if play && c.mid_signon() && !c.reconnecting {
-                // Part-way through the last demo's, come in as the switch went: it reconnects too.
+                // It came in during the switch and is part-way through the last demo's signon:
+                // it reconnects too.
                 c.ask_to_reconnect(&reconnect);
             } else {
                 c.queue.retain(|m| *m == reconnect);
@@ -162,15 +163,15 @@ impl Hub {
         }
     }
 
-    /// The clients past their signon keep what they have while the next demo's signon makes the
-    /// backlog anew: it is one of the same map load, so they have all of it already.
+    /// The clients past their signon keep what they have while the next demo's signon rebuilds
+    /// the backlog: that demo is of the same map load, so they have all of it already.
     pub(super) fn hold_in_game(&mut self) {
         for c in self.clients.values_mut().filter(|c| c.phase != Phase::Signon && !c.reconnecting) {
             c.held = true;
         }
     }
 
-    /// Those held have the backlog as it is now, and wait for a full update.
+    /// Releases the held clients: they have the backlog as it is now, and wait for a full update.
     pub(super) fn release_held(&mut self, now: Instant) {
         let end = self.backlog.len();
         for c in self.clients.values_mut().filter(|c| c.held) {
@@ -180,9 +181,10 @@ impl Hub {
         }
     }
 
-    /// Every client into a signon is told to reconnect (`net_SignonState(CONNECTED)`, as a server's
-    /// `Reconnect` does, and as a live server does on a new map), and gets the next signon once it
-    /// says it has: a game client sent a new signon in the middle of a game crashes.
+    /// Every client in the game or past CONNECTED in a signon is told to reconnect
+    /// (`net_SignonState(CONNECTED)`, as a server's `Reconnect` does, and as a live server does on
+    /// a new map), and gets the next signon once it says it has: a game client crashes on a new
+    /// signon in the middle of a game.
     pub(super) fn reconnect_all(&mut self) {
         let reconnect = messages::signonstate(Signon::Connected, -1);
         for c in self.clients.values_mut().filter(|c| c.past_connected || c.phase != Phase::Signon) {
@@ -197,7 +199,8 @@ impl Hub {
         }
         // The server sends the first full update after signon reliably (`net_Tick` and the
         // entities): like any entities, it goes to the clients in the datagram's unreliable
-        // part, so it is never in the backlog and reaches a client in order with the deltas after it.
+        // part, so it is never in the backlog and reaches a client in order with the deltas after
+        // it.
         let entities = life.spans.iter().any(|s| u32::from(s.id) == SVC_PACKETENTITIES);
         if part == Part::Unreliable || entities {
             if entities {
@@ -250,8 +253,8 @@ impl Hub {
         tracing::debug!("relay: a string table change of {} bits from a datagram into the backlog", msg.nbits());
     }
 
-    /// A stream passed over on a jump: only its string table changes count, which every client
-    /// needs, so they go into the backlog and reliably to the clients already in.
+    /// A stream skipped by a jump: only its string table changes are used. Every client needs
+    /// them, so they go into the backlog and reliably to the clients already in.
     pub(super) fn skim(&mut self, bits: &BitBuf, life: &Lifecycle) {
         let tables: Vec<BitBuf> = table_changes(bits, life).collect();
         self.add_table_changes(&tables);
@@ -265,8 +268,8 @@ impl Hub {
         self.add_table_changes(back);
     }
 
-    /// String table changes passed over (a jump), into the backlog and reliably to the clients
-    /// already in.
+    /// Adds string table changes that a jump skipped to the backlog, and sends them reliably to
+    /// the clients already in.
     pub(super) fn add_table_changes(&mut self, tables: &[BitBuf]) {
         self.since_full = None;
         for msg in tables {
@@ -274,7 +277,7 @@ impl Hub {
         }
     }
 
-    /// Adds `msg` for every client, those in and those to come, unless it is already.
+    /// Adds `msg` for every client, those in and those to come, unless the backlog has it.
     pub(super) fn add_table_change_once(&mut self, msg: &BitBuf) {
         if !self.backlog.has_table_change(msg) {
             self.add_table_changes(std::slice::from_ref(msg));
@@ -305,9 +308,9 @@ impl Hub {
         }
     }
 
-    /// A full update (`net_Tick` and the entities) and the frames played since the one it is of,
-    /// for the clients waiting for one, who are told if playback is `paused`. They are kept, with
-    /// the frames after, for clients that come soon after.
+    /// Sends full update `key` (`net_Tick` and the entities) of frame `tick`, then the messages
+    /// `since`, to the clients waiting for one, and tells them if playback is `paused`. Unless a
+    /// demo plays, they are kept, with the frames after, for clients that come soon after.
     pub(super) fn send_keyframe(&mut self, tick: u32, key: &BitBuf, since: &[BitBuf], paused: bool) {
         let now = Instant::now();
         self.backlog.open = false;
@@ -315,7 +318,7 @@ impl Hub {
         // before any delta.
         let kept = || std::iter::once(key.clone()).chain(since.iter().cloned()).collect();
         self.since_full = (!self.mode.is_play()).then(kept);
-        // Always: one shown "paused" before a jump may not be any more.
+        // Always sent: a client shown "paused" before a jump may no longer be paused.
         let pause = set_pause(paused);
         // TF2's player bar freezes until its clock passes its last draw; re-showing resets that.
         let again = std::mem::take(&mut self.with_next);
@@ -335,7 +338,8 @@ impl Hub {
         }
     }
 
-    /// The frames the clients in the game acked: what a played frame's entities are written from.
+    /// The frames the clients in the game acked: a played frame's entities are written as deltas
+    /// from these.
     pub(super) fn acked(&self) -> Vec<u32> {
         let mut acked: Vec<u32> =
             self.clients.values().filter(|c| c.phase == Phase::Active).filter_map(|c| c.acked).collect();
@@ -355,13 +359,13 @@ impl Hub {
         self.with_next = vec![vgui_menu(SPECTATORS, false), vgui_menu(SPECTATORS, true)];
     }
 
-    /// Reliably, with the next full update, to those who get it.
+    /// Sends `msgs` reliably with the next full update, to the clients that get it.
     pub(super) fn with_next_keyframe(&mut self, msgs: impl IntoIterator<Item = BitBuf>) {
         self.with_next.extend(msgs);
     }
 
     /// A client whose full update went unacked for [`KEY_WAIT`] waits for another: it was lost,
-    /// and with playback paused no frame comes to tell.
+    /// and while playback is paused no frame comes to show that.
     pub(super) fn rekey_unacked(&mut self, now: Instant) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
             if c.keyed.is_some_and(|at| now.duration_since(at) > KEY_WAIT) {
@@ -376,8 +380,9 @@ impl Hub {
         self.notes = notes;
     }
 
-    /// The clients in the game had their HUD reset, which drops the notes: they get them again in
-    /// a moment, past it (a reset in the same packet is read after its reliable part).
+    /// The clients in the game had their HUD reset, which drops the notes: they get them again a
+    /// moment later. Notes in the same packet would be dropped: a client reads the reset after the
+    /// packet's reliable part.
     pub(super) fn reshow_notes(&mut self, now: Instant) {
         for c in self.clients.values_mut().filter(|c| c.phase == Phase::Active) {
             c.notes_reset = Some(now + NOTES_AFTER_RESET);
@@ -407,8 +412,8 @@ impl Hub {
         self.queue_to_active(&set_pause(paused));
     }
 
-    /// A message for the clients in the game now, unreliably: what is sent again at a pace, which
-    /// must not wait for the reliable stream.
+    /// A message for the clients in the game now, unreliably: for what is sent again at intervals
+    /// and must not wait for the reliable stream.
     pub(super) fn send_to_active(&mut self, msg: &BitBuf) {
         let now = Instant::now();
         for (addr, c) in self.clients.iter_mut().filter(|(_, c)| c.phase == Phase::Active) {
@@ -433,10 +438,10 @@ impl Hub {
         }
     }
 
-    /// The backlog goes: the next signon starts afresh.
+    /// Empties the backlog: the next signon starts afresh.
     pub(super) fn start_over(&mut self) {
         self.backlog.clear();
-        // Of the last demo's entities: the player gives them again.
+        // The notes are of the last demo's entities: the player sets them again.
         self.notes.clear();
         self.since_full = None;
     }
@@ -526,7 +531,8 @@ impl Hub {
             self.clients.remove(&from);
             return;
         }
-        // Not started on a signon the next demo waits to replace: it would not get through it.
+        // While the next demo waits to replace this signon, a client not yet in it is not started
+        // on it: it would not get through it.
         if self.signon_held.is_none() || c.mid_signon() || c.phase != Phase::Signon {
             c.pump(&self.backlog);
         }
@@ -606,8 +612,9 @@ impl Hub {
         self.clients.clear();
     }
 
-    /// Holds another signon while a client is in one, for [`SIGNON_HOLD`] at most; then those still
-    /// in one are dropped, told why, and it goes. Whether it is held.
+    /// Holds another signon back while a client is in one, for [`SIGNON_HOLD`] at most; then the
+    /// clients still in one are dropped, told why, and the new signon goes ahead. Whether it is
+    /// held.
     pub(super) fn hold_for_signon(&mut self, now: Instant) -> bool {
         if !self.clients.values().any(Client::mid_signon) {
             self.signon_held = None;
@@ -641,8 +648,8 @@ impl Hub {
         false
     }
 
-    /// No signon is held: one let go of starts over the next time, and those that came in during
-    /// it get this signon.
+    /// Ends a hold: the next hold counts its time from its own start, and the clients that came
+    /// in during this one get the current signon.
     pub(super) fn release_signon_hold(&mut self) {
         if self.signon_held.take().is_some() {
             for c in self.clients.values_mut() {
@@ -651,7 +658,7 @@ impl Hub {
         }
     }
 
-    /// A paced replay waits for a client, and for clients signing on.
+    /// A paced replay waits for the first client, and while a client signs on.
     pub(super) fn replay_waits(&self) -> bool {
         !self.admission.seen_client || self.clients.values().any(Client::has_signon_pending)
     }

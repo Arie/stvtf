@@ -3,8 +3,8 @@
 use crate::net::messages::{SVC_CLASSINFO, TYPE_BITS};
 
 /// Whether a signon packet opens with the class list (`svc_ClassInfo`). The data tables go just
-/// before that one: TF2 playing a demo itself takes them nowhere else (first of all, it crashes
-/// once loaded).
+/// before that packet: TF2 playing a demo accepts them nowhere else (with the tables as the first
+/// packet, it crashes once the demo has loaded).
 pub(crate) fn opens_with_classes(signon: &[u8]) -> bool {
     signon.first().is_some_and(|b| u32::from(*b) & ((1 << TYPE_BITS) - 1) == SVC_CLASSINFO)
 }
