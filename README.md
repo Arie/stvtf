@@ -23,8 +23,9 @@ For example, `STVTF_PASSWORD=tv stvtf connect 1.2.3.4:27020 > match.jsonl`.
   command-line arguments.
 - `--hz` caps the snapshot rate (default 20; 0 for no snapshots). Snapshots come at most that often,
   in whole ticks, and no more often than the STV sends frames (`tv_snapshotrate`): the default is
-  every 4 ticks, 16.7 a second on a 66-tick server, which takes every frame of an STV at the
-  default `tv_snapshotrate 16`. Events are never rate limited.
+  every 4 ticks, 16.7 a second on a 66-tick server. That is every frame of an STV at the default
+  `tv_snapshotrate 16`, and every fourth frame at `tv_snapshotrate 66` (a competitive config).
+  Events are never rate limited, and a relay passes on every frame whatever `--hz` is.
 - `--record` saves the raw datagrams to a new file; `replay` decodes it offline. `demo` runs a
   `.dem` through the same extractor.
 - Flags take `--hz 10` or `--hz=10`; an unknown flag is an error.
@@ -310,6 +311,8 @@ connection, so it costs the server no slot. In the library it is `Watch::relay`,
 
 - **Password**: `--relay-password`, else `STVTF_RELAY_PASSWORD`, else a random one printed to
   stderr. An empty password lets anyone in. A wrong one is refused as the server refuses it.
+- **Full rate**: a relay passes on every frame the server sends, at its `tv_snapshotrate` (66 a
+  second with a competitive config). `--hz` only limits the snapshots stvtf prints.
 - **Slots**: 10 clients at once by default (`--relay-slots`, 1 to 255). Each client gets what the
   server sends the relay, on the order of 20 to 40 KB/s for a 6v6.
 - **Status line**: once the relay listens, `{"type":"status","state":"relay","listen":"0.0.0.0:27121"}`.
