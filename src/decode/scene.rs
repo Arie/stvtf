@@ -40,10 +40,12 @@ pub(crate) struct Stage<'a> {
 }
 
 impl Decoder {
+    /// The relay's side of this decoder, to read.
     pub(crate) fn scene(&self) -> View<'_> {
         View { scene: &self.scene, state: self.handler.get_parser_state(), extractor: self.extractor() }
     }
 
+    /// The relay's side of this decoder, to change what its clients are shown.
     pub(crate) fn scene_mut(&mut self) -> Stage<'_> {
         let slots = self.extractor().max_players();
         Stage { scene: &mut self.scene, state: self.handler.get_parser_state(), slots }
@@ -62,14 +64,14 @@ impl View<'_> {
     /// `net_Tick` and every entity in full, of the frame that `next` (the next frame's message
     /// stream, if known) builds on, or the latest when it is a full update or not known, with that
     /// frame's server tick: a client that starts from it, and gets the frames after it, can
-    /// follow. None without [`Decoder::keep_world`], before a full update came, after a frame may
+    /// follow. None without [`Stage::keep_world`], before a full update came, after a frame may
     /// have been missed, or when the frame `next` builds on is not kept.
     pub(crate) fn keyframe(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
         let base = next.and_then(|d| delta_base(self.state, d));
         self.scene.world.as_ref()?.full_update(self.state, base, None)
     }
 
-    /// [`Decoder::keyframe`] with every running round timer held where it is, for clients whose
+    /// [`View::keyframe`] with every running round timer held where it is, for clients whose
     /// clock runs on while no frames come (a room paused).
     pub(crate) fn keyframe_held(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
         let base = next.and_then(|d| delta_base(self.state, d));
@@ -233,7 +235,7 @@ impl Stage<'_> {
         self.scene.world.as_mut().is_some_and(|w| w.reshoot(state))
     }
 
-    /// Keeps every entity's props from the next full update on, for [`Decoder::keyframe`].
+    /// Keeps every entity's props from the next full update on, for [`View::keyframe`].
     pub(crate) fn keep_world(&mut self) {
         self.scene.world.get_or_insert_with(World::default);
     }
