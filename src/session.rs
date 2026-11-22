@@ -278,8 +278,8 @@ impl<'o> Session<'o> {
 
     fn advance(&mut self, state: Signon, emit: &mut dyn FnMut(Line)) {
         if state == Signon::Connected && self.spawncount.is_none() {
-            // The server asks for a reconnect before any `ServerInfo` (a relay whose signon started
-            // over while we came in): said so as a game client does, no spawncount to quote yet.
+            // A reconnect asked before any `ServerInfo` (a relay restarting its signon): answered
+            // as a game client does.
             if self.pending.is_none() {
                 self.send_reliable(&messages::signonstate(state, NO_SPAWNCOUNT), None);
             }

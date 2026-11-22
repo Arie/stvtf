@@ -1,7 +1,6 @@
-//! What a relay keeps of the stream for its clients, apart from parsing it: every entity as the
-//! frames left it (`world`), the string tables, and the last event that decides the round's
-//! panel. A [`View`] reads it to write full updates and deltas; a [`Stage`] changes what the
-//! clients are shown on top of the stream (the relay's camera, a room's score).
+//! What a relay keeps of the stream for its clients: the entities (`world`), the string tables
+//! and the last round event. A [`View`] reads it; a [`Stage`] changes what the clients are shown
+//! on top (the relay's camera, a room's score).
 
 use bitbuffer::{BitReadBuffer, BitReadStream, LittleEndian};
 use tf_demo_parser::ParserState;
@@ -24,7 +23,7 @@ pub(crate) struct Scene {
     pub(super) round: Option<BitBuf>,
 }
 
-/// The scene as it is at the decoder's last frame, to read.
+/// The scene, to read.
 pub(crate) struct View<'a> {
     scene: &'a Scene,
     state: &'a ParserState,
@@ -45,7 +44,7 @@ impl Decoder {
         View { scene: &self.scene, state: self.handler.get_parser_state(), extractor: self.extractor() }
     }
 
-    /// The relay's side of this decoder, to change what its clients are shown.
+    /// The relay's side of this decoder, to change.
     pub(crate) fn scene_mut(&mut self) -> Stage<'_> {
         let slots = self.extractor().max_players();
         Stage { scene: &mut self.scene, state: self.handler.get_parser_state(), slots }

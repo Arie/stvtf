@@ -1,6 +1,5 @@
-//! Messages written for a relay's clients in the stream's own encoding: game events, director
-//! camera cues, and (in `beams`, `lights`, `notes`, `voice_out`) what a room shows and says.
-//! A [`Writer`] reads the decoder's state and changes none of it.
+//! Messages written for a relay's clients: game events and camera cues here; beams, lights,
+//! notes and voice in their own files. A [`Writer`] only reads the decoder's state.
 
 use tf_demo_parser::ParserState;
 
@@ -9,7 +8,7 @@ use super::extract::Extractor;
 use crate::net::bits::{BitBuf, BitReader};
 use crate::net::messages::{SVC_GAMEEVENT, TYPE_BITS};
 
-/// Writes messages as the stream the decoder is on would have them.
+/// Writes messages in the stream's own encoding.
 pub(crate) struct Writer<'a> {
     pub(super) state: &'a ParserState,
     pub(super) extractor: &'a Extractor,
@@ -17,7 +16,7 @@ pub(crate) struct Writer<'a> {
 }
 
 impl Decoder {
-    /// A writer of messages for clients of this stream, as it is now.
+    /// A writer for this stream as it is now.
     pub(crate) fn writer(&self) -> Writer<'_> {
         Writer { state: self.handler.get_parser_state(), extractor: self.extractor(), tables: &self.scene.tables }
     }

@@ -1,5 +1,4 @@
-//! Which demo plays: opening the one wanted, going on into the next, and taking over from the
-//! process before.
+//! Which demo plays: opening it, going on into the next, taking over from the process before.
 
 use std::ops::ControlFlow;
 use std::time::Instant;
