@@ -1,22 +1,25 @@
 //! The player: playing demos to the clients where playback wants them, jumping when off.
 
 use std::ops::ControlFlow;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use super::beams::Kept;
-use super::cursor::{Cursor, owned};
+use super::cursor::Cursor;
 use super::index::Index;
-use super::tuning::{FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, JUMP, NAP, NOT_A_FRAME, PAST_INDEXES, RETRY};
+use super::tuning::{FRAME_WAIT, HAND_OVER_WAIT, IDLE, IDLE_NAP, NAP, NOT_A_FRAME, RETRY};
 use super::{Playback, Want, light, names, notes, shot, voice};
 use crate::Result;
-use crate::decode::{BeamModel, ModelsSent};
-use crate::error::bail;
+use crate::decode::ModelsSent;
 use crate::relay::handover::{Played, TakenOver};
-use crate::relay::hub::Hub;
 use crate::relay::{Handover, Relay};
 use crate::sync::lock;
+
+mod demos;
+mod jumps;
+
+use self::jumps::jump_ticks;
 
 pub(super) struct Player<'r> {
     pub(super) relay: &'r Relay,
@@ -146,90 +149,6 @@ impl Player<'_> {
         }
     }
 
-    /// Opens the demo `want` names unless it is playing, once no signon is held: break while it is,
-    /// or the demo cannot be opened. One not written yet is tried again every [`RETRY`]; one that
-    /// will never open, not again.
-    pub(super) fn open_wanted(&mut self, want: &Want, playback: &Playback) -> ControlFlow<()> {
-        if self.cur.as_ref().is_some_and(|c| c.path == want.demo) {
-            self.relay.hub().release_signon_hold();
-            return ControlFlow::Continue(());
-        }
-        if self.given_up.as_ref() == Some(&want.demo) {
-            std::thread::sleep(RETRY);
-            return ControlFlow::Break(());
-        }
-        // Not while a client is in a signon: a second crashes it. Nothing plays meanwhile.
-        if self.relay.hub().hold_for_signon(Instant::now()) {
-            std::thread::sleep(NAP);
-            return ControlFlow::Break(());
-        }
-        if self.goes_on_into(&want.demo) {
-            return ControlFlow::Continue(());
-        }
-        if let Some(TakenOver(played)) = self.taken_over.take() {
-            match played.filter(|p| p.demo == want.demo).map(|p| self.go_on_from(p)) {
-                Some(Ok(())) => return ControlFlow::Continue(()),
-                Some(Err(e)) => {
-                    tracing::info!("relay: :{} the clients taken over sign on again: {e:#}", self.relay.port());
-                }
-                None => {
-                    tracing::info!("relay: :{} the clients taken over sign on again: another demo", self.relay.port());
-                }
-            }
-            self.signed_on = Some(want.demo.clone());
-        }
-        // Another demo (a live match's next one), or this again: clients in a game sign on again.
-        self.cur = None;
-        if let Some(was) = self.signed_on.take() {
-            tracing::debug!("relay: the clients leave {} for {}", was.display(), want.demo.display());
-            self.relay.hub().reconnect_all();
-        }
-        match Cursor::open(&want.demo, &self.relay.hub) {
-            Ok(c) => {
-                self.start_demo(c);
-                self.refused = None;
-                playback.set_problem(None);
-                self.index_of(&want.demo);
-                ControlFlow::Continue(())
-            }
-            Err(e) => {
-                let why = format!("{e:#}");
-                if !super::cursor::may_open_yet(&e) {
-                    self.given_up = Some(want.demo.clone());
-                }
-                if self.refuses_anew(&want.demo, &why) {
-                    tracing::info!("relay: cannot play {}: {why}", want.demo.display());
-                }
-                playback.set_problem(Some(why));
-                std::thread::sleep(RETRY);
-                ControlFlow::Break(())
-            }
-        }
-    }
-
-    /// The checkpoints of `demo` are the ones playback has; those it had are kept a while.
-    fn index_of(&mut self, demo: &std::path::Path) {
-        if self.index.as_ref().is_some_and(|i| i.path == demo) {
-            return;
-        }
-        if let Some(was) = self.index.replace(Index::shared(demo)) {
-            self.past.retain(|i| i.path != was.path);
-            self.past.push(was);
-            if self.past.len() > PAST_INDEXES {
-                self.past.remove(0);
-            }
-        }
-    }
-
-    /// Whether `demo` not opening for `why` is news.
-    pub(super) fn refuses_anew(&mut self, demo: &std::path::Path, why: &str) -> bool {
-        if self.refused.as_ref().is_some_and(|(d, w)| d == demo && w == why) {
-            return false;
-        }
-        self.refused = Some((demo.to_owned(), why.to_owned()));
-        true
-    }
-
     /// The clients, once those in the game are at rest or [`HAND_OVER_WAIT`] is over, with where
     /// playback is: the relay is silent from then on.
     pub(super) fn hand_over(&mut self) -> Handover {
@@ -250,125 +169,6 @@ impl Player<'_> {
         h
     }
 
-    /// Whether `demo` goes on from the one playing, and playback now does: both are of one map load
-    /// of one server (a match recorded again by the next process), and the one playing has a frame
-    /// at or past where `demo` begins, which it is first played up to. The clients keep what they
-    /// have and get a full update; `demo`'s signon is for those to come. With a laser of the
-    /// relay's, only if one coming in later gets it where they have it.
-    pub(super) fn goes_on_into(&mut self, demo: &std::path::Path) -> bool {
-        let (laser, port, pose) = (self.laser, self.relay.port(), self.shot.pose);
-        let Some(c) = self.cur.as_mut().filter(|c| c.started && c.server.is_some()) else { return false };
-        let Ok(mut next) = Cursor::open_detached(demo) else { return false };
-        while !next.started && next.next_tick().is_some() {
-            if next.decode().is_none() {
-                next.skip_next();
-            }
-        }
-        let Some(begins) = next.first.filter(|_| next.server == c.server) else {
-            tracing::info!(
-                "relay: :{port} {} is of another map load ({:?}, playing {:?}): a signon",
-                demo.display(),
-                next.server,
-                c.server
-            );
-            return false;
-        };
-        // Up to there on the one playing, its string table changes given: no further than it has.
-        // Frames passed over so: the clients need a full update either way.
-        let mut passed = false;
-        while c.tick() < begins {
-            match c.next_tick() {
-                None => break,
-                Some(NOT_A_FRAME) => c.skip_next(),
-                Some(_) => {
-                    if let Some((bits, life)) = c.decode() {
-                        self.relay.hub().skim(&bits, &life);
-                        passed = true;
-                    }
-                }
-            }
-        }
-        let at = c.tick();
-        // Its laser's message there, for those to come: where the clients have it.
-        let laser_there = |next: &Cursor| match (laser, next.dec.beam_model(None, ModelsSent::default())) {
-            (None, _) => Some(None),
-            (Some(has), Some(BeamModel { index, load: Some(load) })) if index == has => Some(Some(load)),
-            _ => None,
-        };
-        // From its last checkpoint before there, if it has any made (a demo played before).
-        let made = self.past.iter().chain(&self.index).find(|i| i.path == demo);
-        if let Some(m) = made.and_then(|i| i.before(at)).filter(|m| i64::from(m.tick) > next.tick())
-            && let Ok(there) = Cursor::restore(demo, &m)
-        {
-            next = there;
-        }
-        next.dec.set_shot(pose);
-        skim(&mut next, None, at);
-        if at < begins || laser_there(&next).is_none() {
-            let why =
-                if at < begins { "the one playing ends before it begins" } else { "the laser is elsewhere in it" };
-            tracing::info!("relay: :{port} {} at {begins}, playing at {at}: {why}: a signon", demo.display());
-            if passed {
-                self.rekey();
-            }
-            return false;
-        }
-        self.relay.hub().hold_in_game();
-        // Its signon for those to come, then its string table changes up to there: `next` has
-        // them, and is where playback goes on.
-        let opened = Cursor::open(demo, &self.relay.hub).ok().and_then(|_| {
-            self.relay.hub().add_table_changes(&owned(&next.tables));
-            if let Some(load) = laser_there(&next)? {
-                self.relay.hub().add_table_change_once(&load);
-            }
-            Some(next)
-        });
-        self.relay.hub().release_held(Instant::now());
-        let Some(next) = opened else { return false };
-        tracing::info!(
-            "relay: :{} goes on into {} at {}, {} clients",
-            self.relay.port(),
-            demo.display(),
-            next.tick(),
-            self.relay.clients()
-        );
-        self.start_demo(next);
-        self.laser = laser;
-        self.index_of(demo);
-        self.relay.hub().reshow_panel_with_next_keyframe();
-        true
-    }
-
-    /// Goes on where the process before `played`: its demo decoded up to there, giving the
-    /// clients nothing (they have it), and a full update of wherever playback is wanted next.
-    fn go_on_from(&mut self, played: Played) -> Result<()> {
-        let took = Instant::now();
-        let index = Index::shared(&played.demo);
-        let mut c = match index.before(played.tick) {
-            Some(m) => Cursor::restore(&played.demo, &m)?,
-            None => Cursor::open_detached(&played.demo)?,
-        };
-        self.shoot_in(&mut c);
-        skim(&mut c, None, played.tick);
-        if c.tick() != played.tick || !c.started {
-            bail!("cannot find a frame of {} at {}", played.demo.display(), played.tick);
-        }
-        tracing::info!(
-            "relay: :{} goes on at {} after {} ms, {} clients",
-            self.relay.port(),
-            c.tick(),
-            took.elapsed().as_millis(),
-            self.relay.clients()
-        );
-        self.start_demo(c);
-        self.index = Some(index);
-        self.laser = played.laser;
-        self.models = played.models;
-        self.match_laser = played.match_laser;
-        self.relay.hub().reshow_panel_with_next_keyframe();
-        Ok(())
-    }
-
     /// What the room shows besides the demo: kept beams, notes, voice and light.
     fn show_extras(&mut self, playback: &Playback) {
         self.show_kept(playback);
@@ -381,23 +181,6 @@ impl Player<'_> {
         if self.cur.as_mut().is_some_and(|c| c.dec.set_score_add(playback.score())) {
             self.rekey();
         }
-    }
-
-    /// Plays `c`, just opened: the clients sign on to its tables, the laser not among them.
-    pub(super) fn start_demo(&mut self, c: Cursor) {
-        if self.match_laser.as_ref().is_some_and(|p| *p != c.path) {
-            self.match_laser = None;
-        }
-        self.signed_on = Some(c.path.clone());
-        self.cur = Some(c);
-        self.laser = None;
-        self.models = ModelsSent::default();
-        self.floor = None;
-        self.shown_notes = notes::Shown::default();
-        self.shown_names = names::Shown::default();
-        self.shown_light = light::Shown::default();
-        self.clock = None;
-        self.beams_until = 0.0;
     }
 
     /// Whether a client is in; after a while with none, the demo is dropped.
@@ -418,58 +201,6 @@ impl Player<'_> {
             hub.start_over();
         }
         false
-    }
-
-    /// Back to `target`: the demo again from the last checkpoint before it (or its start), decoded
-    /// up to there, and a full update of it: the clients stay in, and go back. If an entry of the
-    /// string tables they have changed value since (a player left or joined), those entries are set
-    /// back first.
-    fn jump_back(&mut self, want: &Want, target: i64) -> Result<()> {
-        let Some(c) = &self.cur else { return Ok(()) };
-        tracing::info!(
-            "relay: :{} jump back from {} to {target}, {} clients",
-            self.relay.port(),
-            c.tick(),
-            self.relay.clients()
-        );
-        // A spectator's panel: not for one watching as the player.
-        if !c.dec.players_own() {
-            self.relay.hub().reshow_panel_with_next_keyframe();
-        }
-        // The clients keep the models loaded since.
-        self.models = self.models.with(&c.dec);
-        let rewritten = c.dec.tables_rewritten();
-        let took = Instant::now();
-        // From the last checkpoint before it, or else the start.
-        let mark = self.index.as_ref().and_then(|i| i.before(target));
-        let mut again = match &mark {
-            Some(m) => Cursor::restore(&want.demo, m)?,
-            None => Cursor::open_detached(&want.demo)?,
-        };
-        self.shoot_in(&mut again);
-        // The clients had the string table changes up to there.
-        self.dry = skim(&mut again, None, target).1;
-        tracing::debug!("relay: decoded back to {target} in {} ms", took.elapsed().as_millis());
-        if again.dec.tables_rewritten() < rewritten {
-            // The clients' tables are set back to these, or failing that, they sign on again.
-            // The stream's changes after here are sent again when playback comes to them.
-            let later = owned(c.tables.get(again.tables.len()..).unwrap_or_default());
-            if let Some(msgs) = again.dec.set_tables_back(&c.dec) {
-                tracing::debug!("relay: string tables set back with {} messages", msgs.len());
-                self.relay.hub().set_tables_back(&later, &msgs);
-            } else {
-                tracing::info!(
-                    "relay: :{} the string tables changed since: the clients sign on again",
-                    self.relay.port()
-                );
-                self.cur = None;
-                self.dry = false;
-                return Ok(());
-            }
-        }
-        self.cur = Some(again);
-        self.rekey();
-        Ok(())
     }
 
     /// Plays on toward `want`: one frame, a jump, or a short wait.
@@ -538,39 +269,6 @@ impl Player<'_> {
         // A full update with the round timers held, or as they are going on: one that needs no
         // frame a client may lack (one just in has only its own full update).
         self.rekey();
-    }
-
-    /// Decodes on to `target` without sending when playback is more than `jump` behind it and the
-    /// demo has it written, from a checkpoint if one is well past: every client gets a keyframe.
-    fn jump_ahead(&mut self, want: &Want, target: i64, jump: i64) -> Result<()> {
-        let Some(c) = &mut self.cur else { return Ok(()) };
-        if !(c.started && c.tick() + jump < target && !self.dry && c.next_tick().is_some_and(|n| n <= target)) {
-            return Ok(());
-        }
-        let (from, took) = (c.tick(), Instant::now());
-        // From a checkpoint well past where it is, if there is one: the clients get the string
-        // table changes passed over with it, those after the ones they had.
-        let mark = self.index.as_ref().and_then(|i| i.before(target)).filter(|m| i64::from(m.tick) > from + jump);
-        if let Some(m) = &mark {
-            let passed = m.tables();
-            self.relay.hub().add_table_changes(passed.get(c.tables.len()..).unwrap_or_default());
-            *c = Cursor::restore(&want.demo, m)?;
-            c.dec.set_shot(self.shot.pose);
-        }
-        let (decoded, dry) = skim(c, Some(&self.relay.hub), target);
-        let decoded = decoded + usize::from(mark.is_some());
-        tracing::info!(
-            "relay: :{} jump ahead from {from} to {} in {} ms, {} clients",
-            self.relay.port(),
-            c.tick(),
-            took.elapsed().as_millis(),
-            self.relay.clients()
-        );
-        self.dry = dry;
-        if decoded > 0 {
-            self.rekey();
-        }
-        Ok(())
     }
 
     /// A keyframe for the clients waiting for one: of the frame the next one builds on, with the
@@ -646,38 +344,11 @@ fn target_tick(c: &Cursor, want: &Want, interval: f32) -> i64 {
     if want.from_start { first.saturating_add(wanted) } else { wanted.max(first) }
 }
 
-/// The ticks in [`JUMP`]: off by more, playback jumps.
-fn jump_ticks(interval: f32) -> i64 {
-    (JUMP.as_secs_f32() / interval.max(1e-3)) as i64
-}
-
 impl Player<'_> {
     /// Every client gets a full update.
     pub(super) fn rekey(&mut self) {
         self.relay.hub().rekey_all(Instant::now());
         self.rekeyed = true;
         self.floor = None;
-    }
-}
-
-/// Decodes on to `target` without sending: only string table changes reach the clients, through
-/// `hub` if given. How many frames it decoded, and whether it stopped short for want of more
-/// written.
-fn skim(c: &mut Cursor, hub: Option<&Mutex<Hub>>, target: i64) -> (usize, bool) {
-    let mut decoded = 0;
-    loop {
-        match c.next_tick() {
-            None => return (decoded, !c.ended),
-            Some(next) if next > target => return (decoded, false),
-            Some(_) => match c.decode() {
-                Some((bits, life)) => {
-                    if let Some(hub) = hub {
-                        lock(hub).skim(&bits, &life);
-                    }
-                    decoded += 1;
-                }
-                None => c.skip_next(),
-            },
-        }
     }
 }

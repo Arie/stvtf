@@ -9,7 +9,6 @@ const PAST: &[(&str, usize)] = &[
     ("src/decode/extract/entities.rs", 561),
     ("src/output/events.rs", 557),
     ("src/relay/hub.rs", 510),
-    ("src/relay/play/player.rs", 562),
 ];
 
 fn sources(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
