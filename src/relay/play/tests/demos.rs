@@ -5,9 +5,9 @@ use super::*;
 #[test]
 fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
     let c = upward_until(four_frames_kept);
-    let ours = c.dec.beam_model(None, ModelsSent::default()).unwrap().index;
+    let ours = c.dec.writer().beam_model(None, ModelsSent::default()).unwrap().index;
     let past = ModelsSent::next_for_tests(ours + 1);
-    let theirs = c.dec.beam_model(None, past).unwrap();
+    let theirs = c.dec.writer().beam_model(None, past).unwrap();
     let (theirs, load) = (theirs.index, theirs.load.unwrap());
     let mut b = bench_with_one_in();
     let tick = c.dec.server_tick();
@@ -18,7 +18,7 @@ fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
     p.step(&want).unwrap();
     assert!(p.cur.is_some(), "the match has not loaded it yet");
     p.cur.as_mut().unwrap().dec.feed(load.bytes(), load.nbits());
-    assert_eq!(p.cur.as_ref().unwrap().dec.beam_model(None, ModelsSent::default()).unwrap().index, theirs);
+    assert_eq!(p.cur.as_ref().unwrap().dec.writer().beam_model(None, ModelsSent::default()).unwrap().index, theirs);
     p.step(&want).unwrap();
     assert!(p.cur.is_none(), "a new signon");
 }
@@ -29,8 +29,8 @@ fn the_match_loading_the_laser_after_the_relays_signs_the_clients_on_again() {
 #[test]
 fn the_relays_laser_is_loaded_once_per_demo_whose_match_loads_its_own() {
     let c = upward_until(four_frames_kept);
-    let ours = c.dec.beam_model(None, ModelsSent::default()).unwrap().index;
-    let load = c.dec.beam_model(None, ModelsSent::next_for_tests(ours + 1)).unwrap().load.unwrap();
+    let ours = c.dec.writer().beam_model(None, ModelsSent::default()).unwrap().index;
+    let load = c.dec.writer().beam_model(None, ModelsSent::next_for_tests(ours + 1)).unwrap().load.unwrap();
     let mut b = bench_with_one_in();
     b.client_state().set_phase(Phase::Signon, Instant::now());
     let tick = c.dec.server_tick();

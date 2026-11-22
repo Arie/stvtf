@@ -5,6 +5,7 @@ use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
 
+use super::writer::Writer;
 use super::{BeamModel, Decoder, ModelsSent};
 use crate::net::bits::BitBuf;
 use crate::net::messages::SVC_TEMPENTITIES;
@@ -43,12 +44,12 @@ fn life(life: f32) -> f32 {
 pub(crate) const BASE: &str = "DT_BaseBeam";
 pub(crate) const POINTS: &str = "DT_TEBeamPoints";
 
-impl Decoder {
+impl Writer<'_> {
     /// The model index beams are drawn with: the solid laser, with the message that loads it if
     /// the match did not (to send first; see `Tables::laser` for `before`), or else a beam sprite
     /// the match loaded.
     pub(crate) fn beam_model(&self, before: Option<u16>, sent: ModelsSent) -> Option<BeamModel> {
-        let laser = self.tables.laser(self.handler.get_parser_state(), before, sent);
+        let laser = self.tables.laser(self.state, before, sent);
         laser.or_else(|| Some(BeamModel { index: self.tables.beam_sprite()?, load: None }))
     }
 
@@ -66,7 +67,7 @@ impl Decoder {
     /// `beams` as `svc_TempEntities` drawn with model `sprite`, or None when the demo has no beam
     /// class.
     pub(crate) fn beams(&self, beams: &[Beam], sprite: u16) -> Option<Vec<BitBuf>> {
-        let state = self.handler.get_parser_state();
+        let state = self.state;
         let class = state.server_classes.iter().position(|c| c.name.as_str() == "CTEBeamPoints")?;
         let table = state.send_tables.get(class)?;
         let event = |b: &Beam| {

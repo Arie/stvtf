@@ -97,7 +97,7 @@ fn a_demo_of_the_same_map_load_goes_on_with_no_signon() {
     }
     assert_eq!(relay.hub().clients.values().next().unwrap().phase, Phase::Active);
     // With the relay's laser where one coming in later gets it too; not with it elsewhere.
-    let laser = p.cur.as_ref().unwrap().dec.beam_model(None, ModelsSent::default()).unwrap();
+    let laser = p.cur.as_ref().unwrap().dec.writer().beam_model(None, ModelsSent::default()).unwrap();
     let again = dir.join("again.dem");
     std::fs::copy(crate::testing::fixture("pl_upward.dem"), &again).unwrap();
     p.laser = Some(laser.index + 1);

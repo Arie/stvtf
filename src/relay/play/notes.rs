@@ -47,7 +47,7 @@ fn bubble(dec: &Decoder, living: &[(u16, u32)], note: &Note) -> Option<BitBuf> {
         Some(user) => Some(living.iter().find(|(id, _)| *id == user)?.1),
         None => None,
     };
-    dec.annotation(note.id, &note.text, note.at, follow)
+    dec.writer().annotation(note.id, &note.text, note.at, follow)
 }
 
 /// The ids shown in `was` that `now` has no bubble for.
@@ -84,7 +84,7 @@ impl Player<'_> {
         let bubbles: Vec<(u32, BitBuf)> =
             notes.iter().filter_map(|n| Some((n.id, bubble(&c.dec, &living, n)?))).collect();
         let mut hub = self.relay.hub();
-        for m in gone(&s.bubbles, &bubbles).filter_map(|id| c.dec.hide_annotation(id)) {
+        for m in gone(&s.bubbles, &bubbles).filter_map(|id| c.dec.writer().hide_annotation(id)) {
             hub.queue_to_active(&m);
         }
         // One with an id shown replaces that bubble.
@@ -127,7 +127,7 @@ mod tests {
             panic!()
         };
         assert_eq!(a.follow_ent_index, player.ent);
-        let GameEvent::HideAnnotation(h) = event(&c.dec, &c.dec.hide_annotation(8).unwrap()) else { panic!() };
+        let GameEvent::HideAnnotation(h) = event(&c.dec, &c.dec.writer().hide_annotation(8).unwrap()) else { panic!() };
         assert_eq!(h.id, 8);
     }
 

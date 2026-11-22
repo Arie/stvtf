@@ -285,7 +285,7 @@ fn without_signon(bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
 
 /// A frame's stream without the director's camera cues.
 pub(super) fn without_cues(dec: &Decoder, bits: &BitBuf, life: &Lifecycle) -> (BitBuf, Lifecycle) {
-    without(bits, life, |s| dec.is_director_cue(bits.bytes(), s))
+    without(bits, life, |s| dec.writer().is_director_cue(bits.bytes(), s))
 }
 
 /// What a client watching a player's own demo is told with every full update: it is that player

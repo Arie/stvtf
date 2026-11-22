@@ -6,7 +6,7 @@ use tf_demo_parser::demo::message::tempentities::{EventInfo, TempEntitiesMessage
 use tf_demo_parser::demo::sendprop::{SendProp, SendPropIdentifier, SendPropValue};
 use tf_demo_parser::demo::vector::Vector;
 
-use super::Decoder;
+use super::writer::Writer;
 use crate::net::bits::BitBuf;
 use crate::net::messages::SVC_TEMPENTITIES;
 
@@ -16,11 +16,11 @@ const MIN_RADIUS: f32 = 10.0;
 const MAX_RADIUS: f32 = 2560.0;
 const MAX_LIFE: f32 = 25.5;
 
-impl Decoder {
+impl Writer<'_> {
     /// A light at `at` in `rgb`, reaching `radius` units and falling off by `exponent`, for
     /// `life` seconds; or None when the demo has no light class.
     pub(crate) fn light(&self, at: [f32; 3], rgb: [u8; 3], radius: f32, exponent: u8, life: f32) -> Option<BitBuf> {
-        let state = self.handler.get_parser_state();
+        let state = self.state;
         let class = state.server_classes.iter().position(|c| c.name.as_str() == "CTEDynamicLight")?;
         let table = state.send_tables.get(class)?;
         let int = |v: u8| SendPropValue::Integer(i64::from(v));

@@ -1,7 +1,7 @@
 //! A player's voice written as the game sends it: `svc_VoiceData` in their slot, Steam's framing
 //! round Opus frames (the reverse of `extract::voice`).
 
-use super::Decoder;
+use super::writer::Writer;
 use crate::net::bits::{BitBuf, BitWriter};
 use crate::net::messages::{SVC_VOICEDATA, TYPE_BITS};
 
@@ -43,7 +43,7 @@ pub(crate) fn voice_runs(frames: &[Vec<u8>]) -> impl Iterator<Item = &[Vec<u8>]>
     parts.into_iter().filter(|p| !p.is_empty())
 }
 
-impl Decoder {
+impl Writer<'_> {
     /// `frames` (Opus, 20 ms each) as the voice of the player with user id `user`, or with none
     /// (a caster, a coach: `steamid` theirs, if they have one) in slot `spare`, which nobody is
     /// in, or without one as `SourceTV`'s own, in its bot's slot. Numbered from `seq` on, which
@@ -72,13 +72,13 @@ impl Decoder {
     fn voice_slot(&self, user: Option<u16>, spare: Option<u8>, steamid: &str) -> Option<(u8, u64)> {
         Some(match (user, spare) {
             (Some(user), _) => {
-                let snapshot = self.extractor().snapshot();
+                let snapshot = self.extractor.snapshot();
                 let p = snapshot.players.iter().find(|p| p.id.0 == user)?;
                 (u8::try_from(p.ent.checked_sub(1)?).ok()?, account(&p.steamid)?)
             }
             (None, Some(slot)) => (slot, account(steamid).unwrap_or(0)),
             (None, None) => {
-                (u8::try_from(self.extractor().sourcetv_entity()?.checked_sub(1)?).ok()?, account(steamid).unwrap_or(0))
+                (u8::try_from(self.extractor.sourcetv_entity()?.checked_sub(1)?).ok()?, account(steamid).unwrap_or(0))
             }
         })
     }

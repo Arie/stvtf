@@ -140,7 +140,7 @@ impl Player<'_> {
         }
         let at = c.tick();
         // Its laser's message there, for those to come: where the clients have it.
-        let laser_there = |next: &Cursor| match (laser, next.dec.beam_model(None, ModelsSent::default())) {
+        let laser_there = |next: &Cursor| match (laser, next.dec.writer().beam_model(None, ModelsSent::default())) {
             (None, _) => Some(None),
             (Some(has), Some(BeamModel { index, load: Some(load) })) if index == has => Some(Some(load)),
             _ => None,

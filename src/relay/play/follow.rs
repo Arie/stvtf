@@ -68,7 +68,7 @@ impl Player<'_> {
             // Going on after it, the timers redraw at once (as casters' `hud_reloadscheme` has
             // them do).
             if !c.paused
-                && let Some(m) = c.dec.update_timer()
+                && let Some(m) = c.dec.writer().update_timer()
             {
                 hub.queue_to_active(&m);
             }

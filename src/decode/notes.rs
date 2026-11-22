@@ -2,7 +2,7 @@
 
 use tf_demo_parser::demo::gameevent_gen::{GameEvent, HideAnnotationEvent, ShowAnnotationEvent};
 
-use super::Decoder;
+use super::writer::Writer;
 use crate::net::bits::BitBuf;
 
 /// A lifetime under 0: shown until hidden.
@@ -10,7 +10,7 @@ const FOR_GOOD: f32 = -1.0;
 /// The game's silent sound: with none, a client warns of a missing sound for every bubble.
 const SILENCE: &str = "common/null.wav";
 
-impl Decoder {
+impl Writer<'_> {
     /// `show_annotation`: bubble `id` saying `text` at `at`, or following entity `follow`, for
     /// everyone, until hidden; without the distance to it.
     pub(crate) fn annotation(&self, id: u32, text: &str, at: [f32; 3], follow: Option<u32>) -> Option<BitBuf> {

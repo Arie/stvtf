@@ -51,8 +51,8 @@ impl Player<'_> {
             return;
         }
         let msg = match light {
-            Some(l) => c.dec.light(l.at, l.rgb, l.radius, l.exponent, LIFE),
-            None => c.dec.no_light(),
+            Some(l) => c.dec.writer().light(l.at, l.rgb, l.radius, l.exponent, LIFE),
+            None => c.dec.writer().no_light(),
         };
         let Some(msg) = msg else { return };
         let mut hub = self.relay.hub();
@@ -97,13 +97,14 @@ mod tests {
             }
         };
         let float = |v: SendPropValue| if let SendPropValue::Float(f) = v { f } else { panic!("{v:?}") };
-        let get = read(c.dec.light([100.0, -200.0, 300.0], [255, 128, 0], 500.0, 5, 25.0).expect("a light class"));
+        let get =
+            read(c.dec.writer().light([100.0, -200.0, 300.0], [255, 128, 0], 500.0, 5, 25.0).expect("a light class"));
         assert_eq!(get("m_vecOrigin"), SendPropValue::Vector(Vector { x: 100.0, y: -200.0, z: 300.0 }));
         assert_eq!([get("r"), get("g"), get("b")], [255, 128, 0].map(SendPropValue::Integer));
         assert_eq!(get("exponent"), SendPropValue::Integer(5));
         assert!((float(get("m_fRadius")) - 500.0).abs() <= 10.0, "to the step it is sent in");
         assert!((float(get("m_fTime")) - 25.0).abs() <= 0.1);
-        let out = read(c.dec.no_light().unwrap());
+        let out = read(c.dec.writer().no_light().unwrap());
         assert!((float(out("m_fRadius")) - 10.0).abs() < 0.01);
         assert!(float(out("m_fTime")).abs() < 0.01, "gone at once");
     }

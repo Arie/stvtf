@@ -21,6 +21,7 @@ mod send_tables;
 mod tables;
 mod voice_out;
 mod world;
+mod writer;
 
 pub(crate) use self::decoder::{Baselines, Decoder, Entities, Lifecycle, Span};
 pub use self::demo_file::demo_file;

@@ -137,7 +137,8 @@ impl Player<'_> {
             // them to a player's eyes until the demo's own director speaks.
             self.shot.cued = None;
             if std::mem::take(&mut self.shot.held)
-                && let Some(msg) = c.dec.living_players().first().and_then(|(player, _)| c.dec.hltv_chase(*player))
+                && let Some(msg) =
+                    c.dec.living_players().first().and_then(|(player, _)| c.dec.writer().hltv_chase(*player))
             {
                 let mut hub = self.relay.hub();
                 hub.queue_to_active(&msg);
@@ -161,11 +162,11 @@ impl Player<'_> {
             return;
         }
         let msg = match cue {
-            Cue::Player(player) => c.dec.hltv_chase(player),
-            Cue::Man(man) => c.dec.hltv_cameraman(man),
+            Cue::Player(player) => c.dec.writer().hltv_chase(player),
+            Cue::Man(man) => c.dec.writer().hltv_cameraman(man),
             Cue::Spot(_) => self.shot.settled.and_then(|s| {
                 let whole = |v: f32| v.round() as i32;
-                c.dec.hltv_fixed(s.end.pos.map(whole), whole(s.end.pitch) as i16, whole(s.end.yaw) as i16)
+                c.dec.writer().hltv_fixed(s.end.pos.map(whole), whole(s.end.pitch) as i16, whole(s.end.yaw) as i16)
             }),
         };
         let sent = msg.is_some();

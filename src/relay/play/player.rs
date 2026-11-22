@@ -300,7 +300,7 @@ impl Player<'_> {
         // The round's end shown, or hidden, as at this moment.
         since.extend(c.dec.round_event());
         // Its clock may have gone back: the timers, waiting for a time it passed, redraw.
-        since.extend(c.dec.update_timer());
+        since.extend(c.dec.writer().update_timer());
         let mut hub = self.relay.hub();
         if c.dec.players_own() {
             hub.with_next_keyframe(super::cursor::as_the_player(c.view));

@@ -140,7 +140,7 @@ impl Player<'_> {
             let mut seq = self.voice_seq.next.get(&slot).copied().unwrap_or(0);
             let mut sent = false;
             for part in crate::decode::voice_runs(&v.frames) {
-                if let Some(m) = c.dec.voice_message(v.user, spare, &v.steamid, v.rate, part, &mut seq) {
+                if let Some(m) = c.dec.writer().voice_message(v.user, spare, &v.steamid, v.rate, part, &mut seq) {
                     hub.send_to_active(&m);
                     sent = true;
                 }
@@ -152,7 +152,7 @@ impl Player<'_> {
         }
         // As the game ends a voice: without it a client's decoder is left mid-speech.
         for t in self.voice_seq.take_stopped(now) {
-            if let Some(m) = c.dec.voice_end(t.user, t.spare, &t.steamid, t.rate) {
+            if let Some(m) = c.dec.writer().voice_end(t.user, t.spare, &t.steamid, t.rate) {
                 hub.send_to_active(&m);
             }
         }
@@ -209,7 +209,7 @@ mod tests {
             "{spare:?} {taken:?}"
         );
         assert!(spare.is_sorted_by(|a, b| a > b), "from the top, away from where players come in");
-        let msg = c.dec.voice_message(None, Some(spare[0]), "[U:1:77]", 24000, &[vec![0x68]], &mut 0).unwrap();
+        let msg = c.dec.writer().voice_message(None, Some(spare[0]), "[U:1:77]", 24000, &[vec![0x68]], &mut 0).unwrap();
         let (client, data) = voice_data(&c.dec, &msg);
         assert_eq!(client, spare[0]);
         assert_eq!(crate::decode::steam_voice_for_tests(&data).unwrap().0 & 0xFFFF_FFFF, 77);
@@ -221,7 +221,7 @@ mod tests {
         let p = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
         let frames = vec![vec![0x68, 1, 2], vec![0x68, 3]];
         let mut seq = 0;
-        let msg = c.dec.voice_message(Some(p.id.0), None, "", 24000, &frames, &mut seq).unwrap();
+        let msg = c.dec.writer().voice_message(Some(p.id.0), None, "", 24000, &frames, &mut seq).unwrap();
         let (client, data) = voice_data(&c.dec, &msg);
         assert_eq!(u32::from(client) + 1, p.ent, "in the player's slot");
         let (steamid, rate, read) = crate::decode::steam_voice_for_tests(&data).unwrap();
@@ -247,8 +247,8 @@ mod tests {
             }
             out
         };
-        let first = c.dec.voice_message(Some(user), None, "", 24000, &[vec![1], vec![2]], &mut seq).unwrap();
-        let second = c.dec.voice_message(Some(user), None, "", 24000, &[vec![3]], &mut seq).unwrap();
+        let first = c.dec.writer().voice_message(Some(user), None, "", 24000, &[vec![1], vec![2]], &mut seq).unwrap();
+        let second = c.dec.writer().voice_message(Some(user), None, "", 24000, &[vec![3]], &mut seq).unwrap();
         assert_eq!(numbers(&voice_data(&c.dec, &first).1), [0, 1]);
         assert_eq!(numbers(&voice_data(&c.dec, &second).1), [2]);
     }
@@ -292,7 +292,7 @@ mod tests {
     fn the_end_of_a_voice_is_steams_marker_alone() {
         let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
         let p = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
-        let msg = c.dec.voice_end(Some(p.id.0), None, "", 24000).unwrap();
+        let msg = c.dec.writer().voice_end(Some(p.id.0), None, "", 24000).unwrap();
         let (client, data) = voice_data(&c.dec, &msg);
         assert_eq!(u32::from(client) + 1, p.ent);
         // SteamID (8), rate chunk (3), then the Opus chunk: type, length 2, the marker.
@@ -305,7 +305,8 @@ mod tests {
     fn a_speaker_who_is_no_player_talks_as_sourcetv_itself() {
         let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
         let players: Vec<u32> = c.dec.extractor().snapshot().players.iter().map(|p| p.ent).collect();
-        let msg = c.dec.voice_message(None, None, "[U:1:77]", 24000, &[vec![0x68]], &mut 0).expect("the bot's slot");
+        let msg =
+            c.dec.writer().voice_message(None, None, "[U:1:77]", 24000, &[vec![0x68]], &mut 0).expect("the bot's slot");
         let (client, data) = voice_data(&c.dec, &msg);
         assert!(!players.contains(&(u32::from(client) + 1)), "no player's slot: {client}");
         assert_eq!(crate::decode::steam_voice_for_tests(&data).unwrap().0 & 0xFFFF_FFFF, 77, "their own SteamID");
@@ -314,8 +315,11 @@ mod tests {
     #[test]
     fn a_player_not_in_the_match_gets_no_packet() {
         let c = upward_until(|c| c.started);
-        assert!(c.dec.voice_message(Some(u16::MAX), None, "", 24000, &[vec![1]], &mut 0).is_none());
+        assert!(c.dec.writer().voice_message(Some(u16::MAX), None, "", 24000, &[vec![1]], &mut 0).is_none());
         let user = c.dec.extractor().snapshot().players.first().map_or(0, |p| p.id.0);
-        assert!(c.dec.voice_message(Some(user), None, "", 24000, &[], &mut 0).is_none(), "nor one without frames");
+        assert!(
+            c.dec.writer().voice_message(Some(user), None, "", 24000, &[], &mut 0).is_none(),
+            "nor one without frames"
+        );
     }
 }

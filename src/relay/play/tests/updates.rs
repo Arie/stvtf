@@ -51,7 +51,7 @@ fn a_full_update_gives_every_weapon_the_reset_parity_a_client_starts_it_with() {
 #[test]
 fn the_timers_are_told_to_redraw_with_the_demos_own_event() {
     let c = upward_until(|c| c.started);
-    let msg = c.dec.update_timer().expect("the demo has the event");
+    let msg = c.dec.writer().update_timer().expect("the demo has the event");
     let state = c.dec.parser_state_for_tests();
     let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
     let t: tf_demo_parser::demo::message::MessageType = bitbuffer::BitRead::read(&mut s).unwrap();
@@ -85,8 +85,8 @@ fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
         speed: 20,
     };
     let BeamModel { index: model, load } =
-        c.dec.beam_model(None, ModelsSent::default()).expect("a model to draw beams with");
-    let msgs = c.dec.beams(&[beam; 40], model).expect("a beam class");
+        c.dec.writer().beam_model(None, ModelsSent::default()).expect("a model to draw beams with");
+    let msgs = c.dec.writer().beams(&[beam; 40], model).expect("a beam class");
     assert_eq!(msgs.len(), 3, "16 a message");
     assert!(msgs.iter().all(|m| m.nbits() / 8 < 1000), "each fits a datagram");
     let state = c.dec.parser_state_for_tests();
@@ -133,7 +133,7 @@ fn beams_read_back_as_the_games_own_drawn_with_a_sprite_of_the_match() {
     assert_eq!(u.entries[0].0, model);
     assert!(model < table.max_entries);
     assert_eq!(
-        c.dec.beam_model(Some(model), ModelsSent::default()).unwrap().index,
+        c.dec.writer().beam_model(Some(model), ModelsSent::default()).unwrap().index,
         model,
         "where it went, while the match leaves it be"
     );
@@ -153,17 +153,17 @@ fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
             Some(NOT_A_FRAME) => c.skip_next(),
             Some(_) => {
                 let Some((bits, life)) = c.decode() else { continue };
-                cues += life.spans.iter().filter(|s| c.dec.is_director_cue(bits.bytes(), s)).count();
+                cues += life.spans.iter().filter(|s| c.dec.writer().is_director_cue(bits.bytes(), s)).count();
                 let (bits, life) = without_cues(&c.dec, &bits, &life);
-                assert!(!life.spans.iter().any(|s| c.dec.is_director_cue(bits.bytes(), s)));
+                assert!(!life.spans.iter().any(|s| c.dec.writer().is_director_cue(bits.bytes(), s)));
             }
         }
     }
     eprintln!("{cues} director cues in the first 10 s");
     let player = c.dec.extractor().snapshot().players.iter().find(|p| p.alive).cloned().unwrap();
-    let msg = c.dec.hltv_chase(player.id.0).unwrap();
+    let msg = c.dec.writer().hltv_chase(player.id.0).unwrap();
     let span = Span { id: u8::try_from(SVC_GAMEEVENT).unwrap(), bits: 0..msg.nbits() };
-    assert!(c.dec.is_director_cue(msg.bytes(), &span));
+    assert!(c.dec.writer().is_director_cue(msg.bytes(), &span));
     let state = c.dec.parser_state_for_tests();
     let mut s = bitbuffer::BitReadStream::new(bitbuffer::BitReadBuffer::new(msg.bytes(), bitbuffer::LittleEndian));
     let t: tf_demo_parser::demo::message::MessageType = bitbuffer::BitRead::read(&mut s).unwrap();
@@ -172,7 +172,7 @@ fn a_camera_cue_names_the_players_entity_and_the_demos_own_go() {
     assert_eq!(u32::from(chase.target_1), player.ent);
     assert_eq!(chase.in_eye, 1);
     // The relay's own cameraman, by entity.
-    let msg = c.dec.hltv_cameraman(24).unwrap();
+    let msg = c.dec.writer().hltv_cameraman(24).unwrap();
     let span = Span { id: u8::try_from(SVC_GAMEEVENT).unwrap(), bits: 0..msg.nbits() };
-    assert!(c.dec.is_director_cue(msg.bytes(), &span));
+    assert!(c.dec.writer().is_director_cue(msg.bytes(), &span));
 }

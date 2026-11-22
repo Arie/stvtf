@@ -117,23 +117,23 @@ impl Player<'_> {
     fn beam_messages(&mut self, beams: &[Beam]) -> Option<Vec<BitBuf>> {
         let c = self.cur.as_ref().filter(|c| c.started)?;
         self.models = self.models.with(&c.dec);
-        let mut model = c.dec.beam_model(self.laser, self.models)?;
+        let mut model = c.dec.writer().beam_model(self.laser, self.models)?;
         if model.load.is_some() && self.match_laser.as_ref() == Some(&c.path) {
             // Its own comes later: until the clients have it, a sprite of the match's or none.
-            model = BeamModel { index: c.dec.beam_sprite()?, load: None };
+            model = BeamModel { index: c.dec.writer().beam_sprite()?, load: None };
         }
         if let Some(msg) = &model.load {
             self.relay.hub().add_table_change_once(msg);
             self.laser = Some(model.index);
         }
-        c.dec.beams(beams, model.index)
+        c.dec.writer().beams(beams, model.index)
     }
 
     /// Whether the match loaded the laser after the clients were given the relay's: every model of
     /// the match's after it is one off for them, so they sign on again (the demo opened afresh),
     /// after which its own is used.
     pub(super) fn restart_if_laser_loaded_twice(&mut self) -> bool {
-        if !self.cur.as_ref().is_some_and(|c| c.dec.laser_loaded_twice(self.laser)) {
+        if !self.cur.as_ref().is_some_and(|c| c.dec.writer().laser_loaded_twice(self.laser)) {
             return false;
         }
         tracing::info!("relay: :{} the match loaded the laser too: the clients sign on again", self.relay.port());
