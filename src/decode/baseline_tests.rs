@@ -77,7 +77,7 @@ fn a_decoder_fed_placed_streams_goes_on_placing_the_servers() {
     for bits in &passed {
         later.feed(bits.bytes(), bits.nbits());
     }
-    later.set_placed(dec.placed());
+    later.scene_mut().set_placed(dec.scene().placed());
     let again = update(&mut later, vec![(54, entry("88", 2)), (42, entry("89", 2))]);
     assert_eq!(indices(&later, &again), [42, 43]);
 }

@@ -19,7 +19,7 @@ pub(crate) struct Writer<'a> {
 impl Decoder {
     /// A writer of messages for clients of this stream, as it is now.
     pub(crate) fn writer(&self) -> Writer<'_> {
-        Writer { state: self.handler.get_parser_state(), extractor: self.extractor(), tables: &self.tables }
+        Writer { state: self.handler.get_parser_state(), extractor: self.extractor(), tables: &self.scene.tables }
     }
 }
 

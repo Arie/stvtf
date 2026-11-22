@@ -11,7 +11,7 @@ fn decoding_speed() {
         let mut r = Reader::new(std::fs::File::open(&path).unwrap()).unwrap();
         let mut dec = Decoder::new(&tables, 0.0).unwrap();
         if world {
-            dec.keep_world();
+            dec.scene_mut().keep_world();
         }
         let t = std::time::Instant::now();
         let mut n = 0;

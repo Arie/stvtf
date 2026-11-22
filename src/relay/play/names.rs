@@ -57,19 +57,19 @@ impl Player<'_> {
         let Some(c) = self.cur.as_ref().filter(|c| c.started) else { return };
         let given: BTreeMap<String, Option<String>> =
             names.players.iter().map(|(id, n)| (id.clone(), Some(n.clone()))).collect();
-        let mut msgs: Vec<BitBuf> = c.dec.named(&given).into_iter().collect();
+        let mut msgs: Vec<BitBuf> = c.dec.scene().named(&given).into_iter().collect();
         let team = |side: &str, own: &'static str| names.teams.get(side).map_or(own, String::as_str).to_string();
         let teams: Vec<BitBuf> = TEAMS.iter().map(|(side, cvar, own)| set_convar(cvar, &team(side, own))).collect();
         // Named no more: the game's own names again, once.
         let dropped: BTreeMap<String, Option<String>> =
             s.names.players.keys().filter(|id| !names.players.contains_key(*id)).map(|id| (id.clone(), None)).collect();
-        let mut once: Vec<BitBuf> = c.dec.named(&dropped).into_iter().collect();
+        let mut once: Vec<BitBuf> = c.dec.scene().named(&dropped).into_iter().collect();
         if !names.teams.is_empty() {
             msgs.extend(teams);
         } else if !s.names.teams.is_empty() {
             once.extend(teams);
         }
-        let rewritten = c.dec.tables_rewritten();
+        let rewritten = c.dec.scene().tables_rewritten();
         let again = rewritten != s.rewritten;
         let mut hub = self.relay.hub();
         for m in once.iter().chain(msgs.iter().filter(|m| again || !s.msgs.contains(m))) {

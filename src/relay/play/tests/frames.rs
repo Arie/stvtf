@@ -17,10 +17,10 @@ fn the_frames_sent_with_a_full_update_are_without_the_servers_changelevel() {
     let mut reader = upward_until(four_frames_kept);
     c.decode().unwrap();
     c.peek();
-    let (tick, key) = c.dec.keyframe(c.next_frame()).unwrap();
+    let (tick, key) = c.dec.scene().keyframe(c.next_frame()).unwrap();
     // From two frames back: the changelevel's frame, and the one it builds on, go as they are.
     let recent = c.recent.make_contiguous();
-    let since = c.dec.catch_up(recent[recent.len() - 3].0, recent);
+    let since = c.dec.scene().catch_up(recent[recent.len() - 3].0, recent);
     let mut b = bench_with_one_in();
     b.client_state().set_phase(Phase::WaitingFull, Instant::now());
     b.hub.send_keyframe(tick, &key, &since, false);
@@ -75,7 +75,7 @@ fn a_players_own_demo_plays_to_a_client_that_has_only_its_signon() {
             None => panic!("the demo ended"),
         }
     }
-    assert!(c.dec.players_own() && c.dec.own_baselines());
+    assert!(c.dec.players_own() && c.dec.scene().own_baselines());
     let mut b = bench_with_one_in();
     b.client_state().set_phase(Phase::WaitingFull, Instant::now());
     let tick = c.dec.server_tick() + 60;
@@ -157,7 +157,7 @@ fn a_full_update_in_the_demo_then_a_delta_from_before_it_reach_a_client_it_can_f
     let mut copy = upward_until(four_frames_kept);
     let Some(Packet::Message { tick: demo_tick, .. }) = copy.peek().cloned() else { panic!("a frame next") };
     copy.decode().unwrap();
-    let (n1, full) = copy.dec.keyframe(None).unwrap();
+    let (n1, full) = copy.dec.scene().keyframe(None).unwrap();
     let from_e = copy.dec.delta_for_tests(e, n1).unwrap();
     c.peek();
     c.next = Some(Packet::Message { tick: demo_tick, data: full.bytes().to_vec() });
@@ -202,7 +202,7 @@ fn the_frames_after_a_keyframe_build_only_on_frames_a_client_still_has() {
     let recent = [d(k0, k1), d(k1, k2), d(k0, k3)];
     let key = c.dec.keyframe_at_for_tests(k0).unwrap();
     let mut frames = std::collections::BTreeSet::new();
-    for s in std::iter::once(key).chain(c.dec.catch_up(k0, &recent)) {
+    for s in std::iter::once(key).chain(c.dec.scene().catch_up(k0, &recent)) {
         let tick = c.dec.frame_tick(s.bytes()).unwrap();
         match c.dec.entities(s.bytes()).unwrap() {
             Entities::Full => frames.clear(),
@@ -214,7 +214,7 @@ fn the_frames_after_a_keyframe_build_only_on_frames_a_client_still_has() {
         frames.insert(tick);
     }
     // Frames from before the keyframe's are rewritten from it: the next builds on it.
-    for s in &c.dec.catch_up(k1, &[d(k0, k2), d(k0, k3)]) {
+    for s in &c.dec.scene().catch_up(k1, &[d(k0, k2), d(k0, k3)]) {
         assert_eq!(c.dec.entities(s.bytes()), Some(Entities::Delta(k1)));
     }
 }

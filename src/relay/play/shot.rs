@@ -114,19 +114,19 @@ impl Player<'_> {
             self.shot.settled = None;
             None
         };
-        c.dec.keep_from_shot(&self.voice_seq.spares());
-        c.dec.set_shot(pose);
+        c.dec.scene_mut().keep_from_shot(&self.voice_seq.spares());
+        c.dec.scene_mut().set_shot(pose);
         // No frame is coming (paused, or the demo ended): put it in the frames already sent.
         let still = want.paused || (c.ended && c.next_tick().is_none());
         let moved = std::mem::replace(&mut self.shot.pose, pose) != pose;
-        if moved && still && c.started && c.dec.reshoot() {
+        if moved && still && c.started && c.dec.scene_mut().reshoot() {
             self.rekey();
         }
     }
 
     /// The camera for a demo decoded on the side, which playback goes on from.
     pub(super) fn shoot_in(&self, c: &mut Cursor) {
-        c.dec.set_shot(self.shot.pose);
+        c.dec.scene_mut().set_shot(self.shot.pose);
     }
 
     /// Tells the clients in the game to take `camera`, when it changed and every [`CUE_EVERY`].
@@ -152,7 +152,7 @@ impl Player<'_> {
         let cue = match camera {
             Camera::Follow { player } => Cue::Player(*player),
             // Standing still: `hltv_fixed`. Moving: the cameraman, once a frame has it.
-            Camera::Along(_) => match (self.shot.settled, c.dec.cameraman()) {
+            Camera::Along(_) => match (self.shot.settled, c.dec.scene().cameraman()) {
                 (Some(s), _) => Cue::Spot(s.id),
                 (None, Some(man)) => Cue::Man(man),
                 (None, None) => return,

@@ -11,7 +11,7 @@ fn a_full_update_holds_the_round_timer_and_the_next_runs_it_again() {
     assert!(!running.is_empty() && running.iter().all(|t| !t.paused), "{running:?}");
     relay.peek();
     let next = relay.next_frame();
-    let (_, held) = relay.dec.keyframe_held(next).expect("a full update");
+    let (_, held) = relay.dec.scene().keyframe_held(next).expect("a full update");
     client.dec.feed(held.bytes(), held.nbits());
     let timers = client.dec.extractor().snapshot().timers;
     assert_eq!(timers.len(), running.len());
@@ -20,7 +20,7 @@ fn a_full_update_holds_the_round_timer_and_the_next_runs_it_again() {
         assert!((h.remaining - r.remaining).abs() < 0.5, "held at {} where it was {}", h.remaining, r.remaining);
     }
     // Going on: a full update as it is runs them again, though running is their baseline.
-    let (_, plain) = relay.dec.keyframe(next).expect("a full update");
+    let (_, plain) = relay.dec.scene().keyframe(next).expect("a full update");
     client.dec.feed(plain.bytes(), plain.nbits());
     let timers = client.dec.extractor().snapshot().timers;
     assert!(timers.iter().all(|t| !t.paused), "{timers:?}");
@@ -33,7 +33,7 @@ fn a_full_update_gives_every_weapon_the_reset_parity_a_client_starts_it_with() {
     let (mut relay, mut client) = (upward_until(charged), upward_until(charged));
     relay.peek();
     let next = relay.next_frame();
-    let (_, key) = relay.dec.keyframe(next).expect("a full update");
+    let (_, key) = relay.dec.scene().keyframe(next).expect("a full update");
     client.dec.feed(key.bytes(), key.nbits());
     let state = client.dec.parser_state_for_tests();
     let parity = SendPropIdentifier::new("DT_TFWeaponBase", "m_bResetParity");

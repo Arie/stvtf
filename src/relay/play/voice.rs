@@ -130,7 +130,7 @@ impl Player<'_> {
         for v in voice {
             let (spare, slot) = match v.user {
                 Some(user) => (None, Slot::Player(user)),
-                None => match self.voice_seq.claim_spare(&v.steamid, &c.dec.spare_slots(), now) {
+                None => match self.voice_seq.claim_spare(&v.steamid, &c.dec.scene().spare_slots(), now) {
                     Some(slot) => (Some(slot), Slot::Spare(slot)),
                     None if self.voice_seq.claim_sourcetv(&v.steamid, now) => (None, Slot::SourceTv),
                     None => continue,
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn a_speaker_who_is_no_player_talks_in_a_slot_nobody_is_in() {
         let c = upward_until(|c| c.dec.extractor().snapshot().players.iter().any(|p| p.alive));
-        let spare = c.dec.spare_slots();
+        let spare = c.dec.scene().spare_slots();
         let taken: Vec<u32> = c.dec.extractor().snapshot().players.iter().map(|p| p.ent).collect();
         assert!(
             !spare.is_empty() && spare.iter().all(|s| !taken.contains(&(u32::from(*s) + 1))),

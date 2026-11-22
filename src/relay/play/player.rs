@@ -178,7 +178,7 @@ impl Player<'_> {
         let (version, names) = playback.names();
         self.show_names(version, &names);
         // A score counted otherwise: the clients have the one from before until a full update.
-        if self.cur.as_mut().is_some_and(|c| c.dec.set_score_add(playback.score())) {
+        if self.cur.as_mut().is_some_and(|c| c.dec.scene_mut().set_score_add(playback.score())) {
             self.rekey();
         }
     }
@@ -288,7 +288,7 @@ impl Player<'_> {
             return ControlFlow::Continue(());
         }
         self.frame_waited = None;
-        let key = if self.paused { c.dec.keyframe_held(next) } else { c.dec.keyframe(next) };
+        let key = if self.paused { c.dec.scene().keyframe_held(next) } else { c.dec.scene().keyframe(next) };
         let Some((tick, key)) = key else {
             if c.started {
                 self.problem = Some("this demo cannot be followed from a full update here".into());
@@ -298,7 +298,7 @@ impl Player<'_> {
         // No frames since: a client acks the full update first, and gets the next frame from it.
         let mut since = Vec::new();
         // The round's end shown, or hidden, as at this moment.
-        since.extend(c.dec.round_event());
+        since.extend(c.dec.scene().round_event());
         // Its clock may have gone back: the timers, waiting for a time it passed, redraw.
         since.extend(c.dec.writer().update_timer());
         let mut hub = self.relay.hub();

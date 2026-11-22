@@ -1,0 +1,251 @@
+//! What a relay keeps of the stream for its clients, apart from parsing it: every entity as the
+//! frames left it (`world`), the string tables, and the last event that decides the round's
+//! panel. A [`View`] reads it to write full updates and deltas; a [`Stage`] changes what the
+//! clients are shown on top of the stream (the relay's camera, a room's score).
+
+use bitbuffer::{BitReadBuffer, BitReadStream, LittleEndian};
+use tf_demo_parser::ParserState;
+
+use super::decoder::{Baselines, Decoder, Entities, entities_in};
+use super::extract::Extractor;
+use super::tables::{Placed, Tables};
+use super::world::{Pose, World};
+use super::writer::Writer;
+use crate::net::bits::{BitBuf, BitWriter};
+
+/// The relay's side of a decoder.
+#[derive(Default)]
+pub(crate) struct Scene {
+    /// Kept only when asked for: what a full update is written from.
+    pub(super) world: Option<World>,
+    /// The string tables, as far as a jump back needs them (see `tables`).
+    pub(super) tables: Tables,
+    /// The last round start, win panel or game over event (see [`View::round_event`]).
+    pub(super) round: Option<BitBuf>,
+}
+
+/// The scene as it is at the decoder's last frame, to read.
+pub(crate) struct View<'a> {
+    scene: &'a Scene,
+    state: &'a ParserState,
+    extractor: &'a Extractor,
+}
+
+/// The scene, to change.
+pub(crate) struct Stage<'a> {
+    scene: &'a mut Scene,
+    state: &'a ParserState,
+    /// How many players the server has room for.
+    slots: u8,
+}
+
+impl Decoder {
+    pub(crate) fn scene(&self) -> View<'_> {
+        View { scene: &self.scene, state: self.handler.get_parser_state(), extractor: self.extractor() }
+    }
+
+    pub(crate) fn scene_mut(&mut self) -> Stage<'_> {
+        let slots = self.extractor().max_players();
+        Stage { scene: &mut self.scene, state: self.handler.get_parser_state(), slots }
+    }
+}
+
+/// The server tick of the frame the entities in message stream `data` build on, if a delta.
+fn delta_base(state: &ParserState, data: &[u8]) -> Option<u32> {
+    match entities_in(state, data) {
+        Some(Entities::Delta(base)) => Some(base),
+        _ => None,
+    }
+}
+
+impl View<'_> {
+    /// `net_Tick` and every entity in full, of the frame that `next` (the next frame's message
+    /// stream, if known) builds on, or the latest when it is a full update or not known, with that
+    /// frame's server tick: a client that starts from it, and gets the frames after it, can
+    /// follow. None without [`Decoder::keep_world`], before a full update came, after a frame may
+    /// have been missed, or when the frame `next` builds on is not kept.
+    pub(crate) fn keyframe(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
+        let base = next.and_then(|d| delta_base(self.state, d));
+        self.scene.world.as_ref()?.full_update(self.state, base, None)
+    }
+
+    /// [`Decoder::keyframe`] with every running round timer held where it is, for clients whose
+    /// clock runs on while no frames come (a room paused).
+    pub(crate) fn keyframe_held(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
+        let base = next.and_then(|d| delta_base(self.state, d));
+        self.scene.world.as_ref()?.full_update(self.state, base, Some(self.extractor.interval()))
+    }
+
+    /// The entities of the last frame decoded as a delta from frame `from`, the one message: for a
+    /// client that acked `from`. None when either is not kept, or it does not encode.
+    pub(crate) fn entities_from(&self, from: u32) -> Option<BitBuf> {
+        self.scene.world.as_ref()?.delta_message(self.state, from, self.extractor.server_tick)
+    }
+
+    /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
+    /// tick): those after it, each as played if the client still has the frame it builds on, else
+    /// (from a live server, a frame a few ticks back) rewritten as a delta from `key`, or failing
+    /// that the last it was sent. A game client keeps only frames with entities, and drops those
+    /// older than the base of each delta it takes.
+    pub(crate) fn catch_up(&self, key: u32, recent: &[(u32, BitBuf)]) -> Vec<BitBuf> {
+        let Some(world) = &self.scene.world else { return Vec::new() };
+        let state = self.state;
+        let mut have = vec![key];
+        let mut out = Vec::new();
+        let own = world.own_baselines();
+        for (tick, bits) in recent.iter().filter(|(t, _)| *t > key) {
+            match entities_in(self.state, bits.bytes()) {
+                // No entities in it: nothing builds on it.
+                None => out.push(bits.clone()),
+                Some(Entities::Delta(base)) if have.contains(&base) && !own => {
+                    out.push(bits.clone());
+                    have.retain(|t| *t >= base);
+                }
+                _ => {
+                    // From the keyframe's frame while the client has it: the stream's next frames
+                    // may still build on that one.
+                    let from = if have.contains(&key) { key } else { have.last().copied().unwrap_or(key) };
+                    match world.delta(state, from, *tick) {
+                        Some(d) => {
+                            out.push(d);
+                            have.retain(|t| *t >= from);
+                        }
+                        None if own => {}
+                        None => out.push(bits.clone()),
+                    }
+                }
+            }
+            if world.has(*tick) && !have.contains(tick) {
+                have.push(*tick);
+            }
+        }
+        out
+    }
+
+    /// The last round start, win panel or game over event: what a client that skipped there
+    /// (a jump, or one just in) is sent after a full update, so its HUD shows the round's end, or
+    /// hides it, as the game does. Before the demo's first, a round start written here: one jumped
+    /// back there from a win panel has it hidden.
+    pub(crate) fn round_event(&self) -> Option<BitBuf> {
+        use tf_demo_parser::demo::gameevent_gen::{GameEvent, TeamPlayRoundStartEvent};
+        self.scene.round.clone().or_else(|| {
+            Writer { state: self.state, extractor: self.extractor, tables: &self.scene.tables }
+                .game_event(GameEvent::TeamPlayRoundStart(TeamPlayRoundStartEvent { full_reset: false }))
+        })
+    }
+
+    /// Whether the last frame changed the relay's camera: its entities are for no client then.
+    pub(crate) fn shot_touched(&self) -> bool {
+        self.scene.world.as_ref().is_some_and(World::shot_touched)
+    }
+
+    /// The player who watches for the clients where the relay has the camera, once there.
+    pub(crate) fn cameraman(&self) -> Option<u32> {
+        self.scene.world.as_ref()?.cameraman()
+    }
+
+    /// The player slots nobody is in, highest first: not the cameraman's.
+    pub(crate) fn spare_slots(&self) -> Vec<u8> {
+        let man = self.cameraman();
+        self.extractor.spare_slots().into_iter().filter(|s| man != Some(u32::from(*s) + 1)).collect()
+    }
+
+    /// A demo's string tables as its recording started (`data`, its packet of them), as a message
+    /// stream of what they have over this decoder's (see [`super::tables::Tables::up_to`]); none when
+    /// nothing, or it does not parse.
+    pub(crate) fn snapshot_stream(&self, data: &[u8]) -> Option<BitBuf> {
+        use tf_demo_parser::demo::packet::stringtable::StringTable;
+        let mut s = BitReadStream::new(BitReadBuffer::new(data, LittleEndian));
+        let count: u8 = s.read().ok()?;
+        let snapshot: Vec<StringTable<'_>> = s.read_sized(usize::from(count)).ok()?;
+        let msgs = self.scene.tables.up_to(&snapshot, self.state);
+        if msgs.is_empty() {
+            return None;
+        }
+        let mut w = BitWriter::new();
+        for m in &msgs {
+            w.write_buf(m);
+        }
+        Some(w.finish())
+    }
+
+    /// Whether the stream's entity messages are for no client as they are (see `world`).
+    pub(crate) fn own_baselines(&self) -> bool {
+        self.scene.world.as_ref().is_some_and(World::own_baselines)
+    }
+
+    /// The stream's own baselines, for a decoder that goes on from here.
+    pub(crate) fn baselines(&self) -> Option<Baselines> {
+        self.own_baselines().then(|| Baselines(Box::new(self.state.instance_baselines.clone())))
+    }
+
+    /// How many `userinfo` and `instancebaseline` entries were rewritten so far (see `tables`).
+    pub(crate) fn tables_rewritten(&self) -> u32 {
+        self.scene.tables.rewritten()
+    }
+
+    /// Whether the last frame set the score of a team that has something added.
+    pub(crate) fn score_touched(&self) -> bool {
+        self.scene.world.as_ref().is_some_and(World::score_touched)
+    }
+
+    /// A message naming the players in the match as `names` has them (see [`Tables::named`]).
+    pub(crate) fn named(&self, names: &std::collections::BTreeMap<String, Option<String>>) -> Option<BitBuf> {
+        self.scene.tables.named(names, self.state)
+    }
+
+    /// Messages that set a client with the string tables of `later` (a decoder further on in the
+    /// same demo) back to this one's, as far as they matter; None if they cannot be written.
+    pub(crate) fn set_tables_back(&self, later: &Decoder) -> Option<Vec<BitBuf>> {
+        self.scene.tables.set_back(&later.scene.tables, self.state)
+    }
+
+    /// Baseline placement.
+    pub(crate) fn placed(&self) -> Placed {
+        self.scene.tables.placed()
+    }
+}
+
+impl Stage<'_> {
+    /// Sets the last round event, for a decoder that starts from a checkpoint.
+    pub(crate) fn set_round_event(&mut self, event: Option<BitBuf>) {
+        self.scene.round = event;
+    }
+
+    /// The clients' camera from the next frame on: at `pose`, or (none) the director's again.
+    pub(crate) fn set_shot(&mut self, pose: Option<Pose>) {
+        let (model, slots) = (self.scene.tables.studio(), self.slots);
+        if let Some(w) = &mut self.scene.world {
+            w.set_shot(pose, model, slots);
+        }
+    }
+
+    /// The player slots (from 0) the cameraman is not to take: a voice's.
+    pub(crate) fn keep_from_shot(&mut self, slots: &[u8]) {
+        if let Some(w) = &mut self.scene.world {
+            w.keep_from_shot(slots);
+        }
+    }
+
+    /// The same in the frames kept, for a room paused. Whether any changed: a full update then.
+    pub(crate) fn reshoot(&mut self) -> bool {
+        let state = self.state;
+        self.scene.world.as_mut().is_some_and(|w| w.reshoot(state))
+    }
+
+    /// Keeps every entity's props from the next full update on, for [`Decoder::keyframe`].
+    pub(crate) fn keep_world(&mut self) {
+        self.scene.world.get_or_insert_with(World::default);
+    }
+
+    /// Adds `add` (BLU's, RED's) to the teams' scores in what is written for a client (see
+    /// `World::set_score_add`); whether that changed.
+    pub(crate) fn set_score_add(&mut self, add: [i64; 2]) -> bool {
+        self.scene.world.as_mut().is_some_and(|w| w.set_score_add(add))
+    }
+
+    /// Placement for streams already placed.
+    pub(crate) fn set_placed(&mut self, placed: Placed) {
+        self.scene.tables.set_placed(placed);
+    }
+}

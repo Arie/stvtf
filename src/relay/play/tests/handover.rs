@@ -152,7 +152,7 @@ fn going_into_a_demo_played_before_starts_from_its_checkpoints() {
         assert_eq!(c.tick(), at);
         let backlog: Vec<BitBuf> = relay.hub().backlog.entries().map(|e| e.bits.clone()).collect();
         let whole = Cursor::open_detached(&next).unwrap();
-        (at, c.tables.len(), backlog, c.dec.set_tables_back(&whole.dec).map(|m| m.len()))
+        (at, c.tables.len(), backlog, c.dec.scene().set_tables_back(&whole.dec).map(|m| m.len()))
     };
     let (plain, checkpointed) = (went(false), went(true));
     assert!(plain.1 > 0 && plain == checkpointed);

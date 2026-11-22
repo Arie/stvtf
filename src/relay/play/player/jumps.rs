@@ -30,7 +30,7 @@ impl Player<'_> {
         }
         // The clients keep the models loaded since.
         self.models = self.models.with(&c.dec);
-        let rewritten = c.dec.tables_rewritten();
+        let rewritten = c.dec.scene().tables_rewritten();
         let took = Instant::now();
         // From the last checkpoint before it, or else the start.
         let mark = self.index.as_ref().and_then(|i| i.before(target));
@@ -42,11 +42,11 @@ impl Player<'_> {
         // The clients had the string table changes up to there.
         self.dry = skim(&mut again, None, target).1;
         tracing::debug!("relay: decoded back to {target} in {} ms", took.elapsed().as_millis());
-        if again.dec.tables_rewritten() < rewritten {
+        if again.dec.scene().tables_rewritten() < rewritten {
             // The clients' tables are set back to these, or failing that, they sign on again.
             // The stream's changes after here are sent again when playback comes to them.
             let later = owned(c.tables.get(again.tables.len()..).unwrap_or_default());
-            if let Some(msgs) = again.dec.set_tables_back(&c.dec) {
+            if let Some(msgs) = again.dec.scene().set_tables_back(&c.dec) {
                 tracing::debug!("relay: string tables set back with {} messages", msgs.len());
                 self.relay.hub().set_tables_back(&later, &msgs);
             } else {
@@ -79,7 +79,7 @@ impl Player<'_> {
             let passed = m.tables();
             self.relay.hub().add_table_changes(passed.get(c.tables.len()..).unwrap_or_default());
             *c = Cursor::restore(&want.demo, m)?;
-            c.dec.set_shot(self.shot.pose);
+            c.dec.scene_mut().set_shot(self.shot.pose);
         }
         let (decoded, dry) = skim(c, Some(&self.relay.hub), target);
         let decoded = decoded + usize::from(mark.is_some());

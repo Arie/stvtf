@@ -17,6 +17,7 @@ mod extract;
 mod modes;
 mod notes;
 mod props;
+mod scene;
 mod send_tables;
 mod tables;
 mod voice_out;

@@ -142,10 +142,10 @@ impl Cursor {
     /// builds on.
     fn checkpoint(&mut self) -> Option<Checkpoint> {
         self.peek();
-        let (key_tick, key) = self.dec.keyframe(Some(self.next_frame()?))?;
+        let (key_tick, key) = self.dec.scene().keyframe(Some(self.next_frame()?))?;
         let recent: &[(u32, BitBuf)] = self.recent.make_contiguous();
         let ticks = recent.iter().map(|(t, _)| *t).filter(|t| *t > key_tick);
-        let since = ticks.zip(self.dec.catch_up(key_tick, recent)).collect();
+        let since = ticks.zip(self.dec.scene().catch_up(key_tick, recent)).collect();
         Some(Checkpoint {
             tick: self.dec.server_tick(),
             pos: self.next_pos,
@@ -155,9 +155,9 @@ impl Cursor {
             first: self.first,
             offset: self.offset,
             paused: self.paused,
-            round: self.dec.round_event(),
-            placed: self.dec.placed(),
-            baselines: self.dec.baselines(),
+            round: self.dec.scene().round_event(),
+            placed: self.dec.scene().placed(),
+            baselines: self.dec.scene().baselines(),
         })
     }
 
@@ -172,8 +172,8 @@ impl Cursor {
             c.dec.feed(f.bytes(), f.nbits());
         }
         c.dec.take_output();
-        c.dec.set_round_event(mark.round.clone());
-        c.dec.set_placed(mark.placed.clone());
+        c.dec.scene_mut().set_round_event(mark.round.clone());
+        c.dec.scene_mut().set_placed(mark.placed.clone());
         // After the frames written here, which use none.
         if let Some(b) = &mark.baselines {
             c.dec.set_baselines(b);

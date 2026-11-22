@@ -116,7 +116,7 @@ impl ModelsSent {
     /// These, with the models `dec`'s tables have: the clients were sent them too (see
     /// `Tables::laser`).
     pub(crate) fn with(self, dec: &Decoder) -> ModelsSent {
-        self.with_tables(&dec.tables)
+        self.with_tables(&dec.scene.tables)
     }
 }
 

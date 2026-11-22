@@ -79,7 +79,7 @@ impl Cursor {
             bail!("cannot play a demo of a TF2 build with other class tables to a game client");
         }
         let mut dec = Decoder::new(&tables, 0.0)?;
-        dec.keep_world();
+        dec.scene_mut().keep_world();
         let server = feed_signon(&mut dec, signon, snapshot.as_deref(), hub);
         Ok(Cursor {
             path: path.to_owned(),
@@ -238,7 +238,7 @@ fn feed_signon(
         h.upstream_stream(&bits, Part::Reliable, &life);
         h.upstream_flush();
     }
-    if let Some(bits) = snapshot.and_then(|d| dec.snapshot_stream(d)) {
+    if let Some(bits) = snapshot.and_then(|d| dec.scene().snapshot_stream(d)) {
         let life = dec.feed(bits.bytes(), bits.nbits());
         if let Some(hub) = hub {
             let mut h = lock(hub);

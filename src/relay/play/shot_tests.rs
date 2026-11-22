@@ -176,7 +176,7 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
         play(&mut p, &relay, &mut want, 60, &mut client);
         client.take(&b);
         let played = &p.cur.as_ref().unwrap().dec;
-        let man = played.cameraman().expect("a cameraman");
+        let man = played.scene().cameraman().expect("a cameraman");
         assert_eq!(client.fulls, 1, "{}", demo.display());
         assert!(client.deltas >= 30, "{} deltas", client.deltas);
         client.has_what(played);
@@ -196,7 +196,7 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
             client.take(&b);
         }
         play(&mut p, &relay, &mut want, 10, &mut client);
-        assert!(!p.cur.as_ref().unwrap().dec.shot_touched());
+        assert!(!p.cur.as_ref().unwrap().dec.scene().shot_touched());
         client.take(&b);
         assert!(began.elapsed() >= Duration::from_millis(400));
         assert_eq!(client.spots.last(), Some(&([800, -600, 1200], 42, 143)));
@@ -230,7 +230,7 @@ fn a_camera_on_a_path_is_a_prop_the_clients_cameraman_watches_from() {
         want.camera = None;
         play(&mut p, &relay, &mut want, 20, &mut client);
         client.take(&b);
-        assert!(p.cur.as_ref().unwrap().dec.cameraman().is_none());
+        assert!(p.cur.as_ref().unwrap().dec.scene().cameraman().is_none());
         client.has_what(&p.cur.as_ref().unwrap().dec);
         assert_eq!(client.chases, 1);
     }

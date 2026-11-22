@@ -18,7 +18,7 @@ impl Player<'_> {
         let Some(c) = &mut self.cur else { return };
         let base = c.next_frame().and_then(|d| c.dec.entities(d));
         // With baselines of its own every frame is written anew, from what each client acked.
-        let floor = if c.dec.own_baselines() { None } else { self.floor };
+        let floor = if c.dec.scene().own_baselines() { None } else { self.floor };
         if !follows(floor, base) {
             tracing::debug!(
                 "relay: a frame the clients cannot follow, from {base:?}, they have from {:?}: a full update instead",
@@ -49,9 +49,11 @@ impl Player<'_> {
             // From each frame a client acked: it has that one for sure.
             // So is a team's score that the room counts otherwise, and a camera of the relay's that
             // moved: the game's own is for nobody.
-            let rewritten = c.dec.own_baselines() || c.dec.score_touched() || c.dec.shot_touched();
+            let rewritten =
+                c.dec.scene().own_baselines() || c.dec.scene().score_touched() || c.dec.scene().shot_touched();
             let from = hub.acked().into_iter().filter(|a| rewritten || base.is_some_and(|b| b != *a));
-            let from = from.filter_map(|a| Some((a, with_entities(&bits, &life, &c.dec.entities_from(a)?)))).collect();
+            let from =
+                from.filter_map(|a| Some((a, with_entities(&bits, &life, &c.dec.scene().entities_from(a)?)))).collect();
             let stripped = without_entities(&bits, &life);
             hub.play(Played { tick: c.dec.server_tick(), base, from, bare: stripped, rewritten });
         }

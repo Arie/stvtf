@@ -109,7 +109,7 @@ fn loses_datagrams(camera: Option<&super::super::Camera>) {
         }
         assert!(client.deltas > 150, "losing every {lose}th: {} full updates, {} deltas", client.fulls, client.deltas);
         assert!(client.fulls < 40, "not a full update for every loss: {}", client.fulls);
-        let man = p.cur.as_ref().unwrap().dec.cameraman();
+        let man = p.cur.as_ref().unwrap().dec.scene().cameraman();
         assert_eq!(man.is_some(), camera.is_some());
         if let Some(own) = &client.own {
             assert!(own.dec.world_dump().contains_key(&man.unwrap()), "the client has the cameraman");

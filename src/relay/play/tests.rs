@@ -162,7 +162,7 @@ fn client_tables_are_the_demos(relay: &Relay, p: &Player<'_>, signon: usize) -> 
         let m = &hub.backlog.get(i).unwrap().bits;
         client.dec.feed(m.bytes(), m.nbits());
     }
-    c.dec.set_tables_back(&client.dec).filter(Vec::is_empty).map(drop)
+    c.dec.scene().set_tables_back(&client.dec).filter(Vec::is_empty).map(drop)
 }
 
 /// A game client's `table` from the backlog at `signon`, if it differs from the demo's.

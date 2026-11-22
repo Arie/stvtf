@@ -25,27 +25,27 @@ pub(super) fn tests_tables() -> Tables {
 
 impl Decoder {
     pub(crate) fn player_for_tests(&self) -> Option<u32> {
-        self.world.as_ref()?.player()
+        self.scene.world.as_ref()?.player()
     }
 
     /// Whether frame `tick` is kept.
     pub(crate) fn has_frame_for_tests(&self, tick: u32) -> bool {
-        self.world.as_ref().is_some_and(|w| w.has(tick))
+        self.scene.world.as_ref().is_some_and(|w| w.has(tick))
     }
 
     /// A full update of frame `at`, kept.
     pub(crate) fn keyframe_at_for_tests(&self, at: u32) -> Option<BitBuf> {
-        Some(self.world.as_ref()?.full_update(self.handler.get_parser_state(), Some(at), None)?.1)
+        Some(self.scene.world.as_ref()?.full_update(self.handler.get_parser_state(), Some(at), None)?.1)
     }
 
     /// Frame `to` as a delta from frame `from`, both kept.
     pub(crate) fn delta_for_tests(&self, from: u32, to: u32) -> Option<BitBuf> {
-        self.world.as_ref()?.delta(self.handler.get_parser_state(), from, to)
+        self.scene.world.as_ref()?.delta(self.handler.get_parser_state(), from, to)
     }
 
     /// Every entity as the world has it.
     pub(crate) fn world_dump(&self) -> std::collections::BTreeMap<u32, super::world::Dumped> {
-        self.world.as_ref().map_or_default(super::world::World::dump)
+        self.scene.world.as_ref().map_or_default(super::world::World::dump)
     }
 
     /// [`Decoder::world_dump`] to compare two decoders, one started from a full update: without
@@ -73,11 +73,11 @@ impl Decoder {
 
     /// The entities the keyframe would hold.
     pub(crate) fn world_len(&self) -> usize {
-        self.world.as_ref().map_or(0, super::world::World::len)
+        self.scene.world.as_ref().map_or(0, super::world::World::len)
     }
 
     pub(crate) fn table_names_for_tests(&self, name: &str) -> Option<std::collections::BTreeMap<u16, Option<String>>> {
-        self.tables.names_for_tests(name)
+        self.scene.tables.names_for_tests(name)
     }
 
     pub(crate) fn parser_state_for_tests(&self) -> &ParserState {
@@ -85,6 +85,6 @@ impl Decoder {
     }
 
     pub(crate) fn rig_for_tests(&self) -> Option<(u32, u32)> {
-        self.world.as_ref()?.rig()
+        self.scene.world.as_ref()?.rig()
     }
 }

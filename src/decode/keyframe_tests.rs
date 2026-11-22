@@ -76,8 +76,8 @@ fn follows_from_a_keyframe(demo: &str, at: usize, of: usize) {
     {
         let (tables, signon, frames) = packets(demo);
         let mut whole = Decoder::new(&tables, 1000.0).unwrap();
-        whole.keep_world();
-        assert!(whole.keyframe(None).is_none(), "{demo}: nothing before the first full update");
+        whole.scene_mut().keep_world();
+        assert!(whole.scene().keyframe(None).is_none(), "{demo}: nothing before the first full update");
         for s in &signon {
             whole.feed(s, s.len() * 8);
         }
@@ -95,12 +95,12 @@ fn follows_from_a_keyframe(demo: &str, at: usize, of: usize) {
             }
         }
         // Of the frame the next builds on.
-        let (key_tick, key) = whole.keyframe(Some(&frames[half])).expect("a keyframe");
+        let (key_tick, key) = whole.scene().keyframe(Some(&frames[half])).expect("a keyframe");
         assert!(whole.world_len() > 50, "{demo}: {} entities", whole.world_len());
         whole.take_output();
 
         let mut late = Decoder::new(&tables, 1000.0).unwrap();
-        late.keep_world();
+        late.scene_mut().keep_world();
         for s in &signon {
             late.feed(s, s.len() * 8);
         }
@@ -112,13 +112,13 @@ fn follows_from_a_keyframe(demo: &str, at: usize, of: usize) {
         // Then the frames played since the one it is of, as the relay sends them with it.
         let recent: Vec<(u32, BitBuf)> =
             frames[..half].iter().zip(&ticks).map(|(f, t)| (*t, BitBuf::from_bytes(f.clone()))).collect();
-        for f in whole.catch_up(key_tick, &recent) {
+        for f in whole.scene().catch_up(key_tick, &recent) {
             let life = late.feed(f.bytes(), f.nbits());
             assert!(!life.lost_frame, "{demo}: a frame sent with the keyframe builds on one the client lacks");
         }
         // A demo's next frame builds on the last: the keyframe is of where `whole` is. (A live
         // session's builds on one a few ticks back, which the keyframe is of instead.)
-        if whole.delta_base(&frames[half]) == Some(whole.server_tick()) {
+        if matches!(whole.entities(&frames[half]), Some(super::Entities::Delta(base)) if base == whole.server_tick()) {
             assert_same_world(&whole, &late, &format!("{demo} at the keyframe"));
         }
         late.take_output();
@@ -162,9 +162,9 @@ fn a_score_counted_otherwise_reaches_a_client_in_full_updates_and_as_the_game_ch
     let demo = crate::testing::fixture("pl_upward.dem").display().to_string();
     let (tables, signon, frames) = packets(&demo);
     let mut whole = Decoder::new(&tables, 1000.0).unwrap();
-    whole.keep_world();
+    whole.scene_mut().keep_world();
     let mut late = Decoder::new(&tables, 1000.0).unwrap();
-    late.keep_world();
+    late.scene_mut().keep_world();
     for s in &signon {
         whole.feed(s, s.len() * 8);
         late.feed(s, s.len() * 8);
@@ -179,10 +179,10 @@ fn a_score_counted_otherwise_reaches_a_client_in_full_updates_and_as_the_game_ch
             late.feed(t.bytes(), t.nbits());
         }
     }
-    assert!(!whole.score_touched(), "nothing added yet");
-    assert!(whole.set_score_add([2, 1]));
-    assert!(!whole.set_score_add([2, 1]), "the same again changes nothing");
-    let (_, key) = whole.keyframe(Some(&frames[half])).expect("a keyframe");
+    assert!(!whole.scene().score_touched(), "nothing added yet");
+    assert!(whole.scene_mut().set_score_add([2, 1]));
+    assert!(!whole.scene_mut().set_score_add([2, 1]), "the same again changes nothing");
+    let (_, key) = whole.scene().keyframe(Some(&frames[half])).expect("a keyframe");
     assert!(late.feed(key.bytes(), key.nbits()).full_update);
     whole.take_output();
     late.take_output();
@@ -191,7 +191,7 @@ fn a_score_counted_otherwise_reaches_a_client_in_full_updates_and_as_the_game_ch
         let before = whole.server_tick();
         whole.feed(f, f.len() * 8);
         // The frame of a round won: written for the client, from the frame before.
-        let life = if whole.score_touched() {
+        let life = if whole.scene().score_touched() {
             written += 1;
             let delta = whole.delta_for_tests(before, whole.server_tick()).expect("the frame written anew");
             late.feed(delta.bytes(), delta.nbits())

@@ -152,7 +152,7 @@ impl Player<'_> {
         {
             next = there;
         }
-        next.dec.set_shot(pose);
+        next.dec.scene_mut().set_shot(pose);
         skim(&mut next, None, at);
         if at < begins || laser_there(&next).is_none() {
             let why =
