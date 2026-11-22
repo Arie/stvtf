@@ -8,12 +8,10 @@ const PAST: &[(&str, usize)] = &[
     ("src/decode/decoder.rs", 628),
     ("src/decode/detail.rs", 598),
     ("src/decode/extract/entities.rs", 561),
-    ("src/decode/extract/tests.rs", 667),
     ("src/net/handshake.rs", 636),
     ("src/output/events.rs", 557),
     ("src/relay/hub.rs", 510),
     ("src/relay/play/player.rs", 562),
-    ("src/relay/tests.rs", 644),
     ("src/session.rs", 668),
 ];
 
