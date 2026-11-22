@@ -14,11 +14,13 @@ use super::extract::Extractor;
 #[cfg(test)]
 use super::props_index_for_tests;
 pub(crate) use super::tables::Placed;
-use super::world::Pose;
 use crate::Result;
 use crate::net::bits::{BitBuf, BitReader, BitWriter};
-use crate::net::messages::{SVC_GAMEEVENT, Signon, TYPE_BITS};
+use crate::net::messages::{Signon, TYPE_BITS};
 use crate::output::Line;
+
+mod director;
+mod frames;
 
 /// What the session needs to know from the streams it just fed.
 #[derive(Clone, Debug, Default)]
@@ -126,29 +128,6 @@ impl Decoder {
         self.world.get_or_insert_with(super::world::World::default);
     }
 
-    /// `net_Tick` and every entity in full, of the frame that `next` (the next frame's message
-    /// stream, if known) builds on, or the latest when it is a full update or not known, with that
-    /// frame's server tick: a client that starts from it, and gets the frames after it, can
-    /// follow. None without [`Decoder::keep_world`], before a full update came, after a frame may
-    /// have been missed, or when the frame `next` builds on is not kept.
-    pub(crate) fn keyframe(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
-        let base = next.and_then(|d| self.delta_base(d));
-        self.world.as_ref()?.full_update(self.handler.get_parser_state(), base, None)
-    }
-
-    /// [`Decoder::keyframe`] with every running round timer held where it is, for clients whose
-    /// clock runs on while no frames come (a room paused).
-    pub(crate) fn keyframe_held(&self, next: Option<&[u8]>) -> Option<(u32, BitBuf)> {
-        let base = next.and_then(|d| self.delta_base(d));
-        self.world.as_ref()?.full_update(self.handler.get_parser_state(), base, Some(self.tick_interval()))
-    }
-
-    /// The entities of the last frame decoded as a delta from frame `from`, the one message: for a
-    /// client that acked `from`. None when either is not kept, or it does not encode.
-    pub(crate) fn entities_from(&self, from: u32) -> Option<BitBuf> {
-        self.world.as_ref()?.delta_message(self.handler.get_parser_state(), from, self.server_tick())
-    }
-
     /// A demo's string tables as its recording started (`data`, its packet of them), as a message
     /// stream of what they have over this decoder's (see [`super::tables::Tables::up_to`]); none when
     /// nothing, or it does not parse.
@@ -204,46 +183,6 @@ impl Decoder {
         if let Some(w) = &mut self.world {
             w.set_own_baselines();
         }
-    }
-
-    /// The frames to send after a keyframe of frame `key`, from `recent` (frames played, by server
-    /// tick): those after it, each as played if the client still has the frame it builds on, else
-    /// (from a live server, a frame a few ticks back) rewritten as a delta from `key`, or failing
-    /// that the last it was sent. A game client keeps only frames with entities, and drops those
-    /// older than the base of each delta it takes.
-    pub(crate) fn catch_up(&self, key: u32, recent: &[(u32, BitBuf)]) -> Vec<BitBuf> {
-        let Some(world) = &self.world else { return Vec::new() };
-        let state = self.handler.get_parser_state();
-        let mut have = vec![key];
-        let mut out = Vec::new();
-        let own = world.own_baselines();
-        for (tick, bits) in recent.iter().filter(|(t, _)| *t > key) {
-            match self.entities(bits.bytes()) {
-                // No entities in it: nothing builds on it.
-                None => out.push(bits.clone()),
-                Some(Entities::Delta(base)) if have.contains(&base) && !own => {
-                    out.push(bits.clone());
-                    have.retain(|t| *t >= base);
-                }
-                _ => {
-                    // From the keyframe's frame while the client has it: the stream's next frames
-                    // may still build on that one.
-                    let from = if have.contains(&key) { key } else { have.last().copied().unwrap_or(key) };
-                    match world.delta(state, from, *tick) {
-                        Some(d) => {
-                            out.push(d);
-                            have.retain(|t| *t >= from);
-                        }
-                        None if own => {}
-                        None => out.push(bits.clone()),
-                    }
-                }
-            }
-            if world.has(*tick) && !have.contains(tick) {
-                have.push(*tick);
-            }
-        }
-        out
     }
 
     /// The server tick message stream `data` is of (its `net_Tick`), read, not decoded into
@@ -503,146 +442,6 @@ impl Decoder {
                 self.round = Some(BitReader::slice(data, span.bits.clone()));
             }
         }
-    }
-
-    /// The last round start, win panel or game over event: what a client that skipped there
-    /// (a jump, or one just in) is sent after a full update, so its HUD shows the round's end, or
-    /// hides it, as the game does. Before the demo's first, a round start written here: one jumped
-    /// back there from a win panel has it hidden.
-    pub(crate) fn round_event(&self) -> Option<BitBuf> {
-        use tf_demo_parser::demo::gameevent_gen::{GameEvent, TeamPlayRoundStartEvent};
-        self.round
-            .clone()
-            .or_else(|| self.game_event(GameEvent::TeamPlayRoundStart(TeamPlayRoundStartEvent { full_reset: false })))
-    }
-
-    /// Sets the last round event, for a decoder that starts from a checkpoint.
-    pub(crate) fn set_round_event(&mut self, event: Option<BitBuf>) {
-        self.round = event;
-    }
-
-    /// The entity of user id `user`, while they are in the match.
-    pub(crate) fn player_entity(&self, user: u16) -> Option<u32> {
-        Some(self.extractor().snapshot().players.iter().find(|p| p.id.0 == user)?.ent)
-    }
-
-    /// The user id and entity of every player in the match and alive.
-    pub(crate) fn living_players(&self) -> Vec<(u16, u32)> {
-        self.extractor().snapshot().players.iter().filter(|p| p.alive).map(|p| (p.id.0, p.ent)).collect()
-    }
-
-    /// `teamplay_update_timer`: the HUD's timers redraw, as from a time the clock went back past
-    /// (a jump back, playback going on after a pause), and nothing else does (`ResetHUD` would
-    /// blank the medic's charge meter until the charge changes).
-    pub(crate) fn update_timer(&self) -> Option<BitBuf> {
-        use tf_demo_parser::demo::gameevent_gen::{GameEvent, TeamPlayUpdateTimerEvent};
-        self.game_event(GameEvent::TeamPlayUpdateTimer(TeamPlayUpdateTimerEvent {}))
-    }
-
-    /// `hltv_chase` into the eyes of user id `player`, for clients on `spec_autodirector 1`.
-    pub(crate) fn hltv_chase(&self, player: u16) -> Option<BitBuf> {
-        use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVChaseEvent};
-        let ent = self.player_entity(player)?;
-        self.game_event(GameEvent::HLTVChase(HLTVChaseEvent {
-            target_1: u16::try_from(ent).ok()?,
-            target_2: 0,
-            distance: 96,
-            theta: 0,
-            phi: 0,
-            inertia: 0,
-            in_eye: 1,
-        }))
-    }
-
-    /// `event` as an `svc_GameEvent`, if the demo's event list has its kind.
-    pub(super) fn game_event(&self, event: tf_demo_parser::demo::gameevent_gen::GameEvent) -> Option<BitBuf> {
-        use tf_demo_parser::demo::message::gameevent::GameEventMessage;
-        let state = self.handler.get_parser_state();
-        let event_type = event.event_type();
-        let def = state.event_definitions.iter().find(|d| d.event_type == event_type)?;
-        encode_message(SVC_GAMEEVENT, &GameEventMessage { event_type_id: def.id, event_type, event }, state)
-    }
-
-    /// `hltv_fixed` at `pos` looking along `pitch` and `yaw` (degrees), for the same clients.
-    /// The game takes the coordinates and angles as signed, and no field of view but its own.
-    #[allow(clippy::cast_sign_loss)]
-    pub(crate) fn hltv_fixed(&self, pos: [i32; 3], pitch: i16, yaw: i16) -> Option<BitBuf> {
-        use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVFixedEvent};
-        self.game_event(GameEvent::HLTVFixed(HLTVFixedEvent {
-            pos_x: pos[0] as u32,
-            pos_y: pos[1] as u32,
-            pos_z: pos[2] as u32,
-            theta: pitch as u16,
-            phi: yaw as u16,
-            offset: 0,
-            fov: 90.0,
-            target: 0,
-        }))
-    }
-
-    /// `hltv_cameraman`: the same clients see what player `index` does.
-    pub(crate) fn hltv_cameraman(&self, index: u32) -> Option<BitBuf> {
-        use tf_demo_parser::demo::gameevent_gen::{GameEvent, HLTVCameramanEvent};
-        self.game_event(GameEvent::HLTVCameraman(HLTVCameramanEvent { index: u16::try_from(index).ok()? }))
-    }
-
-    /// The clients' camera from the next frame on: at `pose`, or (none) the director's again.
-    pub(crate) fn set_shot(&mut self, pose: Option<Pose>) {
-        let (model, slots) = (self.tables.studio(), self.extractor().max_players());
-        if let Some(w) = &mut self.world {
-            w.set_shot(pose, model, slots);
-        }
-    }
-
-    /// The player slots (from 0) the cameraman is not to take: a voice's.
-    pub(crate) fn keep_from_shot(&mut self, slots: &[u8]) {
-        if let Some(w) = &mut self.world {
-            w.keep_from_shot(slots);
-        }
-    }
-
-    /// The same in the frames kept, for a room paused. Whether any changed: a full update then.
-    pub(crate) fn reshoot(&mut self) -> bool {
-        let state = self.handler.get_parser_state();
-        self.world.as_mut().is_some_and(|w| w.reshoot(state))
-    }
-
-    /// Whether the last frame changed the relay's camera: its entities are for no client then.
-    pub(crate) fn shot_touched(&self) -> bool {
-        self.world.as_ref().is_some_and(super::world::World::shot_touched)
-    }
-
-    /// The player who watches for the clients where the relay has the camera, once there.
-    pub(crate) fn cameraman(&self) -> Option<u32> {
-        self.world.as_ref()?.cameraman()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rig_for_tests(&self) -> Option<(u32, u32)> {
-        self.world.as_ref()?.rig()
-    }
-
-    /// The player slots nobody is in, highest first: not the cameraman's.
-    pub(crate) fn spare_slots(&self) -> Vec<u8> {
-        let man = self.cameraman();
-        self.extractor().spare_slots().into_iter().filter(|s| man != Some(u32::from(*s) + 1)).collect()
-    }
-
-    /// Whether the message at `span` is a director camera cue (`hltv_chase`, `hltv_fixed`, …).
-    pub(crate) fn is_director_cue(&self, data: &[u8], span: &Span) -> bool {
-        use tf_demo_parser::demo::gameevent_gen::GameEventType as E;
-        if u32::from(span.id) != SVC_GAMEEVENT {
-            return false;
-        }
-        let at = span.bits.start + TYPE_BITS + GAMEEVENT_LENGTH_BITS;
-        let Ok(id) = BitReader::at(data, at).read_bits(EVENT_ID_BITS) else { return false };
-        let defs = &self.handler.get_parser_state().event_definitions;
-        defs.get(id as usize).is_some_and(|d| {
-            matches!(
-                d.event_type,
-                E::HLTVChase | E::HLTVFixed | E::HLTVCameraman | E::HLTVRankCamera | E::HLTVRankEntity
-            )
-        })
     }
 
     /// How many `userinfo` and `instancebaseline` entries were rewritten so far (see `tables`).
