@@ -81,6 +81,7 @@ cargo +nightly fuzz run channel
 - `STVTF_DEBUG` makes the extractor print what it sees: a server class or temp entity class by
   name, `ent:N`, `gameevents`, `convars` or `errors`.
 - `cargo llvm-cov` measures coverage.
-- `cargo run --example cut_demo -- IN.dem OUT.dem N` cuts a demo after tick N, to make a fixture.
+- `cargo run --example cut_demo -- IN.dem OUT.dem N` cuts a demo after its tick N, counted from the
+  demo's start, to make a fixture.
 - `cargo run --example add_build -- DEMO BUILD` compiles a TF2 build in (see
   [builds.md](builds.md)).
