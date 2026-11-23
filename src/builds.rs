@@ -12,6 +12,7 @@ pub const CURRENT: &str = BUILDS[0].0;
 /// Most updates keep the tables, so builds share them. `cargo run --example add_build` adds to it.
 const BUILDS: &[(&str, &[u8])] = &[
     // add_build: builds
+    ("11267535", TABLES_11138802),
     ("11185272", TABLES_11138802),
 ];
 
