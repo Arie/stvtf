@@ -1,7 +1,7 @@
 //! A headless `SourceTV` spectator for Team Fortress 2.
 //!
 //! [`watch::watch`] connects to a `SourceTV` port and passes every event and snapshot
-//! (the JSON described in the README) to a callback, reconnecting when dropped.
+//! (the JSON described in docs/output.md) to a callback, reconnecting when dropped.
 //! [`capture`] replays recorded traffic and [`decode::demo_file`] runs a `.dem`
 //! through the same extractor.
 

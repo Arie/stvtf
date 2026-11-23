@@ -1,6 +1,6 @@
 //! The events: one line each.
 
-#![expect(missing_docs, reason = "the fields are named after what they hold; the README describes each line")]
+#![expect(missing_docs, reason = "the fields are named after what they hold; docs/output.md describes each line")]
 
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
