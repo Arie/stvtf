@@ -28,6 +28,8 @@ pub(crate) struct Lifecycle {
     pub lost_frame: bool,
     /// Entities came as a full update, from no earlier frame.
     pub full_update: bool,
+    /// Entities came and were taken: the stream's tick is a frame a delta can build on.
+    pub entities: bool,
     /// Where each message of the stream is, in order. After a decode error the rest of the
     /// stream is one span of type [`UNPARSED`].
     pub spans: Vec<Span>,
@@ -286,9 +288,9 @@ impl Decoder {
         }
         x.announce();
         let drained = x.drain();
-        let now = x.server_tick;
-        let every = snapshot_every(self.snapshot_hz, x.interval());
+        let (now, every) = (x.server_tick, snapshot_every(self.snapshot_hz, x.interval()));
         self.out.extend(drained);
+        life.entities = has_entities && !life.lost_frame;
         if has_entities && self.snapshots.due(now, every) {
             let snap = self.extractor().snapshot();
             self.out.push(Line::Snapshot(snap));

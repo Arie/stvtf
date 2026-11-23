@@ -174,6 +174,8 @@ struct Session<'o> {
     spawncount: Option<i32>,
     map: Option<String>,
     server_tick: i32,
+    /// The tick of the last frame whose entities were taken; none before the first full update.
+    entity_tick: Option<i32>,
     /// The entities missed a frame: tick acks ask for a full update until one comes.
     want_full_update: bool,
     echoed: HashSet<(i32, Signon)>,
@@ -203,6 +205,7 @@ impl<'o> Session<'o> {
             spawncount: None,
             map: None,
             server_tick: 0,
+            entity_tick: None,
             want_full_update: false,
             echoed: HashSet::new(),
             pending: None,
@@ -214,11 +217,16 @@ impl<'o> Session<'o> {
         }
     }
 
-    /// The tick to ack: the latest seen, so the server deltas from it, or `FULL_UPDATE_TICK` for a
-    /// full update, as a game client does when its entities missed a frame.
+    /// The tick to ack: the last frame whose entities were taken, so the server deltas from it, or
+    /// `FULL_UPDATE_TICK` as a game client does before its first full update and when its entities
+    /// missed a frame. Not the latest tick seen: a delta that came before the first full update
+    /// was skipped, and the server would send deltas that build on it.
     fn ack_tick(&self) -> i32 {
         let tap_wants = self.tap.is_some_and(Tap::want_full_update);
-        if self.want_full_update || tap_wants { messages::FULL_UPDATE_TICK } else { self.server_tick }
+        match self.entity_tick {
+            Some(tick) if !self.want_full_update && !tap_wants => tick,
+            _ => messages::FULL_UPDATE_TICK,
+        }
     }
 
     /// Records why the session ends; the first reason wins.
@@ -325,6 +333,9 @@ impl<'o> Session<'o> {
     fn lifecycle(&mut self, life: Lifecycle, emit: &mut dyn FnMut(Line)) {
         if let Some(t) = life.tick {
             self.server_tick = self.server_tick.max(t);
+            if life.entities {
+                self.entity_tick = Some(t);
+            }
         }
         if life.lost_frame {
             self.want_full_update = true;
@@ -340,6 +351,7 @@ impl<'o> Session<'o> {
                 self.echoed.clear();
                 // A new spawncount starts a new map; its tick counter restarts.
                 self.server_tick = 0;
+                self.entity_tick = None;
             }
             self.spawncount = Some(count);
             self.map = Some(map);

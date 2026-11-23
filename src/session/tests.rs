@@ -6,19 +6,68 @@ use crate::net::messages::{self, Signon};
 use crate::net::netchan::{self, OutHeader};
 use crate::output::{Line, Status};
 
+/// A frame with entities at `tick`, taken by the decoder.
+fn frame(tick: i32) -> Lifecycle {
+    Lifecycle { tick: Some(tick), entities: true, ..Lifecycle::default() }
+}
+
 #[test]
 fn a_lost_frame_asks_for_a_full_update_until_one_comes() {
     let opt = Options::default();
     let mut s = Session::new(None, 0, &opt);
     let mut emit = |_| {};
-    s.lifecycle(Lifecycle { tick: Some(500), ..Lifecycle::default() }, &mut emit);
+    s.lifecycle(frame(500), &mut emit);
     assert_eq!(s.ack_tick(), 500);
     s.lifecycle(Lifecycle { tick: Some(501), lost_frame: true, ..Lifecycle::default() }, &mut emit);
     assert_eq!(s.ack_tick(), messages::FULL_UPDATE_TICK);
-    s.lifecycle(Lifecycle { tick: Some(502), ..Lifecycle::default() }, &mut emit);
+    s.lifecycle(frame(502), &mut emit);
     assert_eq!(s.ack_tick(), messages::FULL_UPDATE_TICK, "a delta does not put the entities right");
-    s.lifecycle(Lifecycle { tick: Some(503), full_update: true, ..Lifecycle::default() }, &mut emit);
+    s.lifecycle(Lifecycle { full_update: true, ..frame(503) }, &mut emit);
     assert_eq!(s.ack_tick(), 503);
+}
+
+#[test]
+fn only_a_frame_whose_entities_were_taken_is_acked() {
+    let opt = Options::default();
+    let mut s = Session::new(None, 0, &opt);
+    let mut emit = |_| {};
+    s.lifecycle(Lifecycle { tick: Some(639), ..Lifecycle::default() }, &mut emit);
+    assert_eq!(s.ack_tick(), messages::FULL_UPDATE_TICK, "a delta skipped before the first full update");
+    s.lifecycle(Lifecycle { full_update: true, ..frame(607) }, &mut emit);
+    assert_eq!(s.ack_tick(), 607, "the full update, not the later tick skipped");
+    s.lifecycle(Lifecycle { tick: Some(650), ..Lifecycle::default() }, &mut emit);
+    assert_eq!(s.ack_tick(), 607, "a packet without entities");
+    s.lifecycle(frame(651), &mut emit);
+    assert_eq!(s.ack_tick(), 651);
+    s.lifecycle(Lifecycle { server_info: Some((1, "cp_a".into())), ..Lifecycle::default() }, &mut emit);
+    s.lifecycle(Lifecycle { server_info: Some((2, "cp_b".into())), ..Lifecycle::default() }, &mut emit);
+    assert_eq!(s.ack_tick(), messages::FULL_UPDATE_TICK, "a new map has no frame yet");
+}
+
+/// Recorded from a live TF2 server (build 11191711): the first full update came after eight
+/// deltas of later ticks, which are skipped. Acking the last of those made the server send a
+/// delta that builds on it: a decode error and another full update. Both are in the capture, the
+/// delta in the same datagram as the end of the full update.
+#[test]
+fn a_full_update_older_than_skipped_deltas_is_the_frame_acked() {
+    let bytes = std::fs::read(crate::testing::fixture("delta_after_late_full_update.cap")).unwrap();
+    let records = crate::capture::read(&bytes).unwrap();
+    let opt = Options::default();
+    let mut s = Session::new(None, records[0].challenge().unwrap(), &opt);
+    let tables = crate::builds::tables(crate::builds::CURRENT, None).unwrap();
+    let mut dec = crate::decode::Decoder::new(&tables, opt.snapshot_hz).unwrap();
+    let mut skipped = 0;
+    for r in records.iter().skip(1).filter(|r| netchan::classify(r.data) != netchan::Kind::Oob) {
+        s.datagram(r.data, &mut dec, &mut |_| {});
+        let Some(first) = s.entity_tick else {
+            assert_eq!(s.ack_tick(), messages::FULL_UPDATE_TICK, "no frame to build on yet");
+            skipped = s.server_tick;
+            continue;
+        };
+        assert!(first < skipped, "the full update of tick {first} came after tick {skipped}");
+        return;
+    }
+    panic!("no full update in the capture");
 }
 
 #[test]
@@ -115,11 +164,11 @@ fn a_new_map_restarts_the_tick_count() {
     let mut emit = |_| {};
     let info = |count| Lifecycle { server_info: Some((count, "cp_x".into())), ..Lifecycle::default() };
     s.lifecycle(info(1), &mut emit);
-    s.lifecycle(Lifecycle { tick: Some(500), ..Lifecycle::default() }, &mut emit);
+    s.lifecycle(frame(500), &mut emit);
     s.lifecycle(info(1), &mut emit);
     assert_eq!(s.ack_tick(), 500, "the same map again");
     s.lifecycle(info(2), &mut emit);
-    assert_eq!(s.ack_tick(), 0);
+    assert_eq!((s.server_tick, s.ack_tick()), (0, messages::FULL_UPDATE_TICK));
 }
 
 #[test]
